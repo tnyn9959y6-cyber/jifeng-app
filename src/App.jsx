@@ -28,7 +28,12 @@ import {
   Gift,
   LogOut,
   Settings,
-  Download
+  Download,
+  Phone,
+  Cake,
+  MessageSquare,
+  Upload,
+  SlidersHorizontal
 } from 'lucide-react';
 import { 
   BarChart,
@@ -65,7 +70,8 @@ import {
   writeBatch,
   Timestamp,
   setDoc,
-  getDocs
+  getDocs,
+  where
 } from 'firebase/firestore';
 
 // --- Firebase Initialization (User Provided) ---
@@ -163,6 +169,49 @@ const H2_ROLE_MAPPING = {
 const RANKS = ['處經理', '區經理', '業務襄理', '業務主任', '新進業務主任', '業務代表', '新進業代'];
 const MANAGER_RANKS = ['業務主任', '新進業務主任', '業務襄理', '區經理', '處經理'];
 const RECRUIT_STATUSES = ['新名單', '臨時帳號', '內考', '外考', '登錄', '優培'];
+
+// --- 客戶管理 (CRM) 設定 ---
+const CUSTOMER_TAGS = ['準客戶', '既有客戶', 'VIP', 'IG名單'];
+const GENDER_OPTIONS = ['男', '女', '其他'];
+const TAIWAN_REGIONS = ['台北市', '新北市', '桃園市', '台中市', '台南市', '高雄市', '基隆市', '新竹市', '新竹縣', '苗栗縣', '彰化縣', '南投縣', '雲林縣', '嘉義市', '嘉義縣', '屏東縣', '宜蘭縣', '花蓮縣', '台東縣', '澎湖縣', '金門縣', '連江縣'];
+const INCOME_RANGES = ['50萬以下', '50-100萬', '100-200萬', '200萬以上'];
+
+const calcAge = (birthday) => {
+  if (!birthday) return null;
+  const b = new Date(birthday);
+  if (isNaN(b.getTime())) return null;
+  const today = new Date();
+  let age = today.getFullYear() - b.getFullYear();
+  const hasHadBirthdayThisYear = (today.getMonth() > b.getMonth()) || (today.getMonth() === b.getMonth() && today.getDate() >= b.getDate());
+  if (!hasHadBirthdayThisYear) age -= 1;
+  return age;
+};
+
+// 簡易 CSV 解析工具 (支援雙引號內含逗號，用於 Notion 匯出檔匯入)
+const parseCSV = (text) => {
+  const rows = [];
+  let row = [], field = '', inQuotes = false;
+  for (let i = 0; i < text.length; i++) {
+    const c = text[i];
+    if (inQuotes) {
+      if (c === '"') {
+        if (text[i + 1] === '"') { field += '"'; i++; }
+        else inQuotes = false;
+      } else field += c;
+    } else {
+      if (c === '"') inQuotes = true;
+      else if (c === ',') { row.push(field); field = ''; }
+      else if (c === '\n' || c === '\r') {
+        if (c === '\r' && text[i + 1] === '\n') i++;
+        row.push(field); field = '';
+        if (row.length > 1 || row[0] !== '') rows.push(row);
+        row = [];
+      } else field += c;
+    }
+  }
+  if (field !== '' || row.length) { row.push(field); rows.push(row); }
+  return rows.filter(r => r.length > 0 && !(r.length === 1 && r[0].trim() === ''));
+};
 
 const PRODUCT_MAPPING = {
   'ah_general': { label: '一般 A&H (300%)', rate: 3.0, isAH: true },
@@ -1926,6 +1975,593 @@ const KnowledgeBase = () => (
   </div>
 );
 
+// --- IG 名單匯入 Modal ---
+const IGImportModal = ({ isOpen, onClose, loggedInUser, existingNames, onImported }) => {
+  const [rawUsernames, setRawUsernames] = useState([]);
+  const [fileName, setFileName] = useState('');
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setRawUsernames([]);
+      setFileName('');
+      setError('');
+      setIsSubmitting(false);
+    }
+  }, [isOpen]);
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setError('');
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = JSON.parse(ev.target.result);
+        let arr = [];
+        if (Array.isArray(data)) arr = data;
+        else if (data.relationships_following) arr = data.relationships_following;
+        else if (data.relationships_followers) arr = data.relationships_followers;
+        else if (data.string_list_data) arr = [data];
+
+        const usernames = [];
+        arr.forEach(item => {
+          const entry = item.string_list_data && item.string_list_data[0];
+          if (entry && entry.value) usernames.push(entry.value);
+        });
+        const unique = [...new Set(usernames)];
+        if (unique.length === 0) {
+          setError('沒有解析到任何帳號，請確認上傳的是 IG 匯出的 followers_1.json 或 following.json');
+        }
+        setRawUsernames(unique);
+      } catch (err) {
+        console.error(err);
+        setError('檔案格式錯誤，無法解析，請確認是 IG 匯出的 .json 檔案');
+      }
+    };
+    reader.readAsText(file);
+  };
+
+  const newOnes = useMemo(() => rawUsernames.filter(u => !existingNames.has(u.trim().toLowerCase())), [rawUsernames, existingNames]);
+
+  const handleImport = async () => {
+    if (newOnes.length === 0 || !loggedInUser) return;
+    setIsSubmitting(true);
+    try {
+      const batch = writeBatch(db);
+      newOnes.forEach(username => {
+        const ref = doc(collection(db, 'customers'));
+        batch.set(ref, {
+          name: username,
+          phone: '', birthday: '', gender: '', region: '', incomeRange: '',
+          tag: 'IG名單',
+          notes: '由 IG 匯入，待補充聯絡資訊',
+          nextFollowUpDate: '',
+          source: 'IG匯入',
+          ownerId: loggedInUser.id,
+          visitLog: [],
+          createdAt: new Date().toISOString()
+        });
+      });
+      await batch.commit();
+      onImported();
+      onClose();
+    } catch (e) {
+      console.error(e);
+      setError('匯入失敗，請再試一次');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl border border-gray-100 flex flex-col max-h-[90vh]">
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
+          <h3 className="text-lg font-bold text-gray-900">IG 名單匯入</h3>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X size={20} /></button>
+        </div>
+        <div className="p-6 overflow-y-auto space-y-4">
+          <div className="bg-blue-50 p-4 rounded-lg text-xs text-blue-700 leading-relaxed border border-blue-100">
+            請上傳 Instagram「下載你的資訊」匯出的 <code>followers_1.json</code> 或 <code>following.json</code>。
+            <br />⚠ IG 匯出檔只包含帳號名稱，不含真實姓名/電話，匯入後會先建立「待確認」名單，需要你之後手動補上聯絡資訊。
+          </div>
+          <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-xl p-8 cursor-pointer hover:border-indigo-400 transition">
+            <Upload size={28} className="text-gray-400 mb-2" />
+            <span className="text-sm font-bold text-gray-600">{fileName || '點擊選擇 .json 檔案'}</span>
+            <input type="file" accept=".json" className="hidden" onChange={handleFile} />
+          </label>
+          {error && <p className="text-xs text-red-500 font-bold">{error}</p>}
+          {rawUsernames.length > 0 && (
+            <div className="bg-gray-50 rounded-lg p-4 text-sm">
+              <p className="font-bold text-gray-700">解析到 {rawUsernames.length} 個帳號</p>
+              <p className="text-xs text-gray-500 mt-1">其中 <span className="font-bold text-indigo-600">{newOnes.length}</span> 個是新的（{rawUsernames.length - newOnes.length} 個已存在，會自動略過）</p>
+            </div>
+          )}
+        </div>
+        <div className="p-6 border-t border-gray-100 flex justify-end gap-3 bg-gray-50 rounded-b-2xl">
+          <button onClick={onClose} className="px-6 py-2 text-gray-500 font-bold hover:bg-gray-200 rounded-lg transition">取消</button>
+          <button onClick={handleImport} disabled={newOnes.length === 0 || isSubmitting} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50 flex items-center gap-2">
+            {isSubmitting && <Loader2 className="animate-spin" size={16} />} 匯入 {newOnes.length} 筆
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- Notion CSV 匯入 Modal ---
+const NotionImportModal = ({ isOpen, onClose, loggedInUser, onImported }) => {
+  const [step, setStep] = useState(1);
+  const [rawText, setRawText] = useState('');
+  const [headers, setHeaders] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [mapping, setMapping] = useState({ name: '', phone: '', birthday: '', notes: '', tag: '' });
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setStep(1); setRawText(''); setHeaders([]); setRows([]);
+      setMapping({ name: '', phone: '', birthday: '', notes: '', tag: '' });
+      setError(''); setIsSubmitting(false);
+    }
+  }, [isOpen]);
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (ev) => setRawText(ev.target.result);
+    reader.readAsText(file);
+  };
+
+  const handleParse = () => {
+    setError('');
+    const parsed = parseCSV(rawText);
+    if (parsed.length < 2) {
+      setError('無法解析出資料，請確認貼上的內容是 CSV 格式（含標題列）');
+      return;
+    }
+    setHeaders(parsed[0]);
+    setRows(parsed.slice(1));
+    // 嘗試自動猜測欄位對應
+    const guess = (keywords) => parsed[0].findIndex(h => keywords.some(k => h.includes(k)));
+    const nameIdx = guess(['姓名', 'Name', '名稱']);
+    const phoneIdx = guess(['電話', 'Phone', '手機']);
+    const birthdayIdx = guess(['生日', 'Birthday']);
+    const notesIdx = guess(['備註', 'Note', '需求']);
+    const tagIdx = guess(['標籤', 'Tag', '狀態']);
+    setMapping({
+      name: nameIdx >= 0 ? parsed[0][nameIdx] : '',
+      phone: phoneIdx >= 0 ? parsed[0][phoneIdx] : '',
+      birthday: birthdayIdx >= 0 ? parsed[0][birthdayIdx] : '',
+      notes: notesIdx >= 0 ? parsed[0][notesIdx] : '',
+      tag: tagIdx >= 0 ? parsed[0][tagIdx] : ''
+    });
+    setStep(2);
+  };
+
+  const getColIndex = (headerName) => headers.indexOf(headerName);
+
+  const previewRows = useMemo(() => {
+    const nameIdx = getColIndex(mapping.name);
+    const phoneIdx = getColIndex(mapping.phone);
+    const birthdayIdx = getColIndex(mapping.birthday);
+    const notesIdx = getColIndex(mapping.notes);
+    const tagIdx = getColIndex(mapping.tag);
+    return rows.map(r => ({
+      name: nameIdx >= 0 ? (r[nameIdx] || '').trim() : '',
+      phone: phoneIdx >= 0 ? (r[phoneIdx] || '').trim() : '',
+      birthday: birthdayIdx >= 0 ? (r[birthdayIdx] || '').trim() : '',
+      notes: notesIdx >= 0 ? (r[notesIdx] || '').trim() : '',
+      tag: tagIdx >= 0 ? (r[tagIdx] || '').trim() : ''
+    })).filter(r => r.name);
+  }, [rows, mapping, headers]);
+
+  const handleImport = async () => {
+    if (previewRows.length === 0 || !loggedInUser) return;
+    setIsSubmitting(true);
+    try {
+      const batch = writeBatch(db);
+      previewRows.forEach(r => {
+        const ref = doc(collection(db, 'customers'));
+        batch.set(ref, {
+          name: r.name,
+          phone: r.phone || '',
+          birthday: r.birthday || '',
+          gender: '', region: '', incomeRange: '',
+          tag: CUSTOMER_TAGS.includes(r.tag) ? r.tag : '既有客戶',
+          notes: r.notes || '',
+          nextFollowUpDate: '',
+          source: 'Notion匯入',
+          ownerId: loggedInUser.id,
+          visitLog: [],
+          createdAt: new Date().toISOString()
+        });
+      });
+      await batch.commit();
+      onImported();
+      onClose();
+    } catch (e) {
+      console.error(e);
+      setError('匯入失敗，請再試一次');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl w-full max-w-3xl shadow-2xl border border-gray-100 flex flex-col max-h-[90vh]">
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
+          <h3 className="text-lg font-bold text-gray-900">Notion 客戶資料匯入</h3>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X size={20} /></button>
+        </div>
+        <div className="p-6 overflow-y-auto space-y-4 flex-1">
+          {step === 1 ? (
+            <>
+              <div className="bg-blue-50 p-4 rounded-lg text-xs text-blue-700 leading-relaxed border border-blue-100">
+                先到 Notion 把客戶資料庫「Export → CSV」匯出，再把 CSV 檔上傳，或直接把內容貼在下面的欄位裡。
+              </div>
+              <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-xl p-6 cursor-pointer hover:border-indigo-400 transition">
+                <Upload size={24} className="text-gray-400 mb-2" />
+                <span className="text-sm font-bold text-gray-600">點擊選擇 .csv 檔案</span>
+                <input type="file" accept=".csv" className="hidden" onChange={handleFile} />
+              </label>
+              <textarea
+                className="w-full h-40 p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-indigo-500 font-mono text-xs resize-none"
+                placeholder="或直接把 CSV 內容貼在這裡"
+                value={rawText}
+                onChange={e => setRawText(e.target.value)}
+              />
+              {error && <p className="text-xs text-red-500 font-bold">{error}</p>}
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-bold text-gray-700">欄位對應（請確認每個欄位對到 CSV 中正確的欄位）</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {[
+                  { key: 'name', label: '姓名 (必填)' },
+                  { key: 'phone', label: '電話' },
+                  { key: 'birthday', label: '生日' },
+                  { key: 'tag', label: '標籤' },
+                  { key: 'notes', label: '備註' },
+                ].map(f => (
+                  <div key={f.key}>
+                    <label className="text-xs font-bold text-gray-500 block mb-1">{f.label}</label>
+                    <select
+                      className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none focus:border-indigo-500"
+                      value={mapping[f.key]}
+                      onChange={e => setMapping(prev => ({ ...prev, [f.key]: e.target.value }))}
+                    >
+                      <option value="">(不匯入)</option>
+                      {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              <div className="overflow-x-auto border border-gray-100 rounded-xl mt-2">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead className="bg-gray-50 text-gray-500 font-bold uppercase">
+                    <tr><th className="px-3 py-2">姓名</th><th className="px-3 py-2">電話</th><th className="px-3 py-2">生日</th><th className="px-3 py-2">標籤</th><th className="px-3 py-2">備註</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {previewRows.slice(0, 8).map((r, i) => (
+                      <tr key={i}>
+                        <td className="px-3 py-2 font-bold">{r.name}</td>
+                        <td className="px-3 py-2">{r.phone}</td>
+                        <td className="px-3 py-2">{r.birthday}</td>
+                        <td className="px-3 py-2">{r.tag}</td>
+                        <td className="px-3 py-2 truncate max-w-[150px]">{r.notes}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-gray-400">共預覽 {Math.min(8, previewRows.length)} / {previewRows.length} 筆有效資料（沒有姓名的列會被略過）</p>
+              {error && <p className="text-xs text-red-500 font-bold">{error}</p>}
+            </>
+          )}
+        </div>
+        <div className="p-6 border-t border-gray-100 flex justify-end gap-3 bg-gray-50 rounded-b-2xl">
+          {step === 1 ? (
+            <button onClick={handleParse} disabled={!rawText} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50">下一步：欄位對應</button>
+          ) : (
+            <>
+              <button onClick={() => setStep(1)} className="px-6 py-2 text-gray-500 font-bold hover:bg-gray-200 rounded-lg transition">返回</button>
+              <button onClick={handleImport} disabled={!mapping.name || previewRows.length === 0 || isSubmitting} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50 flex items-center gap-2">
+                {isSubmitting && <Loader2 className="animate-spin" size={16} />} 匯入 {previewRows.length} 筆
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- 客戶管理 CRM ---
+const CustomerCRM = ({ loggedInUser, records }) => {
+  const [customers, setCustomers] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [search, setSearch] = useState('');
+  const [showFilter, setShowFilter] = useState(false);
+  const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '' });
+  const [editCustomer, setEditCustomer] = useState(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [isIGOpen, setIsIGOpen] = useState(false);
+  const [isNotionOpen, setIsNotionOpen] = useState(false);
+  const emptyForm = { name: '', phone: '', birthday: '', gender: '', region: '', incomeRange: '', tag: '準客戶', notes: '', nextFollowUpDate: '' };
+  const [form, setForm] = useState(emptyForm);
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!loggedInUser) return;
+    const q = query(collection(db, 'customers'), where('ownerId', '==', loggedInUser.id));
+    const unsub = onSnapshot(q, (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      setCustomers(list);
+      setLoaded(true);
+    });
+    return () => unsub();
+  }, [loggedInUser]);
+
+  const existingNames = useMemo(() => new Set(customers.map(c => (c.name || '').trim().toLowerCase())), [customers]);
+
+  const filteredCustomers = useMemo(() => {
+    return customers.filter(c => {
+      const matchSearch = !search || c.name.includes(search) || (c.phone || '').includes(search);
+      const age = calcAge(c.birthday);
+      const matchAgeMin = !filters.ageMin || (age !== null && age >= Number(filters.ageMin));
+      const matchAgeMax = !filters.ageMax || (age !== null && age <= Number(filters.ageMax));
+      const matchGender = !filters.gender || c.gender === filters.gender;
+      const matchRegion = !filters.region || c.region === filters.region;
+      const matchIncome = !filters.incomeRange || c.incomeRange === filters.incomeRange;
+      const matchTag = !filters.tag || c.tag === filters.tag;
+      return matchSearch && matchAgeMin && matchAgeMax && matchGender && matchRegion && matchIncome && matchTag;
+    });
+  }, [customers, search, filters]);
+
+  const relatedPolicies = (customerName) => {
+    if (!loggedInUser) return [];
+    return records.filter(r => r.agentId === loggedInUser.id && (r.insuredName || '').trim() === customerName.trim());
+  };
+
+  const openAdd = () => { setForm(emptyForm); setIsAdding(true); };
+  const openEdit = (c) => {
+    setEditCustomer(c);
+    setForm({ name: c.name, phone: c.phone || '', birthday: c.birthday || '', gender: c.gender || '', region: c.region || '', incomeRange: c.incomeRange || '', tag: c.tag || '準客戶', notes: c.notes || '', nextFollowUpDate: c.nextFollowUpDate || '' });
+  };
+
+  const handleSave = async () => {
+    if (!form.name || !loggedInUser) return;
+    setSaving(true);
+    try {
+      if (editCustomer) {
+        await updateDoc(doc(db, 'customers', editCustomer.id), { ...form });
+        setEditCustomer(null);
+      } else {
+        await addDoc(collection(db, 'customers'), {
+          ...form,
+          source: '手動',
+          ownerId: loggedInUser.id,
+          visitLog: [],
+          createdAt: new Date().toISOString()
+        });
+        setIsAdding(false);
+      }
+      setForm(emptyForm);
+    } catch (e) { console.error(e); } finally { setSaving(false); }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    try { await deleteDoc(doc(db, 'customers', deleteTarget)); setDeleteTarget(null); } catch (e) { console.error(e); }
+  };
+
+  const isFollowUpDue = (c) => c.nextFollowUpDate && c.nextFollowUpDate <= getTodayDate();
+
+  return (
+    <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+      <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除客戶" message="確定要刪除此客戶資料嗎？此動作無法復原。" />
+      <IGImportModal isOpen={isIGOpen} onClose={() => setIsIGOpen(false)} loggedInUser={loggedInUser} existingNames={existingNames} onImported={() => {}} />
+      <NotionImportModal isOpen={isNotionOpen} onClose={() => setIsNotionOpen(false)} loggedInUser={loggedInUser} onImported={() => {}} />
+
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">客戶管理</h2>
+          <p className="text-xs sm:text-sm text-gray-400 mt-1">僅顯示你自己的客戶資料，共 {customers.length} 筆</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setIsNotionOpen(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Upload size={14} /> Notion 匯入</button>
+          <button onClick={() => setIsIGOpen(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Upload size={14} /> IG 匯入</button>
+          <button onClick={openAdd} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 新增客戶</button>
+        </div>
+      </div>
+
+      <Card className="p-4">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <div className="flex-1 relative">
+            <input
+              type="text"
+              placeholder="搜尋姓名或電話..."
+              className="w-full p-3 pl-4 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none focus:border-indigo-500"
+              value={search}
+              onChange={e => setSearch(e.target.value)}
+            />
+          </div>
+          <button onClick={() => setShowFilter(!showFilter)} className={`flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-sm font-bold border transition whitespace-nowrap ${showFilter ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'}`}>
+            <SlidersHorizontal size={16} /> 進階篩選
+          </button>
+        </div>
+        {showFilter && (
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-4 pt-4 border-t border-gray-100">
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">最小年齡</label>
+              <input type="number" className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.ageMin} onChange={e => setFilters({ ...filters, ageMin: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">最大年齡</label>
+              <input type="number" className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.ageMax} onChange={e => setFilters({ ...filters, ageMax: e.target.value })} />
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">性別</label>
+              <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.gender} onChange={e => setFilters({ ...filters, gender: e.target.value })}>
+                <option value="">全部</option>
+                {GENDER_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">地區</label>
+              <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.region} onChange={e => setFilters({ ...filters, region: e.target.value })}>
+                <option value="">全部</option>
+                {TAIWAN_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">年收入</label>
+              <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.incomeRange} onChange={e => setFilters({ ...filters, incomeRange: e.target.value })}>
+                <option value="">全部</option>
+                {INCOME_RANGES.map(r => <option key={r} value={r}>{r}</option>)}
+              </select>
+            </div>
+            <div>
+              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">標籤</label>
+              <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.tag} onChange={e => setFilters({ ...filters, tag: e.target.value })}>
+                <option value="">全部</option>
+                {CUSTOMER_TAGS.map(t => <option key={t} value={t}>{t}</option>)}
+              </select>
+            </div>
+          </div>
+        )}
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
+        {filteredCustomers.map(c => {
+          const policies = relatedPolicies(c.name);
+          const age = calcAge(c.birthday);
+          return (
+            <Card key={c.id} className={`p-5 relative group ${isFollowUpDue(c) ? 'border-amber-300 ring-1 ring-amber-100' : ''}`}>
+              <div className="flex items-start justify-between mb-3">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-700 font-bold text-lg">{c.name[0]}</div>
+                  <div>
+                    <h4 className="font-bold text-gray-900">{c.name}</h4>
+                    <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{c.tag}{age !== null ? ` · ${age}歲` : ''}</span>
+                  </div>
+                </div>
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                  <button onClick={() => openEdit(c)} className="p-1.5 text-gray-400 hover:text-indigo-500"><Edit3 size={15} /></button>
+                  <button onClick={() => setDeleteTarget(c.id)} className="p-1.5 text-gray-400 hover:text-red-500"><Trash2 size={15} /></button>
+                </div>
+              </div>
+              <div className="space-y-1 text-xs text-gray-500">
+                {c.phone && <p className="flex items-center gap-1.5"><Phone size={12} /> {c.phone}</p>}
+                {c.birthday && <p className="flex items-center gap-1.5"><Cake size={12} /> {c.birthday}</p>}
+                {c.region && <p>{c.region}{c.incomeRange ? ` · ${c.incomeRange}` : ''}</p>}
+              </div>
+              {c.notes && <p className="text-xs text-gray-600 bg-gray-50 rounded-lg p-2 mt-3 flex gap-1.5"><MessageSquare size={12} className="shrink-0 mt-0.5" /> {c.notes}</p>}
+              {isFollowUpDue(c) && <p className="text-[10px] font-bold text-amber-600 mt-2">⚠ 追蹤日期已到：{c.nextFollowUpDate}</p>}
+              {policies.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-gray-100">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">名下保單 ({policies.length})</p>
+                  <div className="space-y-1">
+                    {policies.map(p => (
+                      <div key={p.id} className="text-[10px] text-gray-600 flex justify-between">
+                        <span>{p.product} · {p.date}</span>
+                        <span className="font-mono font-bold text-indigo-600">{formatMoney(p.weighted)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              {c.visitLog && c.visitLog.length > 0 && (
+                <div className="mt-3 pt-3 border-t border-gray-100">
+                  <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">拜訪軌跡</p>
+                  <div className="space-y-1 max-h-24 overflow-y-auto">
+                    {[...c.visitLog].reverse().slice(0, 5).map((v, i) => (
+                      <div key={i} className="text-[10px] text-gray-500">{v.date} · {v.type}{v.note ? ` · ${v.note}` : ''}</div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </Card>
+          );
+        })}
+        {loaded && filteredCustomers.length === 0 && (
+          <div className="col-span-full text-center py-16 text-gray-400">
+            {customers.length === 0 ? '還沒有任何客戶資料，點右上角「新增客戶」開始建立' : '沒有符合篩選條件的客戶'}
+          </div>
+        )}
+      </div>
+
+      {(isAdding || editCustomer) && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">{editCustomer ? '編輯客戶' : '新增客戶'}</h3>
+              <button onClick={() => { setIsAdding(false); setEditCustomer(null); }} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="space-y-3">
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">姓名 *</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">電話</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">生日</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={form.birthday} onChange={e => setForm({ ...form, birthday: e.target.value })} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 block mb-1">性別</label>
+                  <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.gender} onChange={e => setForm({ ...form, gender: e.target.value })}>
+                    <option value="">未填寫</option>
+                    {GENDER_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 block mb-1">地區</label>
+                  <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.region} onChange={e => setForm({ ...form, region: e.target.value })}>
+                    <option value="">未填寫</option>
+                    {TAIWAN_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 block mb-1">年收入</label>
+                  <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.incomeRange} onChange={e => setForm({ ...form, incomeRange: e.target.value })}>
+                    <option value="">未填寫</option>
+                    {INCOME_RANGES.map(r => <option key={r} value={r}>{r}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 block mb-1">標籤</label>
+                  <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.tag} onChange={e => setForm({ ...form, tag: e.target.value })}>
+                    {CUSTOMER_TAGS.map(t => <option key={t} value={t}>{t}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">下次追蹤日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={form.nextFollowUpDate} onChange={e => setForm({ ...form, nextFollowUpDate: e.target.value })} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">備註</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-20 resize-none" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
+              <button onClick={handleSave} disabled={!form.name || saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {saving ? <Loader2 className="animate-spin" size={16} /> : '儲存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+
 // --- Competition Settings Page (競賽設定：目標值可在畫面上調整，不用改程式碼) ---
 const SettingsPage = ({ rankTargets, doubleAwardTargets }) => {
   const [season, setSeason] = useState('H2');
@@ -1941,7 +2577,7 @@ const SettingsPage = ({ rankTargets, doubleAwardTargets }) => {
     setExporting(true);
     setExportMsg('');
     try {
-      const collectionsToBackup = ['case_record', 'user', 'temp_user', 'activity_record', 'settings'];
+      const collectionsToBackup = ['case_record', 'user', 'temp_user', 'activity_record', 'settings', 'customers'];
       const backup = {};
       for (const colName of collectionsToBackup) {
         const snap = await getDocs(collection(db, colName));
@@ -2465,6 +3101,7 @@ const App = () => {
 
   const navItems = [
     { id: 'dashboard', label: '業績儀表板', icon: LayoutDashboard },
+    { id: 'customers', label: '客戶管理', icon: Phone },
     { id: 'activity', label: 'MEA 活動量', icon: Activity },
     { id: 'entry', label: '業績回報', icon: Plus },
     { id: 'team', label: '組織架構', icon: Users },
@@ -2535,6 +3172,7 @@ const App = () => {
 
       <main className="max-w-7xl mx-auto px-6 pt-8">
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
+        {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} />}
         {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} />}
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} />}
         {activeTab === 'team' && <OrgChart team={team} recruits={recruits} />}
