@@ -27,7 +27,8 @@ import {
   AlertTriangle,
   Gift,
   LogOut,
-  Settings
+  Settings,
+  Download
 } from 'lucide-react';
 import { 
   BarChart,
@@ -63,7 +64,8 @@ import {
   query, 
   writeBatch,
   Timestamp,
-  setDoc
+  setDoc,
+  getDocs
 } from 'firebase/firestore';
 
 // --- Firebase Initialization (User Provided) ---
@@ -1039,11 +1041,20 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
 
 
 // --- BatchEntryModal Component (New) ---
-const BatchEntryModal = ({ isOpen, onClose, team, onSubmit }) => {
+const BatchEntryModal = ({ isOpen, onClose, team, records, onSubmit }) => {
   const [step, setStep] = useState(1);
   const [rawText, setRawText] = useState('');
   const [parsedRows, setParsedRows] = useState([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const existingPolicySet = useMemo(() => new Set((records || []).map(r => (r.policyNumber || '').trim().toLowerCase()).filter(Boolean)), [records]);
+
+  const isDuplicateRow = (row) => {
+    const key = (row.policyNumber || '').trim().toLowerCase();
+    if (!key) return false;
+    if (existingPolicySet.has(key)) return true;
+    return parsedRows.filter(r => (r.policyNumber || '').trim().toLowerCase() === key).length > 1;
+  };
 
   useEffect(() => {
     if (isOpen) {
@@ -1108,8 +1119,13 @@ const BatchEntryModal = ({ isOpen, onClose, team, onSubmit }) => {
   };
 
   const handleFinalSubmit = async () => {
-    setIsSubmitting(true);
     const validRows = parsedRows.filter(r => r.agentId && r.premium);
+    const duplicateCount = validRows.filter(isDuplicateRow).length;
+    if (duplicateCount > 0) {
+      const confirmed = window.confirm(`偵測到 ${duplicateCount} 筆保單號碼疑似重複（已用紅色標示），確定要繼續送出嗎？`);
+      if (!confirmed) return;
+    }
+    setIsSubmitting(true);
     await onSubmit(validRows);
     setIsSubmitting(false);
     onClose();
@@ -1163,8 +1179,10 @@ const BatchEntryModal = ({ isOpen, onClose, team, onSubmit }) => {
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
-                    {parsedRows.map((row) => (
-                      <tr key={row.id} className="hover:bg-gray-50 group">
+                    {parsedRows.map((row) => {
+                      const dup = isDuplicateRow(row);
+                      return (
+                      <tr key={row.id} className={`hover:bg-gray-50 group ${dup ? 'bg-red-50' : ''}`}>
                         <td className="p-2"><input type="date" className="bg-transparent border border-transparent hover:border-gray-300 rounded px-1 w-24 outline-none focus:border-indigo-500" value={row.date} onChange={e => updateRow(row.id, 'date', e.target.value)} /></td>
                         <td className="p-2">
                            <select className={`bg-transparent border rounded px-1 w-24 outline-none focus:border-indigo-500 ${!row.agentId ? 'border-red-300 bg-red-50' : 'border-transparent hover:border-gray-300'}`} value={row.agentId} onChange={e => updateRow(row.id, 'agentId', e.target.value)}>
@@ -1172,7 +1190,10 @@ const BatchEntryModal = ({ isOpen, onClose, team, onSubmit }) => {
                               {team.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
                            </select>
                         </td>
-                        <td className="p-2"><input type="text" className="bg-transparent border border-transparent hover:border-gray-300 rounded px-1 w-24 outline-none focus:border-indigo-500" value={row.policyNumber} onChange={e => updateRow(row.id, 'policyNumber', e.target.value)} /></td>
+                        <td className="p-2">
+                           <input type="text" className={`bg-transparent border rounded px-1 w-24 outline-none focus:border-indigo-500 ${dup ? 'border-red-300' : 'border-transparent hover:border-gray-300'}`} value={row.policyNumber} onChange={e => updateRow(row.id, 'policyNumber', e.target.value)} />
+                           {dup && <div className="text-[9px] text-red-500 font-bold whitespace-nowrap">⚠ 重複</div>}
+                        </td>
                         <td className="p-2"><input type="text" className="bg-transparent border border-transparent hover:border-gray-300 rounded px-1 w-20 outline-none focus:border-indigo-500" value={row.product} onChange={e => updateRow(row.id, 'product', e.target.value)} /></td>
                         <td className="p-2"><input type="number" className="bg-transparent border border-transparent hover:border-gray-300 rounded px-1 w-20 outline-none focus:border-indigo-500 font-mono text-right" value={row.premium} onChange={e => updateRow(row.id, 'premium', e.target.value)} /></td>
                         <td className="p-2"><input type="text" className="bg-transparent border border-transparent hover:border-gray-300 rounded px-1 w-20 outline-none focus:border-indigo-500" value={row.insuredName} onChange={e => updateRow(row.id, 'insuredName', e.target.value)} /></td>
@@ -1186,12 +1207,13 @@ const BatchEntryModal = ({ isOpen, onClose, team, onSubmit }) => {
                         </td>
                         <td className="p-2 text-center"><button onClick={() => removeRow(row.id)} className="text-gray-300 hover:text-red-500 transition"><Trash2 size={16}/></button></td>
                       </tr>
-                    ))}
+                      );
+                    })}
                     {parsedRows.length === 0 && <tr><td colSpan="9" className="text-center py-8 text-gray-400">無法解析任何資料，請檢查輸入格式。</td></tr>}
                   </tbody>
                 </table>
               </div>
-              <div className="text-right text-xs text-gray-400">共解析 {parsedRows.length} 筆資料，請確認「業務同仁」與「商品類型」是否正確。</div>
+              <div className="text-right text-xs text-gray-400">共解析 {parsedRows.length} 筆資料，紅色列代表保單號碼可能重複，請確認「業務同仁」與「商品類型」是否正確。</div>
             </div>
           )}
         </div>
@@ -1720,9 +1742,20 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
     });
   }, [records, filterAgent, filterMonth]);
 
+  // 保單號碼重複檢查：避免同一張保單被重複輸入造成業績算錯
+  const duplicateRecord = useMemo(() => {
+    const key = form.policyNumber.trim().toLowerCase();
+    if (!key) return null;
+    return records.find(r => r.id !== editingId && (r.policyNumber || '').trim().toLowerCase() === key) || null;
+  }, [form.policyNumber, records, editingId]);
+
   const handleSubmit = async (e) => {
     e.preventDefault();
     if (!form.agentId || !form.premium || !user) return;
+    if (duplicateRecord) {
+      const confirmed = window.confirm(`保單號碼「${form.policyNumber}」已經有一筆紀錄（${duplicateRecord.agentName} · ${duplicateRecord.date}），確定要繼續新增嗎？`);
+      if (!confirmed) return;
+    }
     setSubmitting(true);
     try {
       const recordData = {
@@ -1805,6 +1838,7 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
         isOpen={isBatchOpen}
         onClose={() => setIsBatchOpen(false)}
         team={team}
+        records={records}
         onSubmit={handleBatchSubmit}
       />
       <div className="text-center mb-8 relative">
@@ -1834,7 +1868,9 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
              </select>
            </div>
            <div className="space-y-1"><label className="text-xs font-bold text-gray-500">成交日期</label><input type="date" className="w-full p-3 bg-gray-50 rounded border outline-none" value={form.date} onChange={e=>setForm({...form, date: e.target.value})} required/></div>
-           <div className="space-y-1"><label className="text-xs font-bold text-gray-500">保單號碼</label><input type="text" className="w-full p-3 bg-gray-50 rounded border outline-none" value={form.policyNumber} onChange={e=>setForm({...form, policyNumber: e.target.value})} required/></div>
+           <div className="space-y-1"><label className="text-xs font-bold text-gray-500">保單號碼</label><input type="text" className={`w-full p-3 bg-gray-50 rounded border outline-none ${duplicateRecord ? 'border-red-300' : ''}`} value={form.policyNumber} onChange={e=>setForm({...form, policyNumber: e.target.value})} required/>
+             {duplicateRecord && <p className="text-xs text-red-500 font-bold">⚠ 此保單號碼已存在紀錄（{duplicateRecord.agentName} · {duplicateRecord.date}）</p>}
+           </div>
            <div className="space-y-1"><label className="text-xs font-bold text-gray-500">被保人</label><input type="text" className="w-full p-3 bg-gray-50 rounded border outline-none" value={form.insuredName} onChange={e=>setForm({...form, insuredName: e.target.value})} required/></div>
            <div className="space-y-1"><label className="text-xs font-bold text-gray-500">商品名稱</label><input type="text" className="w-full p-3 bg-gray-50 rounded border outline-none" value={form.product} onChange={e=>setForm({...form, product: e.target.value})} required/></div>
            <div className="space-y-1"><label className="text-xs font-bold text-gray-500">類型</label><select className="w-full p-3 bg-gray-50 rounded border outline-none" value={form.typeCode} onChange={e=>setForm({...form, typeCode: e.target.value})} required>{PRODUCT_TYPES_OPTIONS.map((t)=><option key={t.code} value={t.code}>{t.label}</option>)}</select></div>
@@ -1898,6 +1934,46 @@ const SettingsPage = ({ rankTargets, doubleAwardTargets }) => {
   const [localDouble, setLocalDouble] = useState(() => JSON.parse(JSON.stringify(doubleAwardTargets)));
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState('');
+  const [exporting, setExporting] = useState(false);
+  const [exportMsg, setExportMsg] = useState('');
+
+  const handleExportBackup = async () => {
+    setExporting(true);
+    setExportMsg('');
+    try {
+      const collectionsToBackup = ['case_record', 'user', 'temp_user', 'activity_record', 'settings'];
+      const backup = {};
+      for (const colName of collectionsToBackup) {
+        const snap = await getDocs(collection(db, colName));
+        backup[colName] = snap.docs.map(d => {
+          const data = d.data();
+          // Firestore Timestamp 轉成一般文字，避免備份檔案格式難以閱讀
+          const cleaned = {};
+          Object.entries(data).forEach(([k, v]) => {
+            cleaned[k] = (v && typeof v.toDate === 'function') ? v.toDate().toISOString() : v;
+          });
+          return { id: d.id, ...cleaned };
+        });
+      }
+      backup._exportedAt = new Date().toISOString();
+
+      const blob = new Blob([JSON.stringify(backup, null, 2)], { type: 'application/json' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `極豐通訊處_資料備份_${getTodayDate()}.json`;
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      setExportMsg('備份檔案已下載，請妥善保存');
+    } catch (e) {
+      console.error(e);
+      setExportMsg('匯出失敗，請再試一次');
+    } finally {
+      setExporting(false);
+    }
+  };
 
   const updateField = (setter, role, group, field, value) => {
     setter(prev => ({
@@ -2002,6 +2078,22 @@ const SettingsPage = ({ rankTargets, doubleAwardTargets }) => {
       </div>
 
       {saveMsg && <div className="bg-emerald-50 border border-emerald-200 text-emerald-700 text-sm font-bold px-4 py-3 rounded-xl">{saveMsg}</div>}
+
+      <Card className="p-6 border-t-4 border-t-gray-800">
+        <div className="flex items-center justify-between flex-wrap gap-4">
+          <div className="flex items-center gap-3">
+            <div className="p-2 bg-gray-100 rounded-lg"><Download size={20} className="text-gray-700"/></div>
+            <div>
+              <h3 className="font-bold text-gray-800">資料備份</h3>
+              <p className="text-xs text-gray-400 mt-0.5">下載一份完整資料備份檔（業績、組織、增員、活動量、競賽設定），建議定期匯出保存在自己的電腦裡</p>
+            </div>
+          </div>
+          <button onClick={handleExportBackup} disabled={exporting} className="px-5 py-2 bg-gray-800 hover:bg-gray-900 text-white rounded-lg text-sm font-bold transition flex items-center gap-2 disabled:opacity-50 whitespace-nowrap">
+            {exporting ? <Loader2 size={16} className="animate-spin"/> : <><Download size={16}/> 匯出全部資料</>}
+          </button>
+        </div>
+        {exportMsg && <p className="text-xs font-bold text-emerald-600 mt-3">{exportMsg}</p>}
+      </Card>
 
       <Card className="p-6">
         <div className="flex items-center gap-2 mb-6">
