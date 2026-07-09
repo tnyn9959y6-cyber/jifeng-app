@@ -71,7 +71,9 @@ import {
   Timestamp,
   setDoc,
   getDocs,
-  where
+  where,
+  increment,
+  arrayUnion
 } from 'firebase/firestore';
 
 // --- Firebase Initialization (User Provided) ---
@@ -698,6 +700,32 @@ const ACTIVITY_WEIGHTS = {
   issue: { label: '核保發單', score: 5, color: 'bg-rose-500' }
 };
 
+// 增員相關活動 (與業務活動並列計分，用於 MEA 總分)
+const RECRUIT_ACTIVITY_WEIGHTS = {
+  recruitContact: { label: '增員名單聯繫', score: 1, color: 'bg-teal-500' },
+  recruitInterview: { label: '增員面談', score: 3, color: 'bg-cyan-600' }
+};
+
+const ALL_ACTIVITY_WEIGHTS = { ...ACTIVITY_WEIGHTS, ...RECRUIT_ACTIVITY_WEIGHTS };
+
+// 行程標記完成時共用的邏輯：更新行程狀態、計入當日 MEA 活動量、寫入客戶拜訪軌跡
+const completeScheduleEvent = async (event, ownerId) => {
+  await updateDoc(doc(db, 'schedule_events', event.id), { status: 'completed', completedAt: new Date().toISOString() });
+  const docId = `${ownerId}_${event.date}`;
+  await setDoc(doc(db, 'activity_record', docId), {
+    agentId: ownerId,
+    date: event.date,
+    month: event.date.substring(0, 7),
+    [event.type]: increment(1),
+    updatedAt: new Date().toISOString()
+  }, { merge: true });
+  if (event.customerId) {
+    await updateDoc(doc(db, 'customers', event.customerId), {
+      visitLog: arrayUnion({ date: event.date, type: ALL_ACTIVITY_WEIGHTS[event.type]?.label || event.type, note: event.note || '' })
+    });
+  }
+};
+
 const ActivityDashboard = ({ team, activities, records, user, season, loggedInUser }) => {
   const currentMonths = season === 'H1' ? AVAILABLE_MONTHS_H1 : AVAILABLE_MONTHS_H2;
   const [selectedAgentId, setSelectedAgentId] = useState('');
@@ -711,7 +739,8 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [formData, setFormData] = useState({
     date: getTodayDate(),
-    prospect: 0, appointment: 0, interview: 0, proposal: 0, application: 0, issue: 0
+    prospect: 0, appointment: 0, interview: 0, proposal: 0, application: 0, issue: 0,
+    recruitContact: 0, recruitInterview: 0
   });
 
   useEffect(() => {
@@ -740,10 +769,12 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
           interview: existingRecord.interview || 0,
           proposal: existingRecord.proposal || 0,
           application: existingRecord.application || 0,
-          issue: existingRecord.issue || 0
+          issue: existingRecord.issue || 0,
+          recruitContact: existingRecord.recruitContact || 0,
+          recruitInterview: existingRecord.recruitInterview || 0
         });
       } else {
-        setFormData(prev => ({ ...prev, prospect: 0, appointment: 0, interview: 0, proposal: 0, application: 0, issue: 0 }));
+        setFormData(prev => ({ ...prev, prospect: 0, appointment: 0, interview: 0, proposal: 0, application: 0, issue: 0, recruitContact: 0, recruitInterview: 0 }));
       }
     }
   }, [selectedAgentId, formData.date, activities]);
@@ -766,6 +797,8 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
         proposal: Number(formData.proposal),
         application: Number(formData.application),
         issue: Number(formData.issue),
+        recruitContact: Number(formData.recruitContact),
+        recruitInterview: Number(formData.recruitInterview),
         updatedAt: new Date().toISOString()
       }, { merge: true });
     } catch (error) {
@@ -777,8 +810,10 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
 
   // 計算 MEA 核心指標與商品線
   const stats = useMemo(() => {
-    let totalPoints = 0;
+    let salesPoints = 0;
+    let recruitPoints = 0;
     const totals = { prospect: 0, appointment: 0, interview: 0, proposal: 0, application: 0, issue: 0 };
+    const recruitTotals = { recruitContact: 0, recruitInterview: 0 };
     
     // 1. 統計選定月份的活動量
     const monthActivities = activities.filter(a => a.agentId === selectedAgentId && a.month === selectedMonth);
@@ -786,9 +821,16 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
       Object.keys(totals).forEach(key => {
         const val = record[key] || 0;
         totals[key] += val;
-        totalPoints += val * ACTIVITY_WEIGHTS[key].score;
+        salesPoints += val * ACTIVITY_WEIGHTS[key].score;
+      });
+      Object.keys(recruitTotals).forEach(key => {
+        const val = record[key] || 0;
+        recruitTotals[key] += val;
+        recruitPoints += val * RECRUIT_ACTIVITY_WEIGHTS[key].score;
       });
     });
+
+    const totalPoints = salesPoints + recruitPoints;
 
     // 獨立計算面談分數
     const interviewPoints = totals.interview * ACTIVITY_WEIGHTS.interview.score;
@@ -832,7 +874,7 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
     const valuePerPoint = totalPoints > 0 ? (totalFYC / totalPoints) : 0;
     const premiumPerPoint = totalPoints > 0 ? (totalPremium / totalPoints) : 0;
 
-    return { totals, totalPoints, interviewPoints, totalPremium, totalFYC, P, C, I, valuePerPoint, premiumPerPoint, productLines };
+    return { totals, recruitTotals, totalPoints, salesPoints, recruitPoints, interviewPoints, totalPremium, totalFYC, P, C, I, valuePerPoint, premiumPerPoint, productLines };
   }, [activities, records, selectedAgentId, selectedMonth]);
 
   // 準備圖表資料 (漏斗圖變體 - 橫向長條圖)
@@ -963,6 +1005,33 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
                   </div>
                 ))}
               </div>
+
+              <div className="pt-2 border-t border-gray-100">
+                <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">增員活動</p>
+                <div className="space-y-2">
+                  {Object.entries(RECRUIT_ACTIVITY_WEIGHTS).map(([key, config]) => (
+                    <div key={key} className="flex items-center justify-between bg-gray-50 p-2 rounded-lg border border-gray-100">
+                      <div className="flex items-center gap-2">
+                        <span className={`w-2 h-2 rounded-full ${config.color}`}></span>
+                        <span className="text-sm font-medium text-gray-700">{config.label}</span>
+                        <span className="text-[10px] text-gray-400 bg-gray-200 px-1.5 rounded">x{config.score}</span>
+                      </div>
+                      <div className="flex items-center gap-2">
+                        <button type="button" onClick={() => setFormData(p => ({...p, [key]: Math.max(0, p[key] - 1)}))} className="w-6 h-6 flex items-center justify-center bg-white rounded border hover:bg-gray-100 text-gray-500">-</button>
+                        <input
+                          type="number"
+                          min="0"
+                          className="w-12 text-center bg-transparent font-bold text-gray-900 outline-none"
+                          value={formData[key]}
+                          onChange={e => setFormData(p => ({...p, [key]: parseInt(e.target.value) || 0}))}
+                        />
+                        <button type="button" onClick={() => setFormData(p => ({...p, [key]: p[key] + 1}))} className="w-6 h-6 flex items-center justify-center bg-white rounded border hover:bg-gray-100 text-gray-500">+</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
               <button 
                 type="submit" 
                 disabled={isSubmitting} 
@@ -984,6 +1053,23 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
               <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-1">本月每分價值(FYC)</p>
               <h4 className="text-xl font-bold text-gray-900">{formatMoney(stats.valuePerPoint)}</h4>
               <p className="text-xs text-gray-500 mt-1">總FYC: <span className="font-bold text-gray-700">{formatMoney(stats.totalFYC)}</span></p>
+            </div>
+          </div>
+
+          <div className="bg-white rounded-2xl p-4 border border-gray-100 flex items-center justify-around text-center">
+            <div>
+              <p className="text-[10px] font-bold text-gray-400 uppercase">業務活動分</p>
+              <p className="text-lg font-bold text-indigo-600">{stats.salesPoints}</p>
+            </div>
+            <div className="w-px h-8 bg-gray-100"></div>
+            <div>
+              <p className="text-[10px] font-bold text-gray-400 uppercase">增員活動分</p>
+              <p className="text-lg font-bold text-teal-600">{stats.recruitPoints}</p>
+            </div>
+            <div className="w-px h-8 bg-gray-100"></div>
+            <div>
+              <p className="text-[10px] font-bold text-gray-400 uppercase">總分</p>
+              <p className={`text-lg font-bold ${stats.totalPoints < 400 ? 'text-red-500' : 'text-gray-900'}`}>{stats.totalPoints}</p>
             </div>
           </div>
         </div>
@@ -2288,9 +2374,7 @@ const NotionImportModal = ({ isOpen, onClose, loggedInUser, onImported }) => {
 };
 
 // --- 客戶管理 CRM ---
-const CustomerCRM = ({ loggedInUser, records }) => {
-  const [customers, setCustomers] = useState([]);
-  const [loaded, setLoaded] = useState(false);
+const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
   const [search, setSearch] = useState('');
   const [showFilter, setShowFilter] = useState(false);
   const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '' });
@@ -2302,18 +2386,7 @@ const CustomerCRM = ({ loggedInUser, records }) => {
   const emptyForm = { name: '', phone: '', birthday: '', gender: '', region: '', incomeRange: '', tag: '準客戶', notes: '', nextFollowUpDate: '' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
-
-  useEffect(() => {
-    if (!loggedInUser) return;
-    const q = query(collection(db, 'customers'), where('ownerId', '==', loggedInUser.id));
-    const unsub = onSnapshot(q, (snap) => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-      list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
-      setCustomers(list);
-      setLoaded(true);
-    });
-    return () => unsub();
-  }, [loggedInUser]);
+  const loaded = customersLoaded;
 
   const existingNames = useMemo(() => new Set(customers.map(c => (c.name || '').trim().toLowerCase())), [customers]);
 
@@ -2562,6 +2635,289 @@ const CustomerCRM = ({ loggedInUser, records }) => {
 };
 
 
+// --- 行程 (Schedule Agenda) ---
+const ScheduleAgenda = ({ loggedInUser, customers, scheduleEvents }) => {
+  const [showForm, setShowForm] = useState(false);
+  const emptyForm = { customerId: '', type: 'appointment', date: getTodayDate(), time: '', note: '' };
+  const [form, setForm] = useState(emptyForm);
+  const [saving, setSaving] = useState(false);
+  const [busyId, setBusyId] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const today = getTodayDate();
+
+  const scheduled = useMemo(() => [...scheduleEvents].filter(e => e.status === 'scheduled').sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''))), [scheduleEvents]);
+  const completedRecent = useMemo(() => [...scheduleEvents].filter(e => e.status === 'completed').sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || '')).slice(0, 15), [scheduleEvents]);
+
+  const groupLabel = (dateStr) => {
+    if (dateStr < today) return '已過期';
+    if (dateStr === today) return '今天';
+    const tmr = new Date(); tmr.setDate(tmr.getDate() + 1);
+    if (dateStr === tmr.toISOString().split('T')[0]) return '明天';
+    const weekLater = new Date(); weekLater.setDate(weekLater.getDate() + 7);
+    if (dateStr <= weekLater.toISOString().split('T')[0]) return '本週';
+    return '未來';
+  };
+
+  const grouped = useMemo(() => {
+    const groups = {};
+    scheduled.forEach(e => {
+      const label = groupLabel(e.date);
+      if (!groups[label]) groups[label] = [];
+      groups[label].push(e);
+    });
+    return groups;
+    // eslint-disable-next-line
+  }, [scheduled]);
+
+  const groupOrder = ['已過期', '今天', '明天', '本週', '未來'];
+
+  const handleAdd = async () => {
+    if (!loggedInUser || !form.date) return;
+    setSaving(true);
+    try {
+      const customer = customers.find(c => c.id === form.customerId);
+      await addDoc(collection(db, 'schedule_events'), {
+        ownerId: loggedInUser.id,
+        customerId: form.customerId || '',
+        customerName: customer ? customer.name : '',
+        type: form.type,
+        date: form.date,
+        time: form.time,
+        note: form.note,
+        status: 'scheduled',
+        completedAt: null,
+        createdAt: new Date().toISOString()
+      });
+      setForm(emptyForm);
+      setShowForm(false);
+    } catch (e) { console.error(e); } finally { setSaving(false); }
+  };
+
+  const handleComplete = async (event) => {
+    if (!loggedInUser) return;
+    setBusyId(event.id);
+    try {
+      await completeScheduleEvent(event, loggedInUser.id);
+    } catch (e) { console.error(e); } finally { setBusyId(null); }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    try { await deleteDoc(doc(db, 'schedule_events', deleteTarget)); setDeleteTarget(null); } catch (e) { console.error(e); }
+  };
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6 animate-fade-in pb-12">
+      <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除行程" message="確定要刪除這筆行程嗎？" />
+      <div className="flex items-center justify-between flex-wrap gap-3">
+        <div>
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">行程</h2>
+          <p className="text-xs sm:text-sm text-gray-400 mt-1">排定約訪、面談，完成後自動計入 MEA 與客戶拜訪軌跡</p>
+        </div>
+        <button onClick={() => setShowForm(true)} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-sm transition"><Plus size={16} /> 新增行程</button>
+      </div>
+
+      {scheduled.length === 0 && <Card className="p-10 text-center text-gray-400">目前沒有排定的行程</Card>}
+
+      {groupOrder.map(label => grouped[label] && grouped[label].length > 0 && (
+        <div key={label}>
+          <h3 className={`text-sm font-bold mb-3 ${label === '已過期' ? 'text-red-500' : 'text-gray-500'}`}>{label} ({grouped[label].length})</h3>
+          <div className="space-y-3">
+            {grouped[label].map(e => (
+              <Card key={e.id} className={`p-4 flex items-center justify-between gap-3 ${label === '已過期' ? 'border-red-200' : ''}`}>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <span className={`w-2 h-2 rounded-full ${ALL_ACTIVITY_WEIGHTS[e.type]?.color || 'bg-gray-400'}`}></span>
+                    <p className="font-bold text-gray-900 text-sm">{ALL_ACTIVITY_WEIGHTS[e.type]?.label || e.type}</p>
+                    {e.customerName && <span className="text-xs text-gray-400">· {e.customerName}</span>}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">{e.date}{e.time ? ` ${e.time}` : ''}{e.note ? ` · ${e.note}` : ''}</p>
+                </div>
+                <div className="flex gap-2 shrink-0">
+                  <button disabled={busyId === e.id} onClick={() => handleComplete(e)} className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
+                    {busyId === e.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
+                  </button>
+                  <button onClick={() => setDeleteTarget(e.id)} className="text-gray-300 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                </div>
+              </Card>
+            ))}
+          </div>
+        </div>
+      ))}
+
+      {completedRecent.length > 0 && (
+        <div>
+          <h3 className="text-sm font-bold text-gray-400 mb-3">最近完成</h3>
+          <div className="space-y-2">
+            {completedRecent.map(e => (
+              <div key={e.id} className="text-xs text-gray-400 flex justify-between px-2">
+                <span>{ALL_ACTIVITY_WEIGHTS[e.type]?.label || e.type}{e.customerName && ` · ${e.customerName}`}</span>
+                <span>{e.date}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {showForm && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">新增行程</h3>
+              <button onClick={() => setShowForm(false)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">類型</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
+                  <optgroup label="業務活動">
+                    {Object.entries(ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  </optgroup>
+                  <optgroup label="增員活動">
+                    {Object.entries(RECRUIT_ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  </optgroup>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">關聯客戶（選填）</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.customerId} onChange={e => setForm({ ...form, customerId: e.target.value })}>
+                  <option value="">不指定</option>
+                  {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+                </select>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">時間（選填）</label><input type="time" className="w-full p-2 border border-gray-200 rounded-lg" value={form.time} onChange={e => setForm({ ...form, time: e.target.value })} /></div>
+              </div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">備註</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-20 resize-none" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} /></div>
+              <button onClick={handleAdd} disabled={!form.date || saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {saving ? <Loader2 className="animate-spin" size={16} /> : '新增'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
+// --- 今日待辦 (Today's Todo) ---
+const TodayTodo = ({ loggedInUser, customers, scheduleEvents }) => {
+  const today = getTodayDate();
+  const [busyId, setBusyId] = useState(null);
+
+  const dueEvents = useMemo(() => scheduleEvents.filter(e => e.status === 'scheduled' && e.date <= today).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''))), [scheduleEvents, today]);
+
+  const dueCustomers = useMemo(() => customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today), [customers, today]);
+
+  const birthdayCustomers = useMemo(() => {
+    const now = new Date();
+    const todayNoTime = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+    return customers.filter(c => {
+      if (!c.birthday) return false;
+      const b = new Date(c.birthday);
+      if (isNaN(b.getTime())) return false;
+      const thisYearBday = new Date(now.getFullYear(), b.getMonth(), b.getDate());
+      const diffDays = Math.floor((thisYearBday - todayNoTime) / 86400000);
+      return diffDays >= 0 && diffDays <= 7;
+    }).sort((a, b) => a.birthday.slice(5).localeCompare(b.birthday.slice(5)));
+  }, [customers]);
+
+  const handleCompleteEvent = async (event) => {
+    if (!loggedInUser) return;
+    setBusyId(event.id);
+    try {
+      await completeScheduleEvent(event, loggedInUser.id);
+    } catch (e) { console.error(e); } finally { setBusyId(null); }
+  };
+
+  const handleContactCustomer = async (customer) => {
+    if (!loggedInUser) return;
+    setBusyId(customer.id);
+    try {
+      await updateDoc(doc(db, 'customers', customer.id), {
+        visitLog: arrayUnion({ date: today, type: '約訪', note: '今日待辦快速標記' }),
+        nextFollowUpDate: ''
+      });
+      const docId = `${loggedInUser.id}_${today}`;
+      await setDoc(doc(db, 'activity_record', docId), {
+        agentId: loggedInUser.id,
+        date: today,
+        month: today.substring(0, 7),
+        appointment: increment(1),
+        updatedAt: new Date().toISOString()
+      }, { merge: true });
+    } catch (e) { console.error(e); } finally { setBusyId(null); }
+  };
+
+  const isEmpty = dueEvents.length === 0 && dueCustomers.length === 0 && birthdayCustomers.length === 0;
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6 animate-fade-in pb-12">
+      <div>
+        <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">今日待辦</h2>
+        <p className="text-xs sm:text-sm text-gray-400 mt-1">{today} · 你的每日提醒清單</p>
+      </div>
+
+      {isEmpty && <Card className="p-10 text-center text-gray-400">今天沒有待辦事項，太棒了 🎉</Card>}
+
+      {dueEvents.length > 0 && (
+        <Card className="p-5">
+          <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><Clock size={18} className="text-indigo-500" /> 待完成行程</h3>
+          <div className="space-y-3">
+            {dueEvents.map(e => (
+              <div key={e.id} className={`flex items-center justify-between gap-3 p-3 rounded-xl border ${e.date < today ? 'bg-red-50 border-red-100' : 'bg-gray-50 border-gray-100'}`}>
+                <div className="min-w-0">
+                  <p className="font-bold text-gray-900 text-sm truncate">{ALL_ACTIVITY_WEIGHTS[e.type]?.label || e.type}{e.customerName && ` · ${e.customerName}`}</p>
+                  <p className="text-xs text-gray-400">{e.date}{e.time ? ` ${e.time}` : ''}{e.date < today ? '（已過期）' : ''}</p>
+                </div>
+                <button disabled={busyId === e.id} onClick={() => handleCompleteEvent(e)} className="shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
+                  {busyId === e.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 完成
+                </button>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {dueCustomers.length > 0 && (
+        <Card className="p-5">
+          <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><Phone size={18} className="text-amber-500" /> 該追蹤的客戶</h3>
+          <div className="space-y-3">
+            {dueCustomers.map(c => (
+              <div key={c.id} className="flex items-center justify-between gap-3 p-3 rounded-xl border bg-amber-50 border-amber-100">
+                <div className="min-w-0">
+                  <p className="font-bold text-gray-900 text-sm truncate">{c.name}</p>
+                  <p className="text-xs text-gray-400">追蹤日期：{c.nextFollowUpDate}</p>
+                </div>
+                <button disabled={busyId === c.id} onClick={() => handleContactCustomer(c)} className="shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
+                  {busyId === c.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 已聯繫
+                </button>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
+      {birthdayCustomers.length > 0 && (
+        <Card className="p-5">
+          <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><Cake size={18} className="text-pink-500" /> 近期生日 (7天內)</h3>
+          <div className="space-y-2">
+            {birthdayCustomers.map(c => (
+              <div key={c.id} className="text-sm text-gray-700 flex justify-between">
+                <span className="font-bold">{c.name}</span>
+                <span className="text-gray-400">{c.birthday}</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+};
+
+
 // --- Competition Settings Page (競賽設定：目標值可在畫面上調整，不用改程式碼) ---
 const SettingsPage = ({ rankTargets, doubleAwardTargets }) => {
   const [season, setSeason] = useState('H2');
@@ -2577,7 +2933,7 @@ const SettingsPage = ({ rankTargets, doubleAwardTargets }) => {
     setExporting(true);
     setExportMsg('');
     try {
-      const collectionsToBackup = ['case_record', 'user', 'temp_user', 'activity_record', 'settings', 'customers'];
+      const collectionsToBackup = ['case_record', 'user', 'temp_user', 'activity_record', 'settings', 'customers', 'schedule_events'];
       const backup = {};
       for (const colName of collectionsToBackup) {
         const snap = await getDocs(collection(db, colName));
@@ -2891,7 +3247,7 @@ const LoginScreen = ({ team, onLogin }) => {
 
 // --- Main App ---
 const App = () => {
-  const [activeTab, setActiveTab] = useState('dashboard');
+  const [activeTab, setActiveTab] = useState('todo');
   const [season, setSeason] = useState('H2'); 
   const [team, setTeam] = useState([]);
   const [records, setRecords] = useState([]);
@@ -2903,6 +3259,9 @@ const App = () => {
   const [sessionChecked, setSessionChecked] = useState(false);
   const [rankTargets, setRankTargets] = useState({ H1: DEFAULT_RANK_TARGETS_H1, H2: DEFAULT_RANK_TARGETS_H2 });
   const [doubleAwardTargets, setDoubleAwardTargets] = useState(DEFAULT_DOUBLE_AWARD_H2);
+  const [customers, setCustomers] = useState([]);
+  const [customersLoaded, setCustomersLoaded] = useState(false);
+  const [scheduleEvents, setScheduleEvents] = useState([]);
 
   useEffect(() => {
     const initAuth = async () => { await signInAnonymously(auth); };
@@ -2932,6 +3291,26 @@ const App = () => {
     });
     return () => unsubSettings();
   }, [user]);
+
+  // 客戶資料與行程：只讀取「目前登入者自己」擁有的資料，做到隱私區隔
+  useEffect(() => {
+    if (!loggedInUser) { setCustomers([]); setScheduleEvents([]); setCustomersLoaded(false); return; }
+
+    const customersQuery = query(collection(db, 'customers'), where('ownerId', '==', loggedInUser.id));
+    const unsubCustomers = onSnapshot(customersQuery, (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
+      setCustomers(list);
+      setCustomersLoaded(true);
+    });
+
+    const scheduleQuery = query(collection(db, 'schedule_events'), where('ownerId', '==', loggedInUser.id));
+    const unsubSchedule = onSnapshot(scheduleQuery, (snap) => {
+      setScheduleEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return () => { unsubCustomers(); unsubSchedule(); };
+  }, [loggedInUser?.id]);
 
   // 自動登入：檢查裝置上是否記住了先前的登入狀態
   useEffect(() => {
@@ -3100,8 +3479,10 @@ const App = () => {
   }, [records, team]);
 
   const navItems = [
-    { id: 'dashboard', label: '業績儀表板', icon: LayoutDashboard },
+    { id: 'todo', label: '今日待辦', icon: CheckSquare },
     { id: 'customers', label: '客戶管理', icon: Phone },
+    { id: 'schedule', label: '行程', icon: Calendar },
+    { id: 'dashboard', label: '業績儀表板', icon: LayoutDashboard },
     { id: 'activity', label: 'MEA 活動量', icon: Activity },
     { id: 'entry', label: '業績回報', icon: Plus },
     { id: 'team', label: '組織架構', icon: Users },
@@ -3171,8 +3552,10 @@ const App = () => {
       </nav>
 
       <main className="max-w-7xl mx-auto px-6 pt-8">
+        {activeTab === 'todo' && <TodayTodo loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} />}
+        {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} />}
+        {activeTab === 'schedule' && <ScheduleAgenda loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} />}
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
-        {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} />}
         {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} />}
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} />}
         {activeTab === 'team' && <OrgChart team={team} recruits={recruits} />}
