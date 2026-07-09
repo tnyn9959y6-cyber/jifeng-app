@@ -1411,6 +1411,213 @@ const OrgChart = ({ team, recruits }) => {
 };
 
 
+// --- Recruitment Dashboard (增員儀表板) ---
+const GOAL_REGISTER = 12;
+const GOAL_QUALITY = 10;
+
+const RecruitmentDashboard = ({ recruits, team, user }) => {
+  const [loadingId, setLoadingId] = useState(null);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+
+  const determineStatus = (recruit) => {
+    if (recruit.isPromoted) return '登錄';
+
+    const dates = recruit.dates || {};
+    const today = getTodayDate();
+
+    if (dates.trainingDate && dates.trainingDate <= today) return '優培';
+    if (dates.registeredDate && dates.registeredDate <= today) return '登錄';
+    if (dates.externalExamDate && dates.externalExamDate <= today) return '外考';
+    if (dates.internalExamDate && dates.internalExamDate <= today) return '內考';
+    if (dates.tempAccountDate && dates.tempAccountDate <= today) return '臨時帳號';
+    return '新名單';
+  };
+
+  const dashboardStats = useMemo(() => {
+    const currentYearMonth = getCurrentMonth();
+
+    const totalMonthReg = recruits.filter(r => {
+      const status = determineStatus(r);
+      const isReg = status === '登錄' || status === '優培' || r.isPromoted;
+      const date = r.dates?.registeredDate;
+      return isReg && date && date.startsWith(currentYearMonth);
+    }).length;
+
+    const totalMonthQual = recruits.filter(r => {
+      const status = determineStatus(r);
+      return status === '優培' && r.dates?.trainingDate && r.dates.trainingDate.startsWith(currentYearMonth);
+    }).length;
+
+    const totalYearReg = recruits.filter(r => {
+      const status = determineStatus(r);
+      return status === '登錄' || status === '優培' || r.isPromoted;
+    }).length;
+
+    const totalYearQual = recruits.filter(r => determineStatus(r) === '優培').length;
+
+    const agentStats = {};
+    team.forEach(m => {
+      agentStats[m.id] = { monthReg: 0, monthQual: 0, yearReg: 0, yearQual: 0 };
+    });
+
+    recruits.forEach(r => {
+      if (!agentStats[r.recruiterId]) return;
+      const status = determineStatus(r);
+      const isReg = status === '登錄' || status === '優培' || r.isPromoted;
+
+      if (isReg) agentStats[r.recruiterId].yearReg++;
+      if (status === '優培') agentStats[r.recruiterId].yearQual++;
+
+      const regDate = r.dates?.registeredDate || '';
+      const qualDate = r.dates?.trainingDate || '';
+
+      if (isReg && regDate.startsWith(currentYearMonth)) {
+        agentStats[r.recruiterId].monthReg++;
+      }
+      if (status === '優培' && qualDate.startsWith(currentYearMonth)) {
+        agentStats[r.recruiterId].monthQual++;
+      }
+    });
+
+    return { totalMonthReg, totalMonthQual, totalYearReg, totalYearQual, agentStats };
+  }, [recruits, team]);
+
+  const groupedRecruits = useMemo(() => {
+    const groups = {};
+    team.forEach(m => { groups[m.id] = { agent: m, recruits: [] }; });
+    recruits.forEach(r => {
+      const dynamicStatus = determineStatus(r);
+      if (groups[r.recruiterId]) {
+        groups[r.recruiterId].recruits.push({ ...r, status: dynamicStatus });
+      }
+    });
+    return Object.values(groups).filter(g => g.recruits.length > 0);
+  }, [recruits, team]);
+
+  const updateRecruit = async (id, partialData) => {
+    if (!user) return;
+    setLoadingId(id);
+    try {
+      let updatePayload = {};
+      if (partialData.dates) {
+         updatePayload.timeline = partialData.dates;
+      }
+      if (partialData.docs) {
+         updatePayload.checkItem = {
+           idIdentityCard: partialData.docs.idCard,
+           isDiploma: partialData.docs.diploma,
+           isBankBook: partialData.docs.bankBook,
+           isCredit: partialData.docs.credit
+         };
+      }
+      if (partialData.note) updatePayload.note = partialData.note;
+
+      if (Object.keys(updatePayload).length > 0) {
+        await updateDoc(doc(db, 'temp_user', id), updatePayload);
+      }
+    }
+    catch(e) { console.error(e); } finally { setLoadingId(null); }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    try {
+      await deleteDoc(doc(db, 'temp_user', deleteTarget));
+      setDeleteTarget(null);
+    } catch(e) { console.error(e); }
+  }
+
+  const toggleDoc = (recruit, docKey) => {
+    const currentDocs = recruit.docs || {};
+    const newDocs = { ...currentDocs, [docKey]: !currentDocs[docKey] };
+    updateRecruit(recruit.id, { docs: newDocs });
+  };
+
+  const getStatusColor = (status) => {
+    switch(status) {
+      case '登錄': return 'bg-emerald-500';
+      case '優培': return 'bg-amber-500';
+      case '外考': return 'bg-purple-500';
+      case '內考': return 'bg-blue-500';
+      case '臨時帳號': return 'bg-indigo-500';
+      default: return 'bg-gray-400';
+    }
+  };
+
+  return (
+    <div className="space-y-12 animate-fade-in max-w-7xl mx-auto pb-12">
+      <ConfirmModal
+        isOpen={!!deleteTarget}
+        onClose={() => setDeleteTarget(null)}
+        onConfirm={handleDeleteConfirm}
+        title="刪除準增員"
+        message="確定要刪除此準增員資料嗎？此動作無法復原。"
+      />
+      <div className="bg-gradient-to-r from-slate-900 to-slate-800 rounded-3xl p-8 shadow-2xl relative overflow-hidden text-white border border-gray-700">
+        <div className="absolute top-0 right-0 p-8 opacity-10"><UserPlus size={250} /></div>
+        <div className="relative z-10 flex flex-col md:flex-row justify-between items-center gap-12">
+          <div className="flex-1 space-y-8">
+             <div><h2 className="text-3xl font-bold font-serif tracking-wide mb-1 text-transparent bg-clip-text bg-gradient-to-r from-blue-200 to-white">極豐增員戰報</h2><p className="text-gray-400 text-sm">組織發展儀表板</p></div>
+             <div className="flex gap-12">
+                <div><p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-2">本月戰況 ({getCurrentMonth()})</p><div className="flex gap-6"><div><span className="text-3xl font-bold text-white">{dashboardStats.totalMonthReg}</span><span className="text-xs text-gray-500 block">登錄</span></div><div className="w-px h-10 bg-gray-700"></div><div><span className="text-3xl font-bold text-amber-400">{dashboardStats.totalMonthQual}</span><span className="text-xs text-gray-500 block">優培</span></div></div></div>
+                <div><p className="text-xs text-gray-400 font-bold uppercase tracking-wider mb-2">年度累積</p><div className="flex gap-6"><div><span className="text-3xl font-bold text-white">{dashboardStats.totalYearReg}</span><span className="text-xs text-gray-500 block">登錄</span></div><div className="w-px h-10 bg-gray-700"></div><div><span className="text-3xl font-bold text-amber-400">{dashboardStats.totalYearQual}</span><span className="text-xs text-gray-500 block">優培</span></div></div></div>
+             </div>
+          </div>
+          <div className="flex flex-col items-center"><DoubleRadialProgress peakPercent={(dashboardStats.totalYearReg / GOAL_REGISTER) * 100} summitPercent={(dashboardStats.totalYearQual / GOAL_QUALITY) * 100} size={160}/><div className="flex gap-6 mt-4 text-xs font-bold text-gray-400"><div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500"></span> 登錄達成 ({Math.round((dashboardStats.totalYearReg/GOAL_REGISTER)*100)}%)</div><div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-amber-500"></span> 優培達成 ({Math.round((dashboardStats.totalYearQual/GOAL_QUALITY)*100)}%)</div></div></div>
+        </div>
+      </div>
+
+      {groupedRecruits.map(({ agent, recruits }) => {
+        const myStats = dashboardStats.agentStats[agent.id];
+        return (
+          <div key={agent.id} className="space-y-6 animate-slide-up">
+            <div className="flex flex-col md:flex-row md:items-center justify-between gap-4 bg-white px-6 py-5 rounded-2xl shadow-sm border border-gray-100">
+              <div className="flex items-center gap-4"><div className="w-12 h-12 rounded-full bg-gradient-to-tr from-blue-600 to-indigo-500 flex items-center justify-center text-white font-bold text-xl shadow-lg border-2 border-white">{agent.name[0]}</div><div><h4 className="text-lg font-bold text-gray-900">{agent.name}</h4><p className="text-xs text-gray-400 font-medium">{agent.role}</p></div></div>
+              <div className="flex gap-8 border-t md:border-t-0 md:border-l border-gray-100 pt-4 md:pt-0 md:pl-8">
+                 <div><p className="text-[10px] text-gray-400 font-bold uppercase mb-1">個人本月</p><div className="flex gap-2 text-sm font-bold text-gray-700"><span>登錄 <span className="text-blue-600">{myStats.monthReg}</span></span><span className="text-gray-300">|</span><span>優培 <span className="text-amber-500">{myStats.monthQual}</span></span></div></div>
+                 <div><p className="text-[10px] text-gray-400 font-bold uppercase mb-1">個人累積</p><div className="flex gap-2 text-sm font-bold text-gray-700"><span>登錄 <span className="text-blue-600">{myStats.yearReg}</span></span><span className="text-gray-300">|</span><span>優培 <span className="text-amber-500">{myStats.yearQual}</span></span></div></div>
+              </div>
+            </div>
+
+            <div className="grid grid-cols-1 xl:grid-cols-2 gap-6">
+              {recruits.map(recruit => {
+                const currentStatusIdx = RECRUIT_STATUSES.indexOf(recruit.status);
+                const progressColor = getStatusColor(recruit.status);
+                return (
+                  <div key={recruit.id} className={`bg-white rounded-2xl p-6 shadow-sm border ${recruit.isPromoted ? 'border-emerald-200 bg-emerald-50/30' : 'border-gray-100'} hover:shadow-lg transition-all group relative overflow-hidden`}>
+                    <button onClick={() => setDeleteTarget(recruit.id)} className="absolute top-4 right-4 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"><Trash2 size={18}/></button>
+                    {recruit.isPromoted && <div className="absolute top-4 right-12 text-xs font-bold text-emerald-600 bg-emerald-100 px-2 py-1 rounded-full">已晉升轉正</div>}
+                    <div className="flex items-center gap-4 mb-6"><div className={`w-12 h-12 rounded-xl flex items-center justify-center text-white font-bold text-xl shadow-md ${progressColor}`}>{recruit.name[0]}</div><div><div className="flex items-center gap-3"><h5 className="text-lg font-bold text-gray-900">{recruit.name}</h5><span className={`text-[10px] px-2 py-0.5 rounded-full text-white ${progressColor}`}>{recruit.status}</span></div><div className="text-xs text-gray-400 mt-1">自動判斷狀態</div></div></div>
+                    <div className="mb-8 px-2"><div className="relative flex justify-between items-center"><div className="absolute top-1/2 left-0 w-full h-1 bg-gray-100 -translate-y-1/2 rounded-full -z-10"></div><div className={`absolute top-1/2 left-0 h-1 -translate-y-1/2 rounded-full transition-all duration-500 -z-10 ${progressColor}`} style={{ width: `${(currentStatusIdx / (RECRUIT_STATUSES.length - 1)) * 100}%` }}></div>{RECRUIT_STATUSES.map((step, idx) => {const isCompleted = currentStatusIdx >= idx;const isCurrent = recruit.status === step;return (<div key={step} className="flex flex-col items-center gap-2 relative"><div className={`w-3 h-3 rounded-full border-2 transition-all z-10 box-content ${isCompleted ? `${progressColor} border-white shadow-sm` : 'bg-white border-gray-200'}`}>{isCurrent && <div className={`absolute top-0 left-0 w-full h-full rounded-full animate-ping ${progressColor} opacity-50`}></div>}</div>{isCurrent && (<span className={`text-[10px] font-bold px-2 py-0.5 rounded text-white absolute -bottom-7 whitespace-nowrap shadow-sm ${progressColor}`}>{step}</span>)}</div>)}) }</div></div>
+                    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6 pt-4 border-t border-gray-50">
+                       <div className="space-y-3">
+                          <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">關鍵日期</p>
+                          {[{ label: '臨時帳號', key: 'tempAccountDate' },{ label: '內考日期', key: 'internalExamDate' },{ label: '外考日期', key: 'externalExamDate' },{ label: '預計登錄', key: 'registeredDate' },{ label: '優培開始', key: 'trainingDate' }].map(d => (
+                            <div key={d.key} className="flex items-center justify-between"><label className="text-xs text-gray-500 font-medium">{d.label}</label>
+                              <input type="date" disabled={recruit.isPromoted} className="bg-gray-50 border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 outline-none focus:border-blue-500 transition w-32 disabled:opacity-50" value={recruit.dates?.[d.key] || ''} onChange={(e) => {
+                                  const currentDates = recruit.dates || {};
+                                  updateRecruit(recruit.id, { dates: { ...currentDates, [d.key]: e.target.value } });
+                                }}/>
+                            </div>))}
+                       </div>
+                       <div>
+                          <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-3">資料檢核</p>
+                          <div className="grid grid-cols-2 gap-2">{[{ key: 'idCard', label: '身分證' },{ key: 'diploma', label: '畢業證書' },{ key: 'bankBook', label: '存摺影本' },{ key: 'credit', label: '聯徵報告' }].map(item => (<button key={item.key} disabled={recruit.isPromoted} onClick={() => toggleDoc(recruit, item.key)} className={`flex items-center gap-2 p-2 rounded-lg border transition-all text-xs ${recruit.docs?.[item.key] ? 'bg-green-50 border-green-200 text-green-700 font-bold' : 'bg-white border-gray-200 text-gray-400 hover:bg-gray-50'} disabled:opacity-50`}>{recruit.docs?.[item.key] ? <CheckCircle2 size={14}/> : <Square size={14}/>}{item.label}</button>))}</div>
+                          <div className="mt-4"><label className="text-xs font-bold text-gray-400 uppercase block mb-1">進度備註</label><input type="text" disabled={recruit.isPromoted} className="w-full bg-gray-50 border-b border-gray-200 text-xs py-1 px-2 outline-none focus:border-blue-500 text-gray-600 placeholder-gray-300 disabled:opacity-50" placeholder="例如: 進度正常、需補件..." value={recruit.note || ''} onChange={(e) => updateRecruit(recruit.id, { note: e.target.value })}/></div>
+                       </div>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+    </div>
+  );
+};
+
+
 // --- Sales Entry ---
 const SalesEntry = ({ team, records, setRecords, user }) => {
   const [editingId, setEditingId] = useState(null);
@@ -1759,6 +1966,7 @@ const App = () => {
     { id: 'activity', label: 'MEA 活動量', icon: Activity },
     { id: 'entry', label: '業績回報', icon: Plus },
     { id: 'team', label: '組織架構', icon: Users },
+    { id: 'recruitment', label: '增員儀表板', icon: UserPlus },
     { id: 'wiki', label: '知識庫', icon: BookOpen },
   ];
 
@@ -1802,6 +2010,7 @@ const App = () => {
         {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} />}
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} />}
         {activeTab === 'team' && <OrgChart team={team} recruits={recruits} />}
+        {activeTab === 'recruitment' && <RecruitmentDashboard recruits={recruits} team={team} user={user} />}
         {activeTab === 'wiki' && <KnowledgeBase />}
       </main>
     </div>
