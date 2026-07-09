@@ -25,7 +25,8 @@ import {
   ListPlus,
   Activity,
   AlertTriangle,
-  Gift
+  Gift,
+  LogOut
 } from 'lucide-react';
 import { 
   BarChart,
@@ -176,6 +177,29 @@ const INITIAL_DOCS = [
 ];
 
 const formatMoney = (num) => new Intl.NumberFormat('zh-TW', { style: 'currency', currency: 'TWD', minimumFractionDigits: 0 }).format(num || 0);
+
+// --- 密碼加密工具 (使用瀏覽器內建 Web Crypto API，PBKDF2 + 隨機鹽值，密碼不會以明碼儲存) ---
+const generateSalt = () => {
+  const arr = new Uint8Array(16);
+  window.crypto.getRandomValues(arr);
+  return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
+const generateToken = () => {
+  const arr = new Uint8Array(24);
+  window.crypto.getRandomValues(arr);
+  return Array.from(arr).map(b => b.toString(16).padStart(2, '0')).join('');
+};
+
+const hashPassword = async (password, salt) => {
+  const enc = new TextEncoder();
+  const keyMaterial = await window.crypto.subtle.importKey('raw', enc.encode(password), { name: 'PBKDF2' }, false, ['deriveBits']);
+  const bits = await window.crypto.subtle.deriveBits(
+    { name: 'PBKDF2', salt: enc.encode(salt), iterations: 100000, hash: 'SHA-256' },
+    keyMaterial, 256
+  );
+  return Array.from(new Uint8Array(bits)).map(b => b.toString(16).padStart(2, '0')).join('');
+};
 
 // --- Shared UI Components ---
 const Card = ({ children, className = "", onClick }) => (
@@ -621,7 +645,7 @@ const ACTIVITY_WEIGHTS = {
   issue: { label: '核保發單', score: 5, color: 'bg-rose-500' }
 };
 
-const ActivityDashboard = ({ team, activities, records, user, season }) => {
+const ActivityDashboard = ({ team, activities, records, user, season, loggedInUser }) => {
   const currentMonths = season === 'H1' ? AVAILABLE_MONTHS_H1 : AVAILABLE_MONTHS_H2;
   const [selectedAgentId, setSelectedAgentId] = useState('');
   
@@ -643,13 +667,13 @@ const ActivityDashboard = ({ team, activities, records, user, season }) => {
     setSelectedMonth(isCurrentInSeason ? current : currentMonths[0].value);
   }, [season, currentMonths]);
 
-  // 預設選擇第一位業務員 (如果自己是業務員則選自己)
+  // 預設選擇「目前登入的自己」，找不到才退回第一位業務員
   useEffect(() => {
     if (!selectedAgentId && team.length > 0) {
-      const me = team.find(t => user && t.id === user.uid);
+      const me = loggedInUser ? team.find(t => t.id === loggedInUser.id) : null;
       setSelectedAgentId(me ? me.id : team[0].id);
     }
-  }, [team, user, selectedAgentId]);
+  }, [team, loggedInUser, selectedAgentId]);
 
   // 當選擇日期改變時，自動載入當日已有的數據
   useEffect(() => {
@@ -1194,6 +1218,9 @@ const OrgChart = ({ team, recruits }) => {
   const [deleteInfo, setDeleteInfo] = useState(null);
   const [newMember, setNewMember] = useState({ name: '', role: '業務代表', parentId: '', type: '正式人員' });
   const [loading, setLoading] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [resetting, setResetting] = useState(false);
+  const [resetMsg, setResetMsg] = useState('');
 
   const handleUpdateMember = async () => {
      if (!editMember) return;
@@ -1207,6 +1234,31 @@ const OrgChart = ({ team, recruits }) => {
        setEditMember(null);
      } catch(e) { console.error(e); }
   }
+
+  useEffect(() => {
+    setNewPassword('');
+    setResetMsg('');
+    setResetting(false);
+  }, [editMember?.id]);
+
+  const handleResetPassword = async () => {
+    if (!editMember || !newPassword) return;
+    setResetting(true);
+    setResetMsg('');
+    try {
+      const salt = generateSalt();
+      const hash = await hashPassword(newPassword, salt);
+      // 清空 rememberToken，強制該成員在其他裝置上重新登入
+      await updateDoc(doc(db, 'user', editMember.id), { passwordHash: hash, passwordSalt: salt, rememberToken: '' });
+      setResetMsg('密碼已更新，該成員下次登入請使用新密碼');
+      setNewPassword('');
+    } catch (e) {
+      console.error(e);
+      setResetMsg('更新失敗，請再試一次');
+    } finally {
+      setResetting(false);
+    }
+  };
 
   const handleAdd = async () => {
     if (!newMember.name) return;
@@ -1399,6 +1451,30 @@ const OrgChart = ({ team, recruits }) => {
                          />
                       </div>
                     ))}
+                  </div>
+
+                  {/* 密碼管理 */}
+                  <div className="space-y-3 pt-4 border-t border-gray-100">
+                    <h4 className="text-sm font-bold text-gray-800">密碼管理</h4>
+                    <p className="text-[10px] text-gray-400 leading-relaxed">為此成員設定新密碼，設定後該成員需使用新密碼重新登入（其他裝置上的登入狀態也會失效）。</p>
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        placeholder="輸入新密碼"
+                        className="flex-1 p-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-indigo-500"
+                        value={newPassword}
+                        onChange={e => setNewPassword(e.target.value)}
+                      />
+                      <button
+                        type="button"
+                        disabled={!newPassword || resetting}
+                        onClick={handleResetPassword}
+                        className="px-3 py-2 bg-gray-800 text-white rounded-lg text-xs font-bold disabled:opacity-40 flex items-center gap-1 whitespace-nowrap"
+                      >
+                        {resetting ? <Loader2 size={14} className="animate-spin"/> : '重設密碼'}
+                      </button>
+                    </div>
+                    {resetMsg && <p className="text-xs text-emerald-600 font-bold">{resetMsg}</p>}
                   </div>
 
                   <button onClick={handleUpdateMember} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-4">儲存變更</button>
@@ -1813,6 +1889,116 @@ const KnowledgeBase = () => (
 );
 
 
+// --- Loading Screen (顯示於系統連線資料庫期間) ---
+const LoadingScreen = () => (
+  <div className="min-h-screen bg-[#F5F7FA] flex flex-col items-center justify-center gap-4">
+    <div className="w-14 h-14 bg-gradient-to-tr from-gray-900 to-gray-700 rounded-2xl flex items-center justify-center shadow-lg">
+      <span className="text-amber-400 font-serif font-bold text-xl">JF</span>
+    </div>
+    <Loader2 className="animate-spin text-gray-400" size={24} />
+  </div>
+);
+
+// --- Login Screen (登入畫面：選姓名 + 密碼) ---
+const LoginScreen = ({ team, onLogin }) => {
+  const [selectedId, setSelectedId] = useState('');
+  const [password, setPassword] = useState('');
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  const sortedTeam = useMemo(() => [...team].sort((a, b) => a.name.localeCompare(b.name, 'zh-Hant')), [team]);
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    setError('');
+    if (!selectedId || !password) return;
+    setIsSubmitting(true);
+    try {
+      const member = team.find(t => t.id === selectedId);
+      if (!member) { setError('找不到此成員，請重新選擇'); setIsSubmitting(false); return; }
+
+      let isValid = false;
+
+      if (member.passwordHash && member.passwordSalt) {
+        const computed = await hashPassword(password, member.passwordSalt);
+        isValid = computed === member.passwordHash;
+      } else {
+        // 尚未設定過密碼：首次登入預設密碼為 1234，登入成功後立即改為加密儲存
+        isValid = password === '1234';
+        if (isValid) {
+          const salt = generateSalt();
+          const hash = await hashPassword(password, salt);
+          await updateDoc(doc(db, 'user', member.id), { passwordHash: hash, passwordSalt: salt });
+        }
+      }
+
+      if (!isValid) {
+        setError('密碼錯誤，請再試一次');
+        setIsSubmitting(false);
+        return;
+      }
+
+      const token = generateToken();
+      await updateDoc(doc(db, 'user', member.id), { rememberToken: token });
+      localStorage.setItem('jf_session', JSON.stringify({ memberId: member.id, token }));
+      onLogin({ ...member, rememberToken: token });
+    } catch (err) {
+      console.error(err);
+      setError('登入時發生錯誤，請稍後再試');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  return (
+    <div className="min-h-screen bg-[#F5F7FA] flex items-center justify-center p-4">
+      <div className="bg-white rounded-3xl shadow-xl p-8 w-full max-w-sm border border-gray-100">
+        <div className="flex flex-col items-center mb-8">
+          <div className="w-16 h-16 bg-gradient-to-tr from-gray-900 to-gray-700 rounded-2xl flex items-center justify-center shadow-lg mb-4">
+            <span className="text-amber-400 font-serif font-bold text-2xl">JF</span>
+          </div>
+          <h1 className="text-xl font-bold text-gray-900">極豐通訊處</h1>
+          <p className="text-xs text-gray-400 uppercase tracking-[0.2em] mt-1">Ji Feng Agency</p>
+        </div>
+        <form onSubmit={handleSubmit} className="space-y-4">
+          <div>
+            <label className="text-xs font-bold text-gray-500 block mb-1">姓名</label>
+            <select
+              className="w-full p-3 bg-gray-50 rounded-lg border outline-none focus:border-indigo-500"
+              value={selectedId}
+              onChange={e => { setSelectedId(e.target.value); setError(''); }}
+              required
+            >
+              <option value="">請選擇你的姓名</option>
+              {sortedTeam.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+          <div>
+            <label className="text-xs font-bold text-gray-500 block mb-1">密碼</label>
+            <input
+              type="password"
+              className="w-full p-3 bg-gray-50 rounded-lg border outline-none focus:border-indigo-500"
+              value={password}
+              onChange={e => { setPassword(e.target.value); setError(''); }}
+              placeholder="首次登入請輸入預設密碼 1234"
+              required
+            />
+          </div>
+          {error && <p className="text-xs text-red-500 font-bold">{error}</p>}
+          <button
+            type="submit"
+            disabled={isSubmitting}
+            className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition flex items-center justify-center gap-2 disabled:opacity-50"
+          >
+            {isSubmitting ? <Loader2 className="animate-spin" size={18} /> : '登入'}
+          </button>
+        </form>
+        <p className="text-center text-[10px] text-gray-300 mt-6">忘記密碼請洽主管協助重設</p>
+      </div>
+    </div>
+  );
+};
+
 // --- Main App ---
 const App = () => {
   const [activeTab, setActiveTab] = useState('dashboard');
@@ -1822,12 +2008,45 @@ const App = () => {
   const [recruits, setRecruits] = useState([]);
   const [activities, setActivities] = useState([]); 
   const [user, setUser] = useState(null);
+  const [teamLoaded, setTeamLoaded] = useState(false);
+  const [loggedInUser, setLoggedInUser] = useState(null);
+  const [sessionChecked, setSessionChecked] = useState(false);
 
   useEffect(() => {
     const initAuth = async () => { await signInAnonymously(auth); };
     initAuth();
     return onAuthStateChanged(auth, (u) => setUser(u));
   }, []);
+
+  // 自動登入：檢查裝置上是否記住了先前的登入狀態
+  useEffect(() => {
+    if (!teamLoaded || sessionChecked) return;
+    try {
+      const saved = localStorage.getItem('jf_session');
+      if (saved) {
+        const { memberId, token } = JSON.parse(saved);
+        const member = team.find(t => t.id === memberId);
+        if (member && member.rememberToken && member.rememberToken === token) {
+          setLoggedInUser(member);
+        } else {
+          localStorage.removeItem('jf_session');
+        }
+      }
+    } catch (e) { console.error(e); }
+    setSessionChecked(true);
+  }, [teamLoaded, team, sessionChecked]);
+
+  const handleLogout = () => {
+    localStorage.removeItem('jf_session');
+    setLoggedInUser(null);
+  };
+
+  // 若管理者更新了目前登入者的資料（姓名/職級），同步更新畫面顯示
+  useEffect(() => {
+    if (!loggedInUser) return;
+    const fresh = team.find(t => t.id === loggedInUser.id);
+    if (fresh) setLoggedInUser(prev => (prev && prev.name === fresh.name && prev.role === fresh.role) ? prev : { ...fresh, rememberToken: loggedInUser.rememberToken });
+  }, [team]);
 
   useEffect(() => {
     if (recruits.length === 0) return;
@@ -1921,10 +2140,14 @@ const App = () => {
           name: data.name,
           role: data.position || '業務代表',
           parentId: data.parentId,
-          promotionDates: data.promotionDates || { registered: '', supervisor: '', asstManager: '', distManager: '', agencyManager: '' }
+          promotionDates: data.promotionDates || { registered: '', supervisor: '', asstManager: '', distManager: '', agencyManager: '' },
+          passwordHash: data.passwordHash || null,
+          passwordSalt: data.passwordSalt || null,
+          rememberToken: data.rememberToken || null
         };
       });
       setTeam(adaptedTeam.sort((a,b)=>a.id.localeCompare(b.id)));
+      setTeamLoaded(true);
     });
 
     const recruitsRef = collection(db, 'temp_user');
@@ -1970,6 +2193,16 @@ const App = () => {
     { id: 'wiki', label: '知識庫', icon: BookOpen },
   ];
 
+  // 資料尚未連線完成前，顯示載入畫面
+  if (!teamLoaded || !sessionChecked) {
+    return <LoadingScreen />;
+  }
+
+  // 尚未登入，顯示登入畫面（進入系統前必須先登入）
+  if (!loggedInUser) {
+    return <LoginScreen team={team} onLogin={setLoggedInUser} />;
+  }
+
   return (
     <div className="min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-20">
       <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-white/20 shadow-sm overflow-x-auto">
@@ -1978,36 +2211,51 @@ const App = () => {
             <div className="w-10 h-10 bg-gradient-to-tr from-gray-900 to-gray-700 rounded-xl flex items-center justify-center shadow-lg"><span className="text-amber-400 font-serif font-bold text-lg">JF</span></div>
             <div><h1 className="text-lg font-bold tracking-tight text-gray-900">極豐通訊處</h1><p className="text-[10px] text-gray-400 uppercase tracking-[0.2em]">Ji Feng Agency</p></div>
           </div>
-          <div className="hidden md:flex bg-gray-100/60 p-1.5 rounded-full backdrop-blur-sm">
-            {navItems.map(item => {
-              const ItemIcon = item.icon;
-              return (
-                <button
-                  key={item.id}
-                  onClick={() => setActiveTab(item.id)}
-                  className={`flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-bold transition-all ${activeTab === item.id ? 'bg-gray-900 text-white shadow-lg' : 'text-gray-500 hover:text-gray-900'}`}
-                >
-                  <ItemIcon size={16} />
-                  {item.label}
-                </button>
-              );
-            })}
-          </div>
-          <div className="md:hidden">
-            <select
-              value={activeTab}
-              onChange={(e) => setActiveTab(e.target.value)}
-              className="bg-gray-100 rounded-lg p-2 font-bold text-sm outline-none"
-            >
-              {navItems.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
-            </select>
+          <div className="flex items-center gap-4">
+            <div className="hidden md:flex bg-gray-100/60 p-1.5 rounded-full backdrop-blur-sm">
+              {navItems.map(item => {
+                const ItemIcon = item.icon;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => setActiveTab(item.id)}
+                    className={`flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-bold transition-all ${activeTab === item.id ? 'bg-gray-900 text-white shadow-lg' : 'text-gray-500 hover:text-gray-900'}`}
+                  >
+                    <ItemIcon size={16} />
+                    {item.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="md:hidden">
+              <select
+                value={activeTab}
+                onChange={(e) => setActiveTab(e.target.value)}
+                className="bg-gray-100 rounded-lg p-2 font-bold text-sm outline-none"
+              >
+                {navItems.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+              </select>
+            </div>
+            <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
+              <div className="hidden sm:block text-right">
+                <p className="text-xs font-bold text-gray-900">{loggedInUser.name}</p>
+                <p className="text-[10px] text-gray-400">{loggedInUser.role}</p>
+              </div>
+              <button
+                onClick={handleLogout}
+                title="登出"
+                className="p-2 rounded-full text-gray-400 hover:bg-red-50 hover:text-red-500 transition"
+              >
+                <LogOut size={18} />
+              </button>
+            </div>
           </div>
         </div>
       </nav>
 
       <main className="max-w-7xl mx-auto px-6 pt-8">
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} />}
-        {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} />}
+        {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} />}
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} />}
         {activeTab === 'team' && <OrgChart team={team} recruits={recruits} />}
         {activeTab === 'recruitment' && <RecruitmentDashboard recruits={recruits} team={team} user={user} />}
