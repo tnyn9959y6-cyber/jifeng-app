@@ -173,8 +173,23 @@ const MANAGER_RANKS = ['業務主任', '新進業務主任', '業務襄理', '�
 const RECRUIT_STATUSES = ['新名單', '臨時帳號', '內考', '外考', '登錄', '優培'];
 
 // --- 客戶管理 (CRM) 設定 ---
-const CUSTOMER_TAGS = ['準客戶', '既有客戶', 'VIP', 'IG名單'];
+const CUSTOMER_TAGS = ['準客戶', '既有客戶'];
 const GENDER_OPTIONS = ['男', '女', '其他'];
+const VIP_INCOME_THRESHOLD = '200萬以上';
+const VIP_PREMIUM_THRESHOLD = 120000;
+
+// VIP 為自動判斷徽章：年收入200萬以上 或 名下實收保費總額超過12萬，符合任一即為 VIP
+const isVIPCustomer = (customer, records) => {
+  if (customer.incomeRange === VIP_INCOME_THRESHOLD) return true;
+  const totalPremium = records
+    .filter(r => (r.insuredName || '').trim() === (customer.name || '').trim())
+    .reduce((sum, r) => sum + (r.premium || 0), 0);
+  return totalPremium > VIP_PREMIUM_THRESHOLD;
+};
+
+// IG名單為自動判斷徽章：只要填了 IG 帳號就自動標記
+const isIGListCustomer = (customer) => !!(customer.igHandle && customer.igHandle.trim());
+
 const TAIWAN_REGIONS = ['台北市', '新北市', '桃園市', '台中市', '台南市', '高雄市', '基隆市', '新竹市', '新竹縣', '苗栗縣', '彰化縣', '南投縣', '雲林縣', '嘉義市', '嘉義縣', '屏東縣', '宜蘭縣', '花蓮縣', '台東縣', '澎湖縣', '金門縣', '連江縣'];
 const INCOME_RANGES = ['50萬以下', '50-100萬', '100-200萬', '200萬以上'];
 
@@ -711,6 +726,26 @@ const RECRUIT_ACTIVITY_WEIGHTS = {
 
 const ALL_ACTIVITY_WEIGHTS = { ...ACTIVITY_WEIGHTS, ...RECRUIT_ACTIVITY_WEIGHTS };
 
+// 重要x緊急 四象限優先度
+const PRIORITY_LEVELS = {
+  urgent_important: { label: '重要且緊急', color: 'bg-red-500', textColor: 'text-red-600', order: 0 },
+  important: { label: '重要不緊急', color: 'bg-amber-500', textColor: 'text-amber-600', order: 1 },
+  urgent: { label: '緊急不重要', color: 'bg-blue-500', textColor: 'text-blue-600', order: 2 },
+  normal: { label: '都不是', color: 'bg-gray-400', textColor: 'text-gray-400', order: 3 }
+};
+
+// 純提醒/固定行程的分類 (業務/增員類行程沿用各自 ALL_ACTIVITY_WEIGHTS 顏色，不需要另外分類)
+const REMINDER_CATEGORIES = {
+  personal: { label: '私事', color: 'bg-emerald-500' },
+  meeting: { label: '課程會議', color: 'bg-gray-800' },
+  other: { label: '其他', color: 'bg-gray-400' }
+};
+
+const getEventColor = (e) => {
+  if (e.isReminder) return (REMINDER_CATEGORIES[e.category] || REMINDER_CATEGORIES.other).color;
+  return ALL_ACTIVITY_WEIGHTS[e.type]?.color || 'bg-gray-400';
+};
+
 // 行程標記完成時共用的邏輯：更新行程狀態、計入當日 MEA 活動量、寫入客戶拜訪軌跡
 // 純提醒 (isReminder) 不計分、不寫入客戶軌跡，純粹打勾完成
 const completeScheduleEvent = async (event, ownerId) => {
@@ -729,6 +764,50 @@ const completeScheduleEvent = async (event, ownerId) => {
       visitLog: arrayUnion({ date: event.date, type: ALL_ACTIVITY_WEIGHTS[event.type]?.label || event.type, note: event.note || '' })
     });
   }
+};
+
+// --- 固定行程 (Recurring Rules) 的虛擬場次產生工具 ---
+// 每月固定行程用「第N個星期X」表示 (例如每月第1個星期一)
+const getNthWeekdayOfMonth = (year, month, weekday, n) => {
+  const first = new Date(year, month, 1);
+  const firstWeekday = first.getDay();
+  const day = 1 + ((weekday - firstWeekday + 7) % 7) + (n - 1) * 7;
+  const date = new Date(year, month, day);
+  if (date.getMonth() !== month) return null;
+  return date;
+};
+
+const dateToStr = (d) => d.toISOString().split('T')[0];
+
+// 依規則產生「未來一段時間內」該出現在哪幾天 (不會真的預先造好所有 Firestore 文件)
+const generateRecurringOccurrences = (rule, windowStart, windowEnd) => {
+  const occurrences = [];
+  const ruleStart = new Date(rule.startDate);
+  const ruleEnd = rule.endDate ? new Date(rule.endDate) : null;
+  const effectiveEnd = ruleEnd && ruleEnd < windowEnd ? ruleEnd : windowEnd;
+
+  if (rule.frequency === 'weekly') {
+    let cursor = new Date(Math.max(windowStart.getTime(), ruleStart.getTime()));
+    while (cursor <= effectiveEnd) {
+      if (cursor.getDay() === Number(rule.dayOfWeek)) {
+        occurrences.push(dateToStr(cursor));
+      }
+      cursor = new Date(cursor.getTime() + 86400000);
+    }
+  } else if (rule.frequency === 'monthly') {
+    let y = windowStart.getFullYear();
+    let m = windowStart.getMonth();
+    const endY = effectiveEnd.getFullYear();
+    const endM = effectiveEnd.getMonth();
+    while (y < endY || (y === endY && m <= endM)) {
+      const occ = getNthWeekdayOfMonth(y, m, Number(rule.dayOfWeekForMonthly), Number(rule.weekOfMonth));
+      if (occ && occ >= windowStart && occ <= effectiveEnd && occ >= ruleStart) {
+        occurrences.push(dateToStr(occ));
+      }
+      m++; if (m > 11) { m = 0; y++; }
+    }
+  }
+  return occurrences;
 };
 
 const ActivityDashboard = ({ team, activities, records, user, season, loggedInUser }) => {
@@ -2185,8 +2264,8 @@ const IGImportModal = ({ isOpen, onClose, loggedInUser, existingNames, onImporte
         const ref = doc(collection(db, 'customers'));
         batch.set(ref, {
           name: username,
-          phone: '', birthday: '', gender: '', region: '', incomeRange: '',
-          tag: 'IG名單',
+          phone: '', lineId: '', igHandle: username, birthday: '', gender: '', region: '', incomeRange: '',
+          tag: '準客戶',
           notes: '由 IG 匯入，待補充聯絡資訊',
           nextFollowUpDate: '',
           source: 'IG匯入',
@@ -2441,16 +2520,26 @@ const NotionImportModal = ({ isOpen, onClose, loggedInUser, onImported }) => {
 const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
   const [search, setSearch] = useState('');
   const [showFilter, setShowFilter] = useState(false);
-  const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '' });
+  const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '', vipOnly: false, igOnly: false });
   const [editCustomer, setEditCustomer] = useState(null);
   const [isAdding, setIsAdding] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isIGOpen, setIsIGOpen] = useState(false);
   const [isNotionOpen, setIsNotionOpen] = useState(false);
-  const emptyForm = { name: '', phone: '', birthday: '', gender: '', region: '', incomeRange: '', tag: '準客戶', notes: '', nextFollowUpDate: '' };
+  const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', tag: '準客戶', notes: '', nextFollowUpDate: '' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const loaded = customersLoaded;
+
+  // 拜訪軌跡編輯/刪除狀態
+  const [editingVisit, setEditingVisit] = useState(null); // { customerId, index, date, type, note }
+  const [visitSaving, setVisitSaving] = useState(false);
+
+  // 客戶合併狀態
+  const [mergeSourceId, setMergeSourceId] = useState(null); // 發起合併的那張卡片
+  const [mergeTargetId, setMergeTargetId] = useState('');
+  const [mergeChoices, setMergeChoices] = useState({});
+  const [merging, setMerging] = useState(false);
 
   const existingNames = useMemo(() => new Set(customers.map(c => (c.name || '').trim().toLowerCase())), [customers]);
 
@@ -2464,9 +2553,11 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
       const matchRegion = !filters.region || c.region === filters.region;
       const matchIncome = !filters.incomeRange || c.incomeRange === filters.incomeRange;
       const matchTag = !filters.tag || c.tag === filters.tag;
-      return matchSearch && matchAgeMin && matchAgeMax && matchGender && matchRegion && matchIncome && matchTag;
+      const matchVip = !filters.vipOnly || isVIPCustomer(c, records);
+      const matchIg = !filters.igOnly || isIGListCustomer(c);
+      return matchSearch && matchAgeMin && matchAgeMax && matchGender && matchRegion && matchIncome && matchTag && matchVip && matchIg;
     });
-  }, [customers, search, filters]);
+  }, [customers, search, filters, records]);
 
   const relatedPolicies = (customerName) => {
     if (!loggedInUser) return [];
@@ -2476,7 +2567,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
   const openAdd = () => { setForm(emptyForm); setIsAdding(true); };
   const openEdit = (c) => {
     setEditCustomer(c);
-    setForm({ name: c.name, phone: c.phone || '', birthday: c.birthday || '', gender: c.gender || '', region: c.region || '', incomeRange: c.incomeRange || '', tag: c.tag || '準客戶', notes: c.notes || '', nextFollowUpDate: c.nextFollowUpDate || '' });
+    setForm({ name: c.name, phone: c.phone || '', lineId: c.lineId || '', igHandle: c.igHandle || '', birthday: c.birthday || '', gender: c.gender || '', region: c.region || '', incomeRange: c.incomeRange || '', tag: c.tag || '準客戶', notes: c.notes || '', nextFollowUpDate: c.nextFollowUpDate || '' });
   };
 
   const handleSave = async () => {
@@ -2506,6 +2597,78 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
   };
 
   const isFollowUpDue = (c) => c.nextFollowUpDate && c.nextFollowUpDate <= getTodayDate();
+
+  // --- 拜訪軌跡編輯/刪除 ---
+  const openEditVisit = (customer, index, visit) => {
+    setEditingVisit({ customerId: customer.id, index, date: visit.date, type: visit.type, note: visit.note || '' });
+  };
+
+  const handleSaveVisitEdit = async () => {
+    if (!editingVisit) return;
+    setVisitSaving(true);
+    try {
+      const customer = customers.find(c => c.id === editingVisit.customerId);
+      if (!customer) return;
+      const newLog = [...(customer.visitLog || [])];
+      newLog[editingVisit.index] = { date: editingVisit.date, type: editingVisit.type, note: editingVisit.note };
+      await updateDoc(doc(db, 'customers', customer.id), { visitLog: newLog });
+      setEditingVisit(null);
+    } catch (e) { console.error(e); } finally { setVisitSaving(false); }
+  };
+
+  const handleDeleteVisit = async (customer, index) => {
+    try {
+      const newLog = (customer.visitLog || []).filter((_, i) => i !== index);
+      await updateDoc(doc(db, 'customers', customer.id), { visitLog: newLog });
+    } catch (e) { console.error(e); }
+  };
+
+  // --- 客戶合併 ---
+  const mergeSource = customers.find(c => c.id === mergeSourceId);
+  const mergeTarget = customers.find(c => c.id === mergeTargetId);
+
+  const openMerge = (customerId) => {
+    setMergeSourceId(customerId);
+    setMergeTargetId('');
+    setMergeChoices({});
+  };
+
+  useEffect(() => {
+    if (mergeSource && mergeTarget) {
+      const fields = ['name', 'phone', 'lineId', 'igHandle', 'birthday', 'gender', 'region', 'incomeRange', 'tag', 'notes', 'nextFollowUpDate'];
+      const defaults = {};
+      fields.forEach(f => { defaults[f] = mergeTarget[f] || mergeSource[f] || ''; });
+      setMergeChoices(defaults);
+    }
+    // eslint-disable-next-line
+  }, [mergeTargetId]);
+
+  const handleConfirmMerge = async () => {
+    if (!mergeSource || !mergeTarget) return;
+    setMerging(true);
+    try {
+      const combinedLog = [...(mergeTarget.visitLog || []), ...(mergeSource.visitLog || [])]
+        .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+
+      await updateDoc(doc(db, 'customers', mergeTarget.id), {
+        ...mergeChoices,
+        visitLog: combinedLog
+      });
+
+      // 把原本掛在被合併卡片上的行程，全部改連到保留下來的卡片
+      const q = query(collection(db, 'schedule_events'), where('customerId', '==', mergeSource.id));
+      const snap = await getDocs(q);
+      const batch = writeBatch(db);
+      snap.docs.forEach(d => {
+        batch.update(d.ref, { customerId: mergeTarget.id, customerName: mergeChoices.name || mergeTarget.name });
+      });
+      await batch.commit();
+
+      await deleteDoc(doc(db, 'customers', mergeSource.id));
+      setMergeSourceId(null);
+      setMergeTargetId('');
+    } catch (e) { console.error(e); } finally { setMerging(false); }
+  };
 
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
@@ -2541,42 +2704,52 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
           </button>
         </div>
         {showFilter && (
-          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3 mt-4 pt-4 border-t border-gray-100">
-            <div>
-              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">最小年齡</label>
-              <input type="number" className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.ageMin} onChange={e => setFilters({ ...filters, ageMin: e.target.value })} />
+          <div className="space-y-4 mt-4 pt-4 border-t border-gray-100">
+            <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-6 gap-3">
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">最小年齡</label>
+                <input type="number" className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.ageMin} onChange={e => setFilters({ ...filters, ageMin: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">最大年齡</label>
+                <input type="number" className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.ageMax} onChange={e => setFilters({ ...filters, ageMax: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">性別</label>
+                <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.gender} onChange={e => setFilters({ ...filters, gender: e.target.value })}>
+                  <option value="">全部</option>
+                  {GENDER_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">地區</label>
+                <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.region} onChange={e => setFilters({ ...filters, region: e.target.value })}>
+                  <option value="">全部</option>
+                  {TAIWAN_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">年收入</label>
+                <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.incomeRange} onChange={e => setFilters({ ...filters, incomeRange: e.target.value })}>
+                  <option value="">全部</option>
+                  {INCOME_RANGES.map(r => <option key={r} value={r}>{r}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">標籤</label>
+                <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.tag} onChange={e => setFilters({ ...filters, tag: e.target.value })}>
+                  <option value="">全部</option>
+                  {CUSTOMER_TAGS.map(t => <option key={t} value={t}>{t}</option>)}
+                </select>
+              </div>
             </div>
-            <div>
-              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">最大年齡</label>
-              <input type="number" className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.ageMax} onChange={e => setFilters({ ...filters, ageMax: e.target.value })} />
-            </div>
-            <div>
-              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">性別</label>
-              <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.gender} onChange={e => setFilters({ ...filters, gender: e.target.value })}>
-                <option value="">全部</option>
-                {GENDER_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">地區</label>
-              <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.region} onChange={e => setFilters({ ...filters, region: e.target.value })}>
-                <option value="">全部</option>
-                {TAIWAN_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">年收入</label>
-              <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.incomeRange} onChange={e => setFilters({ ...filters, incomeRange: e.target.value })}>
-                <option value="">全部</option>
-                {INCOME_RANGES.map(r => <option key={r} value={r}>{r}</option>)}
-              </select>
-            </div>
-            <div>
-              <label className="text-[10px] font-bold text-gray-400 uppercase block mb-1">標籤</label>
-              <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none" value={filters.tag} onChange={e => setFilters({ ...filters, tag: e.target.value })}>
-                <option value="">全部</option>
-                {CUSTOMER_TAGS.map(t => <option key={t} value={t}>{t}</option>)}
-              </select>
+            <div className="flex gap-4">
+              <label className="flex items-center gap-2 text-xs font-bold text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={filters.vipOnly} onChange={e => setFilters({ ...filters, vipOnly: e.target.checked })} className="w-4 h-4" /> 只顯示 VIP
+              </label>
+              <label className="flex items-center gap-2 text-xs font-bold text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={filters.igOnly} onChange={e => setFilters({ ...filters, igOnly: e.target.checked })} className="w-4 h-4" /> 只顯示有 IG 的
+              </label>
             </div>
           </div>
         )}
@@ -2586,6 +2759,8 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
         {filteredCustomers.map(c => {
           const policies = relatedPolicies(c.name);
           const age = calcAge(c.birthday);
+          const vip = isVIPCustomer(c, records);
+          const igList = isIGListCustomer(c);
           return (
             <Card key={c.id} className={`p-5 relative group ${isFollowUpDue(c) ? 'border-amber-300 ring-1 ring-amber-100' : ''}`}>
               <div className="flex items-start justify-between mb-3">
@@ -2593,16 +2768,23 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
                   <div className="w-11 h-11 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-700 font-bold text-lg">{c.name[0]}</div>
                   <div>
                     <h4 className="font-bold text-gray-900">{c.name}</h4>
-                    <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{c.tag}{age !== null ? ` · ${age}歲` : ''}</span>
+                    <div className="flex flex-wrap gap-1 mt-0.5">
+                      <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{c.tag}{age !== null ? ` · ${age}歲` : ''}</span>
+                      {vip && <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">VIP</span>}
+                      {igList && <span className="text-[10px] bg-pink-100 text-pink-600 px-2 py-0.5 rounded-full font-bold">IG名單</span>}
+                    </div>
                   </div>
                 </div>
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                  <button onClick={() => openMerge(c.id)} title="合併客戶" className="p-1.5 text-gray-400 hover:text-teal-500"><Users size={15} /></button>
                   <button onClick={() => openEdit(c)} className="p-1.5 text-gray-400 hover:text-indigo-500"><Edit3 size={15} /></button>
                   <button onClick={() => setDeleteTarget(c.id)} className="p-1.5 text-gray-400 hover:text-red-500"><Trash2 size={15} /></button>
                 </div>
               </div>
               <div className="space-y-1 text-xs text-gray-500">
                 {c.phone && <p className="flex items-center gap-1.5"><Phone size={12} /> {c.phone}</p>}
+                {c.lineId && <p className="flex items-center gap-1.5"><MessageSquare size={12} /> LINE: {c.lineId}</p>}
+                {c.igHandle && <p className="flex items-center gap-1.5"><Upload size={12} /> IG: {c.igHandle}</p>}
                 {c.birthday && <p className="flex items-center gap-1.5"><Cake size={12} /> {c.birthday}</p>}
                 {c.region && <p>{c.region}{c.incomeRange ? ` · ${c.incomeRange}` : ''}</p>}
               </div>
@@ -2615,7 +2797,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
                     {policies.map(p => (
                       <div key={p.id} className="text-[10px] text-gray-600 flex justify-between">
                         <span>{p.product} · {p.date}</span>
-                        <span className="font-mono font-bold text-indigo-600">{formatMoney(p.weighted)}</span>
+                        <span className="font-mono font-bold text-indigo-600">{formatMoney(p.premium)}</span>
                       </div>
                     ))}
                   </div>
@@ -2624,10 +2806,19 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
               {c.visitLog && c.visitLog.length > 0 && (
                 <div className="mt-3 pt-3 border-t border-gray-100">
                   <p className="text-[10px] font-bold text-gray-400 uppercase mb-1">拜訪軌跡</p>
-                  <div className="space-y-1 max-h-24 overflow-y-auto">
-                    {[...c.visitLog].reverse().slice(0, 5).map((v, i) => (
-                      <div key={i} className="text-[10px] text-gray-500">{v.date} · {v.type}{v.note ? ` · ${v.note}` : ''}</div>
-                    ))}
+                  <div className="space-y-1 max-h-32 overflow-y-auto">
+                    {[...c.visitLog].map((v, i) => i).reverse().slice(0, 6).map((originalIndex) => {
+                      const v = c.visitLog[originalIndex];
+                      return (
+                        <div key={originalIndex} className="text-[10px] text-gray-500 flex items-center justify-between group/visit gap-1">
+                          <span className="truncate">{v.date} · {v.type}{v.note ? ` · ${v.note}` : ''}</span>
+                          <div className="flex gap-1 opacity-0 group-hover/visit:opacity-100 transition shrink-0">
+                            <button onClick={() => openEditVisit(c, originalIndex, v)} className="text-gray-300 hover:text-indigo-500"><Edit3 size={11} /></button>
+                            <button onClick={() => handleDeleteVisit(c, originalIndex)} className="text-gray-300 hover:text-red-500"><Trash2 size={11} /></button>
+                          </div>
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -2653,6 +2844,10 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">電話</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">生日</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={form.birthday} onChange={e => setForm({ ...form, birthday: e.target.value })} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">LINE ID</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.lineId} onChange={e => setForm({ ...form, lineId: e.target.value })} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">IG 帳號</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.igHandle} onChange={e => setForm({ ...form, igHandle: e.target.value })} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -2685,6 +2880,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
                   </select>
                 </div>
               </div>
+              <p className="text-[10px] text-gray-400">VIP 與 IG名單為系統自動判斷（年收入200萬以上或實收保費逾12萬即為VIP；填寫IG帳號即自動列為IG名單），不需手動設定。</p>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">下次追蹤日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={form.nextFollowUpDate} onChange={e => setForm({ ...form, nextFollowUpDate: e.target.value })} /></div>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">備註</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-20 resize-none" value={form.notes} onChange={e => setForm({ ...form, notes: e.target.value })} /></div>
               <button onClick={handleSave} disabled={!form.name || saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
@@ -2694,30 +2890,211 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
           </div>
         </div>
       )}
+
+      {editingVisit && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-scale-up">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">編輯拜訪紀錄</h3>
+              <button onClick={() => setEditingVisit(null)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <p className="text-[10px] text-gray-400 mb-3">修改這裡不會回頭調整已經計算過的 MEA 分數，純粹修正紀錄內容。</p>
+            <div className="space-y-3">
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingVisit.date} onChange={e => setEditingVisit({ ...editingVisit, date: e.target.value })} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">類型</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={editingVisit.type} onChange={e => setEditingVisit({ ...editingVisit, type: e.target.value })} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">備註</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={editingVisit.note} onChange={e => setEditingVisit({ ...editingVisit, note: e.target.value })} /></div>
+              <button onClick={handleSaveVisitEdit} disabled={visitSaving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {visitSaving ? <Loader2 className="animate-spin" size={16} /> : '儲存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {mergeSourceId && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">合併客戶</h3>
+              <button onClick={() => setMergeSourceId(null)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <p className="text-xs text-gray-500 mb-4">目前這張是「<span className="font-bold">{mergeSource?.name}</span>」，選擇要合併進哪一張保留下來的客戶卡片，合併後這張會被刪除，拜訪軌跡與行程會自動轉移。</p>
+            <div className="mb-4">
+              <label className="text-xs font-bold text-gray-500 block mb-1">合併進（保留下來的卡片）</label>
+              <select className="w-full p-2 border border-gray-200 rounded-lg" value={mergeTargetId} onChange={e => setMergeTargetId(e.target.value)}>
+                <option value="">請選擇</option>
+                {customers.filter(c => c.id !== mergeSourceId).map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
+              </select>
+            </div>
+            {mergeTarget && mergeSource && (
+              <div className="space-y-3 border-t border-gray-100 pt-4">
+                {['name', 'phone', 'lineId', 'igHandle', 'birthday', 'gender', 'region', 'incomeRange', 'tag', 'nextFollowUpDate', 'notes'].map(field => {
+                  const labelMap = { name: '姓名', phone: '電話', lineId: 'LINE ID', igHandle: 'IG帳號', birthday: '生日', gender: '性別', region: '地區', incomeRange: '年收入', tag: '標籤', nextFollowUpDate: '下次追蹤日期', notes: '備註' };
+                  if (!mergeSource[field] && !mergeTarget[field]) return null;
+                  return (
+                    <div key={field} className="text-xs">
+                      <p className="font-bold text-gray-500 mb-1">{labelMap[field]}</p>
+                      <div className="flex gap-2">
+                        <label className={`flex-1 p-2 rounded-lg border cursor-pointer ${mergeChoices[field] === mergeTarget[field] ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200'}`}>
+                          <input type="radio" className="mr-1.5" checked={mergeChoices[field] === mergeTarget[field]} onChange={() => setMergeChoices({ ...mergeChoices, [field]: mergeTarget[field] })} />
+                          {mergeTarget[field] || '(空白)'}
+                        </label>
+                        <label className={`flex-1 p-2 rounded-lg border cursor-pointer ${mergeChoices[field] === mergeSource[field] ? 'border-indigo-400 bg-indigo-50' : 'border-gray-200'}`}>
+                          <input type="radio" className="mr-1.5" checked={mergeChoices[field] === mergeSource[field]} onChange={() => setMergeChoices({ ...mergeChoices, [field]: mergeSource[field] })} />
+                          {mergeSource[field] || '(空白)'}
+                        </label>
+                      </div>
+                    </div>
+                  );
+                })}
+                <button onClick={handleConfirmMerge} disabled={merging} className="w-full bg-teal-600 text-white py-3 rounded-lg font-bold hover:bg-teal-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                  {merging ? <Loader2 className="animate-spin" size={16} /> : '確認合併'}
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
     </div>
   );
 };
 
 
 // --- 行程 (Schedule Agenda) ---
+// --- 客戶搜尋選擇器 (文字搜尋 + 就地新增，含重複姓名防呆) ---
+const CustomerPicker = ({ customers, value, onChange, onCreateNew }) => {
+  const [query, setQuery] = useState(() => customers.find(c => c.id === value)?.name || '');
+  const [open, setOpen] = useState(false);
+  const [creating, setCreating] = useState(false);
+
+  useEffect(() => {
+    const match = customers.find(c => c.id === value);
+    setQuery(match ? match.name : '');
+  }, [value]);
+
+  const filtered = useMemo(() => {
+    if (!query) return customers.slice(0, 20);
+    return customers.filter(c => c.name.includes(query)).slice(0, 20);
+  }, [customers, query]);
+
+  const handleCreate = async () => {
+    if (!query.trim()) return;
+    setCreating(true);
+    try {
+      const newId = await onCreateNew(query.trim());
+      if (newId) onChange(newId);
+    } finally {
+      setCreating(false);
+      setOpen(false);
+    }
+  };
+
+  return (
+    <div className="relative">
+      <input
+        type="text"
+        className="w-full p-2 border border-gray-200 rounded-lg"
+        placeholder="搜尋客戶姓名，或輸入新姓名建立"
+        value={query}
+        onChange={e => { setQuery(e.target.value); setOpen(true); if (value) onChange(''); }}
+        onFocus={() => setOpen(true)}
+      />
+      {open && (
+        <div className="absolute z-20 mt-1 w-full bg-white border border-gray-200 rounded-lg shadow-lg max-h-52 overflow-y-auto">
+          <button type="button" onClick={() => { onChange(''); setQuery(''); setOpen(false); }} className="w-full text-left px-3 py-2 text-sm text-gray-400 hover:bg-gray-50">不指定</button>
+          {filtered.map(c => (
+            <button type="button" key={c.id} onClick={() => { onChange(c.id); setQuery(c.name); setOpen(false); }} className="w-full text-left px-3 py-2 text-sm hover:bg-gray-50">{c.name}</button>
+          ))}
+          {query.trim() && (
+            <button type="button" disabled={creating} onClick={handleCreate} className="w-full text-left px-3 py-2 text-sm text-indigo-600 font-bold hover:bg-indigo-50 border-t border-gray-100 flex items-center gap-1.5 disabled:opacity-50">
+              {creating ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} 新增客戶：{query.trim()}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // --- 今日待辦 + 行程 (合併頁面) ---
-const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
+const WEEKDAY_OPTIONS = [
+  { value: 0, label: '星期日' }, { value: 1, label: '星期一' }, { value: 2, label: '星期二' },
+  { value: 3, label: '星期三' }, { value: 4, label: '星期四' }, { value: 5, label: '星期五' }, { value: 6, label: '星期六' }
+];
+const WEEK_OF_MONTH_OPTIONS = [{ value: 1, label: '第1個' }, { value: 2, label: '第2個' }, { value: 3, label: '第3個' }, { value: 4, label: '第4個' }];
+
+const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recurringRules }) => {
   const today = getTodayDate();
   const [busyId, setBusyId] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [showReminderForm, setShowReminderForm] = useState(false);
-  const emptyForm = { customerId: '', type: 'appointment', date: getTodayDate(), time: '', note: '' };
+  const [showRecurringForm, setShowRecurringForm] = useState(false);
+  const [showRecurringManage, setShowRecurringManage] = useState(false);
+  const emptyForm = { customerId: '', type: 'appointment', date: getTodayDate(), time: '', note: '', priority: 'normal' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [reminderTitle, setReminderTitle] = useState('');
   const [reminderDate, setReminderDate] = useState(getTodayDate());
+  const [reminderCategory, setReminderCategory] = useState('personal');
+  const [reminderPriority, setReminderPriority] = useState('normal');
   const [reminderSaving, setReminderSaving] = useState(false);
 
+  const [editingEvent, setEditingEvent] = useState(null);
+
+  const [completingEvent, setCompletingEvent] = useState(null);
+  const [followUpInput, setFollowUpInput] = useState('');
+
+  const [completingContact, setCompletingContact] = useState(null);
+  const [contactType, setContactType] = useState('appointment');
+  const [contactNote, setContactNote] = useState('');
+  const [contactFollowUp, setContactFollowUp] = useState('');
+
+  const emptyRecurringForm = { title: '', frequency: 'weekly', dayOfWeek: 1, weekOfMonth: 1, dayOfWeekForMonthly: 1, startTime: '', endTime: '', participantIds: loggedInUser ? [loggedInUser.id] : [], startDate: getTodayDate(), endDate: '', category: 'meeting', priority: 'normal' };
+  const [recurringForm, setRecurringForm] = useState(emptyRecurringForm);
+  const [recurringSaving, setRecurringSaving] = useState(false);
+
   const getEventLabel = (e) => e.isReminder ? e.title : (ALL_ACTIVITY_WEIGHTS[e.type]?.label || e.type);
+  const getEventPriority = (e) => PRIORITY_LEVELS[e.priority] || PRIORITY_LEVELS.normal;
+  const sortByPriorityThenDate = (a, b) => {
+    const pa = getEventPriority(a).order, pb = getEventPriority(b).order;
+    if (pa !== pb) return pa - pb;
+    return (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''));
+  };
+
+  // --- 固定行程：計算未來60天內的虛擬場次 (未完成前不會真的建立文件) ---
+  const virtualOccurrences = useMemo(() => {
+    if (!loggedInUser) return [];
+    const windowStart = new Date(today);
+    const windowEnd = new Date(today); windowEnd.setDate(windowEnd.getDate() + 60);
+    const results = [];
+    (recurringRules || []).filter(r => (r.participantIds || []).includes(loggedInUser.id)).forEach(rule => {
+      const dates = generateRecurringOccurrences(rule, windowStart, windowEnd);
+      dates.forEach(date => {
+        const alreadyReal = scheduleEvents.some(e => e.ruleId === rule.id && e.date === date);
+        if (alreadyReal) return;
+        results.push({
+          id: `virtual_${rule.id}_${date}`,
+          isVirtual: true,
+          ruleId: rule.id,
+          customerId: '', customerName: '',
+          isReminder: true, type: 'reminder',
+          title: rule.title,
+          category: rule.category || 'meeting',
+          priority: rule.priority || 'normal',
+          date, time: rule.startTime || '',
+          note: (rule.startTime && rule.endTime) ? `${rule.startTime}-${rule.endTime}` : '',
+          status: 'scheduled'
+        });
+      });
+    });
+    return results;
+  }, [recurringRules, scheduleEvents, loggedInUser, today]);
+
+  const allItems = useMemo(() => [...scheduleEvents, ...virtualOccurrences], [scheduleEvents, virtualOccurrences]);
 
   // 今日焦點：今天/過期的行程與提醒
-  const dueEvents = useMemo(() => scheduleEvents.filter(e => e.status === 'scheduled' && e.date <= today).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''))), [scheduleEvents, today]);
+  const dueEvents = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date <= today).sort(sortByPriorityThenDate), [allItems, today]);
   const dueCustomers = useMemo(() => customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today), [customers, today]);
   const birthdayCustomers = useMemo(() => {
     const now = new Date();
@@ -2732,8 +3109,29 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
     }).sort((a, b) => a.birthday.slice(5).localeCompare(b.birthday.slice(5)));
   }, [customers]);
 
+  // 每日自動推薦聯繫名單：既有客戶池挑3、準客戶池挑7 (依最久沒聯繫優先)，不夠就互相補滿
+  const autoSuggested = useMemo(() => {
+    if (!customers.length) return [];
+    const dueIds = new Set(dueCustomers.map(c => c.id));
+    const eligible = customers.filter(c => !dueIds.has(c.id));
+    const daysSinceContact = (c) => {
+      const lastVisit = (c.visitLog && c.visitLog.length) ? [...c.visitLog].sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0].date : null;
+      const refDate = lastVisit || (c.createdAt ? c.createdAt.split('T')[0] : '2000-01-01');
+      return Math.floor((new Date(today) - new Date(refDate)) / 86400000);
+    };
+    const existingPool = eligible.filter(c => c.tag === '既有客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
+    const prospectPool = eligible.filter(c => c.tag === '準客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
+    let picked = [...existingPool.slice(0, 3), ...prospectPool.slice(0, 7)];
+    if (picked.length < 10) {
+      const pickedIds = new Set(picked.map(c => c.id));
+      const remaining = eligible.filter(c => !pickedIds.has(c.id)).sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
+      picked = [...picked, ...remaining.slice(0, 10 - picked.length)];
+    }
+    return picked.slice(0, 10);
+  }, [customers, dueCustomers, today]);
+
   // 即將到來：未來的行程 (依明天/本週/未來分組)
-  const upcoming = useMemo(() => scheduleEvents.filter(e => e.status === 'scheduled' && e.date > today).sort((a, b) => (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''))), [scheduleEvents, today]);
+  const upcoming = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date > today).sort(sortByPriorityThenDate), [allItems, today]);
 
   const groupLabel = (dateStr) => {
     const tmr = new Date(); tmr.setDate(tmr.getDate() + 1);
@@ -2755,31 +3153,87 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
 
   const completedRecent = useMemo(() => [...scheduleEvents].filter(e => e.status === 'completed').sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || '')).slice(0, 15), [scheduleEvents]);
 
+  // --- 完成行程 ---
   const handleCompleteEvent = async (event) => {
     if (!loggedInUser) return;
+    if (event.isVirtual) {
+      setBusyId(event.id);
+      try {
+        await addDoc(collection(db, 'schedule_events'), {
+          ownerId: loggedInUser.id, ruleId: event.ruleId, customerId: '', customerName: '',
+          isReminder: true, type: 'reminder', title: event.title, category: event.category, priority: event.priority,
+          date: event.date, time: event.time, note: event.note,
+          status: 'completed', completedAt: new Date().toISOString(), createdAt: new Date().toISOString()
+        });
+      } catch (e) { console.error(e); } finally { setBusyId(null); }
+      return;
+    }
+    if (event.customerId) {
+      setCompletingEvent(event);
+      setFollowUpInput('');
+      return;
+    }
     setBusyId(event.id);
+    try { await completeScheduleEvent(event, loggedInUser.id); } catch (e) { console.error(e); } finally { setBusyId(null); }
+  };
+
+  const handleConfirmCompleteEvent = async () => {
+    if (!completingEvent || !loggedInUser) return;
+    setBusyId(completingEvent.id);
     try {
-      await completeScheduleEvent(event, loggedInUser.id);
+      await completeScheduleEvent(completingEvent, loggedInUser.id);
+      if (followUpInput && completingEvent.customerId) {
+        await updateDoc(doc(db, 'customers', completingEvent.customerId), { nextFollowUpDate: followUpInput });
+      }
+      setCompletingEvent(null);
     } catch (e) { console.error(e); } finally { setBusyId(null); }
   };
 
-  const handleContactCustomer = async (customer) => {
-    if (!loggedInUser) return;
-    setBusyId(customer.id);
+  // --- 標記聯繫客戶 (該追蹤 + 自動推薦皆共用) ---
+  const openContactModal = (customer) => {
+    setCompletingContact(customer);
+    setContactType('appointment');
+    setContactNote('');
+    setContactFollowUp('');
+  };
+
+  const handleConfirmContact = async () => {
+    if (!completingContact || !loggedInUser) return;
+    setBusyId(completingContact.id);
     try {
-      await updateDoc(doc(db, 'customers', customer.id), {
-        visitLog: arrayUnion({ date: today, type: '約訪', note: '今日待辦快速標記' }),
-        nextFollowUpDate: ''
+      await updateDoc(doc(db, 'customers', completingContact.id), {
+        visitLog: arrayUnion({ date: today, type: ALL_ACTIVITY_WEIGHTS[contactType]?.label || contactType, note: contactNote }),
+        nextFollowUpDate: contactFollowUp || ''
       });
       const docId = `${loggedInUser.id}_${today}`;
       await setDoc(doc(db, 'activity_record', docId), {
         agentId: loggedInUser.id,
         date: today,
         month: today.substring(0, 7),
-        appointment: increment(1),
+        [contactType]: increment(1),
         updatedAt: new Date().toISOString()
       }, { merge: true });
+      setCompletingContact(null);
     } catch (e) { console.error(e); } finally { setBusyId(null); }
+  };
+
+  // --- 新增/編輯/刪除 行程 ---
+  const handleCreateCustomerInline = async (name) => {
+    if (!loggedInUser || !name.trim()) return null;
+    const trimmed = name.trim();
+    const dup = customers.find(c => c.name.trim().toLowerCase() === trimmed.toLowerCase());
+    if (dup) {
+      const confirmed = window.confirm(`已經有一位「${dup.name}」了，確定要新增新的客戶嗎？`);
+      if (!confirmed) return dup.id;
+    }
+    try {
+      const ref = await addDoc(collection(db, 'customers'), {
+        name: trimmed, phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '',
+        tag: '準客戶', notes: '', nextFollowUpDate: '',
+        source: '行程建立', ownerId: loggedInUser.id, visitLog: [], createdAt: new Date().toISOString()
+      });
+      return ref.id;
+    } catch (e) { console.error(e); return null; }
   };
 
   const handleAddSchedule = async () => {
@@ -2794,6 +3248,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
         type: form.type,
         isReminder: false,
         title: '',
+        priority: form.priority,
         date: form.date,
         time: form.time,
         note: form.note,
@@ -2817,6 +3272,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
         type: 'reminder',
         isReminder: true,
         title: reminderTitle,
+        category: reminderCategory,
+        priority: reminderPriority,
         date: reminderDate,
         time: '',
         note: '',
@@ -2826,8 +3283,28 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
       });
       setReminderTitle('');
       setReminderDate(getTodayDate());
+      setReminderCategory('personal');
+      setReminderPriority('normal');
       setShowReminderForm(false);
     } catch (e) { console.error(e); } finally { setReminderSaving(false); }
+  };
+
+  const openEditEvent = (event) => setEditingEvent({ ...event });
+
+  const handleSaveEditEvent = async () => {
+    if (!editingEvent) return;
+    setSaving(true);
+    try {
+      let payload;
+      if (editingEvent.isReminder) {
+        payload = { title: editingEvent.title, date: editingEvent.date, category: editingEvent.category, priority: editingEvent.priority };
+      } else {
+        const customer = customers.find(c => c.id === editingEvent.customerId);
+        payload = { type: editingEvent.type, customerId: editingEvent.customerId || '', customerName: customer ? customer.name : '', date: editingEvent.date, time: editingEvent.time, note: editingEvent.note, priority: editingEvent.priority };
+      }
+      await updateDoc(doc(db, 'schedule_events', editingEvent.id), payload);
+      setEditingEvent(null);
+    } catch (e) { console.error(e); } finally { setSaving(false); }
   };
 
   const handleDeleteConfirm = async () => {
@@ -2835,7 +3312,46 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
     try { await deleteDoc(doc(db, 'schedule_events', deleteTarget)); setDeleteTarget(null); } catch (e) { console.error(e); }
   };
 
-  const isTodayEmpty = dueEvents.length === 0 && dueCustomers.length === 0 && birthdayCustomers.length === 0;
+  // --- 固定行程 (規則管理) ---
+  const myRecurringRules = useMemo(() => (recurringRules || []).filter(r => r.creatorId === (loggedInUser?.id)), [recurringRules, loggedInUser]);
+
+  const handleSaveRecurring = async () => {
+    if (!loggedInUser || !recurringForm.title || recurringForm.participantIds.length === 0) return;
+    setRecurringSaving(true);
+    try {
+      await addDoc(collection(db, 'recurring_rules'), {
+        creatorId: loggedInUser.id,
+        title: recurringForm.title,
+        frequency: recurringForm.frequency,
+        dayOfWeek: recurringForm.dayOfWeek,
+        weekOfMonth: recurringForm.weekOfMonth,
+        dayOfWeekForMonthly: recurringForm.dayOfWeekForMonthly,
+        startTime: recurringForm.startTime,
+        endTime: recurringForm.endTime,
+        participantIds: recurringForm.participantIds,
+        startDate: recurringForm.startDate,
+        endDate: recurringForm.endDate || null,
+        category: recurringForm.category,
+        priority: recurringForm.priority,
+        createdAt: new Date().toISOString()
+      });
+      setRecurringForm(emptyRecurringForm);
+      setShowRecurringForm(false);
+    } catch (e) { console.error(e); } finally { setRecurringSaving(false); }
+  };
+
+  const handleDeleteRecurring = async (ruleId) => {
+    try { await deleteDoc(doc(db, 'recurring_rules', ruleId)); } catch (e) { console.error(e); }
+  };
+
+  const toggleParticipant = (memberId) => {
+    setRecurringForm(prev => ({
+      ...prev,
+      participantIds: prev.participantIds.includes(memberId) ? prev.participantIds.filter(id => id !== memberId) : [...prev.participantIds, memberId]
+    }));
+  };
+
+  const isTodayEmpty = dueEvents.length === 0 && dueCustomers.length === 0 && birthdayCustomers.length === 0 && autoSuggested.length === 0;
 
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-fade-in pb-12">
@@ -2846,7 +3362,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
           <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">今日待辦</h2>
           <p className="text-xs sm:text-sm text-gray-400 mt-1">{today} · 你的每日提醒與行程清單</p>
         </div>
-        <div className="flex gap-2">
+        <div className="flex flex-wrap gap-2">
+          <button onClick={() => setShowRecurringManage(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Calendar size={14} /> 固定行程</button>
           <button onClick={() => setShowReminderForm(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 純提醒</button>
           <button onClick={() => setShowForm(true)} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 新增行程</button>
         </div>
@@ -2865,15 +3382,26 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
                 {dueEvents.map(e => (
                   <div key={e.id} className={`flex items-center justify-between gap-3 p-3 rounded-xl border ${e.date < today ? 'bg-red-50 border-red-100' : 'bg-gray-50 border-gray-100'}`}>
                     <div className="min-w-0 flex items-center gap-2">
-                      {e.isReminder && <span className="text-[9px] bg-gray-200 text-gray-500 px-1.5 py-0.5 rounded font-bold shrink-0">提醒</span>}
+                      <span className={`w-2 h-2 rounded-full shrink-0 ${getEventColor(e)}`}></span>
                       <div className="min-w-0">
-                        <p className="font-bold text-gray-900 text-sm truncate">{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</p>
+                        <div className="flex items-center gap-1.5 flex-wrap">
+                          <p className="font-bold text-gray-900 text-sm truncate">{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</p>
+                          {e.priority && e.priority !== 'normal' && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${getEventPriority(e).color} text-white`}>{getEventPriority(e).label}</span>}
+                        </div>
                         <p className="text-xs text-gray-400">{e.date}{e.time ? ` ${e.time}` : ''}{e.date < today ? '（已過期）' : ''}</p>
                       </div>
                     </div>
-                    <button disabled={busyId === e.id} onClick={() => handleCompleteEvent(e)} className="shrink-0 bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
-                      {busyId === e.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 完成
-                    </button>
+                    <div className="flex gap-1.5 shrink-0">
+                      <button disabled={busyId === e.id} onClick={() => handleCompleteEvent(e)} className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
+                        {busyId === e.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 完成
+                      </button>
+                      {!e.isVirtual && (
+                        <>
+                          <button onClick={() => openEditEvent(e)} className="text-gray-300 hover:text-indigo-500 p-2"><Edit3 size={15} /></button>
+                          <button onClick={() => setDeleteTarget(e.id)} className="text-gray-300 hover:text-red-500 p-2"><Trash2 size={15} /></button>
+                        </>
+                      )}
+                    </div>
                   </div>
                 ))}
               </div>
@@ -2890,8 +3418,27 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
                       <p className="font-bold text-gray-900 text-sm truncate">{c.name}</p>
                       <p className="text-xs text-gray-400">追蹤日期：{c.nextFollowUpDate}</p>
                     </div>
-                    <button disabled={busyId === c.id} onClick={() => handleContactCustomer(c)} className="shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
+                    <button disabled={busyId === c.id} onClick={() => openContactModal(c)} className="shrink-0 bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
                       {busyId === c.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 已聯繫
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </Card>
+          )}
+
+          {autoSuggested.length > 0 && (
+            <Card className="p-5">
+              <h4 className="font-bold text-gray-800 mb-1 flex items-center gap-2 text-sm"><Users size={16} className="text-teal-500" /> 今日推薦聯繫</h4>
+              <p className="text-[10px] text-gray-400 mb-4">依「最久沒聯繫」自動挑選，既有客戶3位、準客戶7位</p>
+              <div className="space-y-3">
+                {autoSuggested.map(c => (
+                  <div key={c.id} className="flex items-center justify-between gap-3 p-3 rounded-xl border bg-teal-50 border-teal-100">
+                    <div className="min-w-0">
+                      <p className="font-bold text-gray-900 text-sm truncate">{c.name} <span className="text-[10px] text-gray-400 font-normal">· {c.tag}</span></p>
+                    </div>
+                    <button disabled={busyId === c.id} onClick={() => openContactModal(c)} className="shrink-0 bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
+                      {busyId === c.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 標記聯繫
                     </button>
                   </div>
                 ))}
@@ -2928,21 +3475,23 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
                     <Card key={e.id} className="p-4 flex items-center justify-between gap-3">
                       <div className="min-w-0 flex-1">
                         <div className="flex items-center gap-2 flex-wrap">
-                          {e.isReminder ? (
-                            <span className="text-[9px] bg-gray-200 text-gray-500 px-1.5 py-0.5 rounded font-bold">提醒</span>
-                          ) : (
-                            <span className={`w-2 h-2 rounded-full ${ALL_ACTIVITY_WEIGHTS[e.type]?.color || 'bg-gray-400'}`}></span>
-                          )}
+                          <span className={`w-2 h-2 rounded-full ${getEventColor(e)}`}></span>
                           <p className="font-bold text-gray-900 text-sm">{getEventLabel(e)}</p>
                           {e.customerName && <span className="text-xs text-gray-400">· {e.customerName}</span>}
+                          {e.priority && e.priority !== 'normal' && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${getEventPriority(e).color} text-white`}>{getEventPriority(e).label}</span>}
                         </div>
                         <p className="text-xs text-gray-400 mt-1">{e.date}{e.time ? ` ${e.time}` : ''}{e.note ? ` · ${e.note}` : ''}</p>
                       </div>
-                      <div className="flex gap-2 shrink-0">
+                      <div className="flex gap-1.5 shrink-0">
                         <button disabled={busyId === e.id} onClick={() => handleCompleteEvent(e)} className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
                           {busyId === e.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />}
                         </button>
-                        <button onClick={() => setDeleteTarget(e.id)} className="text-gray-300 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                        {!e.isVirtual && (
+                          <>
+                            <button onClick={() => openEditEvent(e)} className="text-gray-300 hover:text-indigo-500 p-2"><Edit3 size={15} /></button>
+                            <button onClick={() => setDeleteTarget(e.id)} className="text-gray-300 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                          </>
+                        )}
                       </div>
                     </Card>
                   ))}
@@ -2967,6 +3516,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
         </div>
       )}
 
+      {/* 新增行程 */}
       {showForm && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
@@ -2988,14 +3538,17 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
               </div>
               <div>
                 <label className="text-xs font-bold text-gray-500 block mb-1">關聯客戶（選填）</label>
-                <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.customerId} onChange={e => setForm({ ...form, customerId: e.target.value })}>
-                  <option value="">不指定</option>
-                  {customers.map(c => <option key={c.id} value={c.id}>{c.name}</option>)}
-                </select>
+                <CustomerPicker customers={customers} value={form.customerId} onChange={(id) => setForm({ ...form, customerId: id })} onCreateNew={handleCreateCustomerInline} />
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">時間（選填）</label><input type="time" className="w-full p-2 border border-gray-200 rounded-lg" value={form.time} onChange={e => setForm({ ...form, time: e.target.value })} /></div>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">優先度</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.priority} onChange={e => setForm({ ...form, priority: e.target.value })}>
+                  {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
               </div>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">備註</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-20 resize-none" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} /></div>
               <button onClick={handleAddSchedule} disabled={!form.date || saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
@@ -3006,6 +3559,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
         </div>
       )}
 
+      {/* 新增純提醒 */}
       {showReminderForm && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-scale-up">
@@ -3017,8 +3571,229 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents }) => {
             <div className="space-y-3">
               <div><label className="text-xs font-bold text-gray-500 block mb-1">提醒內容</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" placeholder="例如：交報表給總公司" value={reminderTitle} onChange={e => setReminderTitle(e.target.value)} /></div>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderDate} onChange={e => setReminderDate(e.target.value)} /></div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={reminderCategory} onChange={e => setReminderCategory(e.target.value)}>
+                  {Object.entries(REMINDER_CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">優先度</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={reminderPriority} onChange={e => setReminderPriority(e.target.value)}>
+                  {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
               <button onClick={handleAddReminder} disabled={!reminderTitle || reminderSaving} className="w-full bg-gray-800 text-white py-3 rounded-lg font-bold hover:bg-gray-900 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
                 {reminderSaving ? <Loader2 className="animate-spin" size={16} /> : '新增提醒'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 編輯行程/提醒 */}
+      {editingEvent && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">編輯{editingEvent.isReminder ? '提醒' : '行程'}</h3>
+              <button onClick={() => setEditingEvent(null)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="space-y-3">
+              {editingEvent.isReminder ? (
+                <>
+                  <div><label className="text-xs font-bold text-gray-500 block mb-1">提醒內容</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.title} onChange={e => setEditingEvent({ ...editingEvent, title: e.target.value })} /></div>
+                  <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.date} onChange={e => setEditingEvent({ ...editingEvent, date: e.target.value })} /></div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
+                    <select className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.category} onChange={e => setEditingEvent({ ...editingEvent, category: e.target.value })}>
+                      {Object.entries(REMINDER_CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                    </select>
+                  </div>
+                </>
+              ) : (
+                <>
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 block mb-1">類型</label>
+                    <select className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.type} onChange={e => setEditingEvent({ ...editingEvent, type: e.target.value })}>
+                      <optgroup label="業務活動">{Object.entries(ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</optgroup>
+                      <optgroup label="增員活動">{Object.entries(RECRUIT_ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</optgroup>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 block mb-1">關聯客戶（選填）</label>
+                    <CustomerPicker customers={customers} value={editingEvent.customerId} onChange={(id) => setEditingEvent({ ...editingEvent, customerId: id })} onCreateNew={handleCreateCustomerInline} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.date} onChange={e => setEditingEvent({ ...editingEvent, date: e.target.value })} /></div>
+                    <div><label className="text-xs font-bold text-gray-500 block mb-1">時間</label><input type="time" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.time || ''} onChange={e => setEditingEvent({ ...editingEvent, time: e.target.value })} /></div>
+                  </div>
+                  <div><label className="text-xs font-bold text-gray-500 block mb-1">備註</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-16 resize-none" value={editingEvent.note || ''} onChange={e => setEditingEvent({ ...editingEvent, note: e.target.value })} /></div>
+                </>
+              )}
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">優先度</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.priority || 'normal'} onChange={e => setEditingEvent({ ...editingEvent, priority: e.target.value })}>
+                  {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
+              <button onClick={handleSaveEditEvent} disabled={saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {saving ? <Loader2 className="animate-spin" size={16} /> : '儲存變更'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 完成行程 (詢問下次追蹤日期) */}
+      {completingEvent && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-scale-up">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">確認完成</h3>
+              <button onClick={() => setCompletingEvent(null)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">{getEventLabel(completingEvent)}{completingEvent.customerName && ` · ${completingEvent.customerName}`}</p>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">需要設定下次追蹤日期嗎？（選填）</label>
+                <input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={followUpInput} onChange={e => setFollowUpInput(e.target.value)} />
+              </div>
+              <button onClick={handleConfirmCompleteEvent} disabled={busyId === completingEvent.id} className="w-full bg-emerald-500 text-white py-3 rounded-lg font-bold hover:bg-emerald-600 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {busyId === completingEvent.id ? <Loader2 className="animate-spin" size={16} /> : '確認完成'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 標記聯繫客戶 (選擇 MEA 類別) */}
+      {completingContact && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-scale-up">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">標記已聯繫：{completingContact.name}</h3>
+              <button onClick={() => setCompletingContact(null)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">這次聯繫要算哪個 MEA 類別？</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={contactType} onChange={e => setContactType(e.target.value)}>
+                  <optgroup label="業務活動">{Object.entries(ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</optgroup>
+                  <optgroup label="增員活動">{Object.entries(RECRUIT_ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</optgroup>
+                </select>
+              </div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">備註（選填）</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={contactNote} onChange={e => setContactNote(e.target.value)} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">下次追蹤日期（選填）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={contactFollowUp} onChange={e => setContactFollowUp(e.target.value)} /></div>
+              <button onClick={handleConfirmContact} disabled={busyId === completingContact.id} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {busyId === completingContact.id ? <Loader2 className="animate-spin" size={16} /> : '確認'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 固定行程管理 */}
+      {showRecurringManage && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">固定行程</h3>
+              <button onClick={() => setShowRecurringManage(false)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <button onClick={() => setShowRecurringForm(true)} className="w-full mb-4 flex items-center justify-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 py-2.5 rounded-lg font-bold text-sm transition"><Plus size={16} /> 新增固定行程</button>
+            <div className="space-y-2">
+              {myRecurringRules.length === 0 && <p className="text-center text-gray-400 text-sm py-6">還沒有你建立的固定行程</p>}
+              {myRecurringRules.map(rule => (
+                <div key={rule.id} className="flex items-center justify-between p-3 bg-gray-50 rounded-lg border border-gray-100">
+                  <div>
+                    <p className="font-bold text-gray-900 text-sm">{rule.title}</p>
+                    <p className="text-xs text-gray-400">
+                      {rule.frequency === 'weekly' ? `每週${WEEKDAY_OPTIONS.find(w => w.value === rule.dayOfWeek)?.label || ''}` : `每月${WEEK_OF_MONTH_OPTIONS.find(w => w.value === rule.weekOfMonth)?.label || ''}${WEEKDAY_OPTIONS.find(w => w.value === rule.dayOfWeekForMonthly)?.label || ''}`}
+                      {rule.startTime ? ` ${rule.startTime}${rule.endTime ? '-' + rule.endTime : ''}` : ''} · 參與 {rule.participantIds.length} 人
+                    </p>
+                  </div>
+                  <button onClick={() => handleDeleteRecurring(rule.id)} className="text-gray-300 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                </div>
+              ))}
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 新增固定行程 */}
+      {showRecurringForm && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">新增固定行程</h3>
+              <button onClick={() => setShowRecurringForm(false)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="space-y-3">
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">名稱</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" placeholder="例如：區運作" value={recurringForm.title} onChange={e => setRecurringForm({ ...recurringForm, title: e.target.value })} /></div>
+              <div className="flex gap-2">
+                <button type="button" onClick={() => setRecurringForm({ ...recurringForm, frequency: 'weekly' })} className={`flex-1 py-2 rounded-lg text-sm font-bold ${recurringForm.frequency === 'weekly' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500'}`}>每週</button>
+                <button type="button" onClick={() => setRecurringForm({ ...recurringForm, frequency: 'monthly' })} className={`flex-1 py-2 rounded-lg text-sm font-bold ${recurringForm.frequency === 'monthly' ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500'}`}>每月</button>
+              </div>
+              {recurringForm.frequency === 'weekly' ? (
+                <div>
+                  <label className="text-xs font-bold text-gray-500 block mb-1">星期幾</label>
+                  <select className="w-full p-2 border border-gray-200 rounded-lg" value={recurringForm.dayOfWeek} onChange={e => setRecurringForm({ ...recurringForm, dayOfWeek: Number(e.target.value) })}>
+                    {WEEKDAY_OPTIONS.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}
+                  </select>
+                </div>
+              ) : (
+                <div className="grid grid-cols-2 gap-3">
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 block mb-1">第幾個</label>
+                    <select className="w-full p-2 border border-gray-200 rounded-lg" value={recurringForm.weekOfMonth} onChange={e => setRecurringForm({ ...recurringForm, weekOfMonth: Number(e.target.value) })}>
+                      {WEEK_OF_MONTH_OPTIONS.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 block mb-1">星期幾</label>
+                    <select className="w-full p-2 border border-gray-200 rounded-lg" value={recurringForm.dayOfWeekForMonthly} onChange={e => setRecurringForm({ ...recurringForm, dayOfWeekForMonthly: Number(e.target.value) })}>
+                      {WEEKDAY_OPTIONS.map(w => <option key={w.value} value={w.value}>{w.label}</option>)}
+                    </select>
+                  </div>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">開始時間</label><input type="time" className="w-full p-2 border border-gray-200 rounded-lg" value={recurringForm.startTime} onChange={e => setRecurringForm({ ...recurringForm, startTime: e.target.value })} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">結束時間</label><input type="time" className="w-full p-2 border border-gray-200 rounded-lg" value={recurringForm.endTime} onChange={e => setRecurringForm({ ...recurringForm, endTime: e.target.value })} /></div>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">參與人員</label>
+                <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto border border-gray-100 rounded-lg p-2">
+                  {(team || []).map(m => (
+                    <label key={m.id} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                      <input type="checkbox" checked={recurringForm.participantIds.includes(m.id)} onChange={() => toggleParticipant(m.id)} className="w-3.5 h-3.5" />
+                      {m.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
+                  <select className="w-full p-2 border border-gray-200 rounded-lg" value={recurringForm.category} onChange={e => setRecurringForm({ ...recurringForm, category: e.target.value })}>
+                    {Object.entries(REMINDER_CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 block mb-1">優先度</label>
+                  <select className="w-full p-2 border border-gray-200 rounded-lg" value={recurringForm.priority} onChange={e => setRecurringForm({ ...recurringForm, priority: e.target.value })}>
+                    {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">開始日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={recurringForm.startDate} onChange={e => setRecurringForm({ ...recurringForm, startDate: e.target.value })} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={recurringForm.endDate} onChange={e => setRecurringForm({ ...recurringForm, endDate: e.target.value })} /></div>
+              </div>
+              <p className="text-[10px] text-gray-400">固定行程不計入 MEA 分數，純粹提醒/出席性質。每個被選到的人會各自在自己的今日待辦中看到這筆，各自獨立標記完成。</p>
+              <button onClick={handleSaveRecurring} disabled={!recurringForm.title || recurringForm.participantIds.length === 0 || recurringSaving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {recurringSaving ? <Loader2 className="animate-spin" size={16} /> : '新增'}
               </button>
             </div>
           </div>
@@ -3044,7 +3819,7 @@ const SettingsPage = ({ rankTargets, doubleAwardTargets }) => {
     setExporting(true);
     setExportMsg('');
     try {
-      const collectionsToBackup = ['case_record', 'user', 'temp_user', 'activity_record', 'settings', 'customers', 'schedule_events'];
+      const collectionsToBackup = ['case_record', 'user', 'temp_user', 'activity_record', 'settings', 'customers', 'schedule_events', 'recurring_rules'];
       const backup = {};
       for (const colName of collectionsToBackup) {
         const snap = await getDocs(collection(db, colName));
@@ -3373,6 +4148,7 @@ const App = () => {
   const [customers, setCustomers] = useState([]);
   const [customersLoaded, setCustomersLoaded] = useState(false);
   const [scheduleEvents, setScheduleEvents] = useState([]);
+  const [recurringRules, setRecurringRules] = useState([]);
 
   useEffect(() => {
     const initAuth = async () => { await signInAnonymously(auth); };
@@ -3401,6 +4177,15 @@ const App = () => {
       }
     });
     return () => unsubSettings();
+  }, [user]);
+
+  // 固定行程規則：全體共用一份 (參與人員各自從裡面篩出跟自己有關的場次)
+  useEffect(() => {
+    if (!user) return;
+    const unsubRecurring = onSnapshot(collection(db, 'recurring_rules'), (snap) => {
+      setRecurringRules(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsubRecurring();
   }, [user]);
 
   // 客戶資料與行程：只讀取「目前登入者自己」擁有的資料，做到隱私區隔
@@ -3662,7 +4447,7 @@ const App = () => {
       </nav>
 
       <main className="max-w-7xl mx-auto px-6 pt-8">
-        {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} />}
+        {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} />}
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
         {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} />}
