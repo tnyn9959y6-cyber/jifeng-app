@@ -33,7 +33,8 @@ import {
   Cake,
   MessageSquare,
   Upload,
-  SlidersHorizontal
+  SlidersHorizontal,
+  Search
 } from 'lucide-react';
 import { 
   BarChart,
@@ -808,6 +809,24 @@ const generateRecurringOccurrences = (rule, windowStart, windowEnd) => {
     }
   }
   return occurrences;
+};
+
+// 今日待辦數量 (供導覽列小提示使用)：待完成行程/提醒 + 該追蹤客戶，不含自動推薦名單 (那是建議，不是硬性待辦)
+const computeDueTodayCount = (loggedInUser, customers, scheduleEvents, recurringRules) => {
+  if (!loggedInUser) return 0;
+  const today = getTodayDate();
+  const todayDate = new Date(today);
+  let virtualCount = 0;
+  (recurringRules || []).filter(r => (r.participantIds || []).includes(loggedInUser.id)).forEach(rule => {
+    const dates = generateRecurringOccurrences(rule, todayDate, todayDate);
+    dates.forEach(date => {
+      const alreadyReal = (scheduleEvents || []).some(e => e.ruleId === rule.id && e.date === date);
+      if (!alreadyReal) virtualCount++;
+    });
+  });
+  const dueEventsCount = (scheduleEvents || []).filter(e => e.status === 'scheduled' && e.date <= today).length + virtualCount;
+  const dueCustomersCount = (customers || []).filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today).length;
+  return dueEventsCount + dueCustomersCount;
 };
 
 const ActivityDashboard = ({ team, activities, records, user, season, loggedInUser }) => {
@@ -2003,9 +2022,16 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
   const [submitting, setSubmitting] = useState(false);
   const [deleteId, setDeleteId] = useState(null);
   const [isBatchOpen, setIsBatchOpen] = useState(false);
+  const [celebration, setCelebration] = useState(null);
   
   const [filterAgent, setFilterAgent] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
+
+  useEffect(() => {
+    if (!celebration) return;
+    const timer = setTimeout(() => setCelebration(null), 4000);
+    return () => clearTimeout(timer);
+  }, [celebration]);
 
   const availableMonths = useMemo(() => {
     const months = new Set(records.map(r => r.date.substring(0, 7)));
@@ -2053,6 +2079,10 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
         setEditingId(null);
       } else {
         await addDoc(collection(db, 'case_record'), recordData);
+        const typeInfo = PRODUCT_MAPPING[form.typeCode] || PRODUCT_MAPPING['ah_general'];
+        let weighted = parseInt(form.premium) * typeInfo.rate;
+        if (form.isESG) weighted *= 1.05;
+        setCelebration({ product: form.product, weighted: Math.round(weighted) });
       }
       setForm({ agentId: '', policyNumber: '', insuredName: '', product: '', typeCode: 'ah_general', premium: '', isESG: false, date: new Date().toISOString().split('T')[0] });
     } catch (error) { console.error(error); } finally { setSubmitting(false); }
@@ -2062,6 +2092,7 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
     if (!user) return;
     try {
        const batch = writeBatch(db);
+       let totalWeighted = 0;
        rows.forEach(row => {
           const docRef = doc(collection(db, 'case_record'));
           batch.set(docRef, {
@@ -2075,8 +2106,13 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
              user_id: row.agentId,
              created_at: new Date().toISOString()
           });
+          const typeInfo = PRODUCT_MAPPING[row.typeCode] || PRODUCT_MAPPING['ah_general'];
+          let weighted = parseInt(row.premium) * typeInfo.rate;
+          if (row.isESG) weighted *= 1.05;
+          totalWeighted += weighted;
        });
        await batch.commit();
+       setCelebration({ product: `共 ${rows.length} 筆保單`, weighted: Math.round(totalWeighted) });
     } catch(e) { console.error(e); }
   };
 
@@ -2105,6 +2141,15 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
 
   return (
     <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
+      {celebration && (
+        <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[200] bg-gradient-to-r from-amber-400 to-orange-500 text-white px-6 py-4 rounded-2xl shadow-2xl animate-scale-up flex items-center gap-3">
+          <span className="text-2xl">🎉</span>
+          <div>
+            <p className="font-bold">恭喜完成一筆保單！</p>
+            <p className="text-sm">{celebration.product} · {formatMoney(celebration.weighted)}</p>
+          </div>
+        </div>
+      )}
       <ConfirmModal 
         isOpen={!!deleteId} 
         onClose={() => setDeleteId(null)} 
@@ -2960,7 +3005,27 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
 };
 
 
-// --- 行程 (Schedule Agenda) ---
+// --- 時間選擇器 (用時/分下拉選單取代原生 time input，避免部分 Safari 版本在巢狀彈窗中點不動的問題) ---
+const TimeSelect = ({ value, onChange }) => {
+  const [h, m] = (value || '').split(':');
+  const hours = Array.from({ length: 24 }, (_, i) => String(i).padStart(2, '0'));
+  const minutes = ['00', '15', '30', '45'];
+  return (
+    <div className="flex gap-1.5 items-center">
+      <select className="p-2 border border-gray-200 rounded-lg flex-1 outline-none" value={h || ''} onChange={e => onChange(`${e.target.value}:${m || '00'}`)}>
+        <option value="">--</option>
+        {hours.map(hh => <option key={hh} value={hh}>{hh}</option>)}
+      </select>
+      <span className="text-gray-400 font-bold">:</span>
+      <select className="p-2 border border-gray-200 rounded-lg flex-1 outline-none" value={m || ''} onChange={e => onChange(`${h || '00'}:${e.target.value}`)}>
+        <option value="">--</option>
+        {minutes.map(mm => <option key={mm} value={mm}>{mm}</option>)}
+      </select>
+    </div>
+  );
+};
+
+
 // --- 客戶搜尋選擇器 (文字搜尋 + 就地新增，含重複姓名防呆) ---
 const CustomerPicker = ({ customers, value, onChange, onCreateNew }) => {
   const [query, setQuery] = useState(() => customers.find(c => c.id === value)?.name || '');
@@ -3053,6 +3118,23 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   const emptyRecurringForm = { title: '', frequency: 'weekly', dayOfWeek: 1, weekOfMonth: 1, dayOfWeekForMonthly: 1, startTime: '', endTime: '', participantIds: loggedInUser ? [loggedInUser.id] : [], startDate: getTodayDate(), endDate: '', category: 'meeting', priority: 'normal' };
   const [recurringForm, setRecurringForm] = useState(emptyRecurringForm);
   const [recurringSaving, setRecurringSaving] = useState(false);
+  const [editingRuleId, setEditingRuleId] = useState(null);
+
+  // 分類/優先度篩選
+  const [filterCategory, setFilterCategory] = useState('');
+  const [filterPriority, setFilterPriority] = useState('');
+  const getEventCategory = (e) => {
+    if (e.isReminder) return e.category || 'other';
+    return ACTIVITY_WEIGHTS[e.type] ? 'sales' : 'recruit';
+  };
+  const EVENT_CATEGORY_OPTIONS = [
+    { value: 'sales', label: '銷售' },
+    { value: 'recruit', label: '增員' },
+    { value: 'personal', label: '私事' },
+    { value: 'meeting', label: '課程會議' },
+    { value: 'other', label: '其他' }
+  ];
+  const matchesFilter = (e) => (!filterCategory || getEventCategory(e) === filterCategory) && (!filterPriority || (e.priority || 'normal') === filterPriority);
 
   const getEventLabel = (e) => e.isReminder ? e.title : (ALL_ACTIVITY_WEIGHTS[e.type]?.label || e.type);
   const getEventPriority = (e) => PRIORITY_LEVELS[e.priority] || PRIORITY_LEVELS.normal;
@@ -3094,7 +3176,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   const allItems = useMemo(() => [...scheduleEvents, ...virtualOccurrences], [scheduleEvents, virtualOccurrences]);
 
   // 今日焦點：今天/過期的行程與提醒
-  const dueEvents = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date <= today).sort(sortByPriorityThenDate), [allItems, today]);
+  const dueEvents = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date <= today && matchesFilter(e)).sort(sortByPriorityThenDate), [allItems, today, filterCategory, filterPriority]);
   const dueCustomers = useMemo(() => customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today), [customers, today]);
   const birthdayCustomers = useMemo(() => {
     const now = new Date();
@@ -3131,7 +3213,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   }, [customers, dueCustomers, today]);
 
   // 即將到來：未來的行程 (依明天/本週/未來分組)
-  const upcoming = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date > today).sort(sortByPriorityThenDate), [allItems, today]);
+  const upcoming = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date > today && matchesFilter(e)).sort(sortByPriorityThenDate), [allItems, today, filterCategory, filterPriority]);
 
   const groupLabel = (dateStr) => {
     const tmr = new Date(); tmr.setDate(tmr.getDate() + 1);
@@ -3319,8 +3401,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
     if (!loggedInUser || !recurringForm.title || recurringForm.participantIds.length === 0) return;
     setRecurringSaving(true);
     try {
-      await addDoc(collection(db, 'recurring_rules'), {
-        creatorId: loggedInUser.id,
+      const payload = {
         title: recurringForm.title,
         frequency: recurringForm.frequency,
         dayOfWeek: recurringForm.dayOfWeek,
@@ -3332,12 +3413,40 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         startDate: recurringForm.startDate,
         endDate: recurringForm.endDate || null,
         category: recurringForm.category,
-        priority: recurringForm.priority,
-        createdAt: new Date().toISOString()
-      });
+        priority: recurringForm.priority
+      };
+      if (editingRuleId) {
+        await updateDoc(doc(db, 'recurring_rules', editingRuleId), payload);
+      } else {
+        await addDoc(collection(db, 'recurring_rules'), {
+          ...payload,
+          creatorId: loggedInUser.id,
+          createdAt: new Date().toISOString()
+        });
+      }
       setRecurringForm(emptyRecurringForm);
+      setEditingRuleId(null);
       setShowRecurringForm(false);
     } catch (e) { console.error(e); } finally { setRecurringSaving(false); }
+  };
+
+  const openEditRecurring = (rule) => {
+    setEditingRuleId(rule.id);
+    setRecurringForm({
+      title: rule.title,
+      frequency: rule.frequency,
+      dayOfWeek: rule.dayOfWeek ?? 1,
+      weekOfMonth: rule.weekOfMonth ?? 1,
+      dayOfWeekForMonthly: rule.dayOfWeekForMonthly ?? 1,
+      startTime: rule.startTime || '',
+      endTime: rule.endTime || '',
+      participantIds: rule.participantIds || [],
+      startDate: rule.startDate || getTodayDate(),
+      endDate: rule.endDate || '',
+      category: rule.category || 'meeting',
+      priority: rule.priority || 'normal'
+    });
+    setShowRecurringForm(true);
   };
 
   const handleDeleteRecurring = async (ruleId) => {
@@ -3369,10 +3478,25 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         </div>
       </div>
 
+      <Card className="p-3 flex flex-wrap items-center gap-2">
+        <SlidersHorizontal size={16} className="text-gray-400 shrink-0" />
+        <select className="p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold text-gray-600 outline-none" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
+          <option value="">全部分類</option>
+          {EVENT_CATEGORY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <select className="p-2 bg-gray-50 border border-gray-200 rounded-lg text-xs font-bold text-gray-600 outline-none" value={filterPriority} onChange={e => setFilterPriority(e.target.value)}>
+          <option value="">全部優先度</option>
+          {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+        </select>
+        {(filterCategory || filterPriority) && (
+          <button onClick={() => { setFilterCategory(''); setFilterPriority(''); }} className="text-xs font-bold text-gray-400 hover:text-gray-600 px-2">清除篩選</button>
+        )}
+      </Card>
+
       {/* 今日焦點 */}
       <div>
         <h3 className="text-sm font-bold text-gray-500 mb-3">今日焦點</h3>
-        {isTodayEmpty && <Card className="p-8 text-center text-gray-400">今天沒有待辦事項，太棒了 🎉</Card>}
+        {isTodayEmpty && <Card className="p-8 text-center text-gray-400">{(filterCategory || filterPriority) ? '沒有符合篩選條件的待辦事項' : '今天沒有待辦事項，太棒了 🎉'}</Card>}
 
         <div className="space-y-4">
           {dueEvents.length > 0 && (
@@ -3542,7 +3666,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">時間（選填）</label><input type="time" className="w-full p-2 border border-gray-200 rounded-lg" value={form.time} onChange={e => setForm({ ...form, time: e.target.value })} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">時間（選填）</label><TimeSelect value={form.time} onChange={(t) => setForm({ ...form, time: t })} /></div>
               </div>
               <div>
                 <label className="text-xs font-bold text-gray-500 block mb-1">優先度</label>
@@ -3626,7 +3750,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                   </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.date} onChange={e => setEditingEvent({ ...editingEvent, date: e.target.value })} /></div>
-                    <div><label className="text-xs font-bold text-gray-500 block mb-1">時間</label><input type="time" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.time || ''} onChange={e => setEditingEvent({ ...editingEvent, time: e.target.value })} /></div>
+                    <div><label className="text-xs font-bold text-gray-500 block mb-1">時間</label><TimeSelect value={editingEvent.time || ''} onChange={(t) => setEditingEvent({ ...editingEvent, time: t })} /></div>
                   </div>
                   <div><label className="text-xs font-bold text-gray-500 block mb-1">備註</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-16 resize-none" value={editingEvent.note || ''} onChange={e => setEditingEvent({ ...editingEvent, note: e.target.value })} /></div>
                 </>
@@ -3701,7 +3825,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
               <h3 className="text-lg font-bold text-gray-900">固定行程</h3>
               <button onClick={() => setShowRecurringManage(false)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
             </div>
-            <button onClick={() => setShowRecurringForm(true)} className="w-full mb-4 flex items-center justify-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 py-2.5 rounded-lg font-bold text-sm transition"><Plus size={16} /> 新增固定行程</button>
+            <button onClick={() => { setEditingRuleId(null); setRecurringForm(emptyRecurringForm); setShowRecurringForm(true); }} className="w-full mb-4 flex items-center justify-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 py-2.5 rounded-lg font-bold text-sm transition"><Plus size={16} /> 新增固定行程</button>
             <div className="space-y-2">
               {myRecurringRules.length === 0 && <p className="text-center text-gray-400 text-sm py-6">還沒有你建立的固定行程</p>}
               {myRecurringRules.map(rule => (
@@ -3713,7 +3837,10 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                       {rule.startTime ? ` ${rule.startTime}${rule.endTime ? '-' + rule.endTime : ''}` : ''} · 參與 {rule.participantIds.length} 人
                     </p>
                   </div>
-                  <button onClick={() => handleDeleteRecurring(rule.id)} className="text-gray-300 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                  <div className="flex gap-1 shrink-0">
+                    <button onClick={() => openEditRecurring(rule)} className="text-gray-300 hover:text-indigo-500 p-2"><Edit3 size={16} /></button>
+                    <button onClick={() => handleDeleteRecurring(rule.id)} className="text-gray-300 hover:text-red-500 p-2"><Trash2 size={16} /></button>
+                  </div>
                 </div>
               ))}
             </div>
@@ -3721,13 +3848,13 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         </div>
       )}
 
-      {/* 新增固定行程 */}
+      {/* 新增/編輯固定行程 */}
       {showRecurringForm && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
           <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-bold text-gray-900">新增固定行程</h3>
-              <button onClick={() => setShowRecurringForm(false)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+              <h3 className="text-lg font-bold text-gray-900">{editingRuleId ? '編輯固定行程' : '新增固定行程'}</h3>
+              <button onClick={() => { setShowRecurringForm(false); setEditingRuleId(null); }} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
             </div>
             <div className="space-y-3">
               <div><label className="text-xs font-bold text-gray-500 block mb-1">名稱</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" placeholder="例如：區運作" value={recurringForm.title} onChange={e => setRecurringForm({ ...recurringForm, title: e.target.value })} /></div>
@@ -3759,8 +3886,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">開始時間</label><input type="time" className="w-full p-2 border border-gray-200 rounded-lg" value={recurringForm.startTime} onChange={e => setRecurringForm({ ...recurringForm, startTime: e.target.value })} /></div>
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">結束時間</label><input type="time" className="w-full p-2 border border-gray-200 rounded-lg" value={recurringForm.endTime} onChange={e => setRecurringForm({ ...recurringForm, endTime: e.target.value })} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">開始時間</label><TimeSelect value={recurringForm.startTime} onChange={(t) => setRecurringForm({ ...recurringForm, startTime: t })} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">結束時間</label><TimeSelect value={recurringForm.endTime} onChange={(t) => setRecurringForm({ ...recurringForm, endTime: t })} /></div>
               </div>
               <div>
                 <label className="text-xs font-bold text-gray-500 block mb-1">參與人員</label>
@@ -3793,7 +3920,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
               </div>
               <p className="text-[10px] text-gray-400">固定行程不計入 MEA 分數，純粹提醒/出席性質。每個被選到的人會各自在自己的今日待辦中看到這筆，各自獨立標記完成。</p>
               <button onClick={handleSaveRecurring} disabled={!recurringForm.title || recurringForm.participantIds.length === 0 || recurringSaving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
-                {recurringSaving ? <Loader2 className="animate-spin" size={16} /> : '新增'}
+                {recurringSaving ? <Loader2 className="animate-spin" size={16} /> : (editingRuleId ? '儲存變更' : '新增')}
               </button>
             </div>
           </div>
@@ -4021,6 +4148,106 @@ const SettingsPage = ({ rankTargets, doubleAwardTargets }) => {
 };
 
 
+// --- 全域搜尋 (客戶／業績紀錄／行程與提醒 一次查) ---
+const GlobalSearchModal = ({ isOpen, onClose, customers, records, scheduleEvents }) => {
+  const [query, setQuery] = useState('');
+
+  useEffect(() => { if (isOpen) setQuery(''); }, [isOpen]);
+
+  const results = useMemo(() => {
+    const q = query.trim().toLowerCase();
+    if (!q) return { customers: [], records: [], events: [] };
+    return {
+      customers: customers.filter(c =>
+        c.name.toLowerCase().includes(q) ||
+        (c.phone || '').includes(q) ||
+        (c.lineId || '').toLowerCase().includes(q) ||
+        (c.igHandle || '').toLowerCase().includes(q)
+      ).slice(0, 10),
+      records: records.filter(r =>
+        (r.insuredName || '').toLowerCase().includes(q) ||
+        (r.policyNumber || '').toLowerCase().includes(q) ||
+        (r.product || '').toLowerCase().includes(q)
+      ).slice(0, 10),
+      events: scheduleEvents.filter(e =>
+        (e.isReminder ? e.title : (ALL_ACTIVITY_WEIGHTS[e.type]?.label || e.type) || '').toLowerCase().includes(q) ||
+        (e.customerName || '').toLowerCase().includes(q) ||
+        (e.note || '').toLowerCase().includes(q)
+      ).slice(0, 10)
+    };
+  }, [query, customers, records, scheduleEvents]);
+
+  const hasAny = results.customers.length > 0 || results.records.length > 0 || results.events.length > 0;
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[200] flex items-start justify-center bg-black/50 backdrop-blur-sm p-4 pt-20">
+      <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl animate-scale-up max-h-[80vh] overflow-hidden flex flex-col">
+        <div className="p-4 border-b border-gray-100 flex items-center gap-3">
+          <SlidersHorizontal size={0} className="hidden" />
+          <input
+            autoFocus
+            type="text"
+            placeholder="搜尋客戶、保單、行程..."
+            className="flex-1 p-2 outline-none text-sm"
+            value={query}
+            onChange={e => setQuery(e.target.value)}
+          />
+          <button onClick={onClose} className="p-1.5 hover:bg-gray-100 rounded-full"><X size={18} /></button>
+        </div>
+        <div className="overflow-y-auto p-4 space-y-4">
+          {!query.trim() && <p className="text-center text-gray-400 text-sm py-8">輸入姓名、電話、保單號碼、商品名稱等關鍵字搜尋</p>}
+          {query.trim() && !hasAny && <p className="text-center text-gray-400 text-sm py-8">沒有找到符合的資料</p>}
+
+          {results.customers.length > 0 && (
+            <div>
+              <p className="text-[10px] font-bold text-gray-400 uppercase mb-2">客戶 ({results.customers.length})</p>
+              <div className="space-y-1.5">
+                {results.customers.map(c => (
+                  <div key={c.id} className="p-2.5 bg-gray-50 rounded-lg text-sm flex justify-between">
+                    <span className="font-bold text-gray-800">{c.name}</span>
+                    <span className="text-gray-400 text-xs">{c.phone || c.tag}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {results.records.length > 0 && (
+            <div>
+              <p className="text-[10px] font-bold text-gray-400 uppercase mb-2">業績紀錄 ({results.records.length})</p>
+              <div className="space-y-1.5">
+                {results.records.map(r => (
+                  <div key={r.id} className="p-2.5 bg-gray-50 rounded-lg text-sm flex justify-between">
+                    <span className="text-gray-800">{r.insuredName} · {r.product}</span>
+                    <span className="text-indigo-600 font-mono font-bold text-xs">{formatMoney(r.premium)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {results.events.length > 0 && (
+            <div>
+              <p className="text-[10px] font-bold text-gray-400 uppercase mb-2">行程與提醒 ({results.events.length})</p>
+              <div className="space-y-1.5">
+                {results.events.map(e => (
+                  <div key={e.id} className="p-2.5 bg-gray-50 rounded-lg text-sm flex justify-between">
+                    <span className="text-gray-800">{e.isReminder ? e.title : (ALL_ACTIVITY_WEIGHTS[e.type]?.label || e.type)}{e.customerName && ` · ${e.customerName}`}</span>
+                    <span className="text-gray-400 text-xs">{e.date}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+
 // --- Loading Screen (顯示於系統連線資料庫期間) ---
 const LoadingScreen = () => (
   <div className="min-h-screen bg-[#F5F7FA] flex flex-col items-center justify-center gap-4">
@@ -4134,6 +4361,7 @@ const LoginScreen = ({ team, onLogin }) => {
 // --- Main App ---
 const App = () => {
   const [activeTab, setActiveTab] = useState('todo');
+  const [showGlobalSearch, setShowGlobalSearch] = useState(false);
   const [season, setSeason] = useState('H2'); 
   const [team, setTeam] = useState([]);
   const [records, setRecords] = useState([]);
@@ -4374,8 +4602,10 @@ const App = () => {
     });
   }, [records, team]);
 
+  const todoCount = useMemo(() => computeDueTodayCount(loggedInUser, customers, scheduleEvents, recurringRules), [loggedInUser, customers, scheduleEvents, recurringRules]);
+
   const navItems = [
-    { id: 'todo', label: '今日待辦', icon: CheckSquare },
+    { id: 'todo', label: '今日待辦', icon: CheckSquare, badge: todoCount },
     { id: 'customers', label: '客戶管理', icon: Phone },
     { id: 'dashboard', label: '業績儀表板', icon: LayoutDashboard },
     { id: 'activity', label: 'MEA 活動量', icon: Activity },
@@ -4412,10 +4642,13 @@ const App = () => {
                   <button
                     key={item.id}
                     onClick={() => setActiveTab(item.id)}
-                    className={`flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-bold transition-all ${activeTab === item.id ? 'bg-gray-900 text-white shadow-lg' : 'text-gray-500 hover:text-gray-900'}`}
+                    className={`relative flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-bold transition-all ${activeTab === item.id ? 'bg-gray-900 text-white shadow-lg' : 'text-gray-500 hover:text-gray-900'}`}
                   >
                     <ItemIcon size={16} />
                     {item.label}
+                    {!!item.badge && (
+                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">{item.badge > 99 ? '99+' : item.badge}</span>
+                    )}
                   </button>
                 );
               })}
@@ -4426,10 +4659,17 @@ const App = () => {
                 onChange={(e) => setActiveTab(e.target.value)}
                 className="bg-gray-100 rounded-lg p-2 font-bold text-sm outline-none"
               >
-                {navItems.map(item => <option key={item.id} value={item.id}>{item.label}</option>)}
+                {navItems.map(item => <option key={item.id} value={item.id}>{item.label}{item.badge ? ` (${item.badge})` : ''}</option>)}
               </select>
             </div>
             <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
+              <button
+                onClick={() => setShowGlobalSearch(true)}
+                title="全域搜尋"
+                className="p-2 rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition"
+              >
+                <Search size={18} />
+              </button>
               <div className="hidden sm:block text-right">
                 <p className="text-xs font-bold text-gray-900">{loggedInUser.name}</p>
                 <p className="text-[10px] text-gray-400">{loggedInUser.role}</p>
@@ -4445,6 +4685,8 @@ const App = () => {
           </div>
         </div>
       </nav>
+
+      <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
 
       <main className="max-w-7xl mx-auto px-6 pt-8">
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} />}
