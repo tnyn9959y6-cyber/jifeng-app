@@ -34,7 +34,8 @@ import {
   MessageSquare,
   Upload,
   SlidersHorizontal,
-  Search
+  Search,
+  GitBranch
 } from 'lucide-react';
 import { 
   BarChart,
@@ -257,13 +258,13 @@ const parseBatchScheduleText = (text, defaultYear) => {
 };
 
 const PRODUCT_MAPPING = {
-  'ah_general': { label: '一般 A&H (300%)', rate: 3.0, isAH: true },
-  'ah_2':       { label: '2年期 A&H (60%)', rate: 0.6, isAH: true },
-  'long_20':    { label: '期繳 20年 (300%)', rate: 3.0, isAH: false },
-  'long_10':    { label: '期繳 10年 (200%)', rate: 2.0, isAH: false },
-  'long_6':     { label: '期繳 6年 (100%)', rate: 1.0, isAH: false },
-  'long_2':     { label: '期繳 2年 (20%)', rate: 0.2, isAH: false },
-  'one_off':    { label: '躉繳 (5%)', rate: 0.05, isAH: false },
+  'ah_general': { label: '一般 A&H (300%)', rate: 3.0, isAH: true, commissionRate: 0.45 },
+  'ah_2':       { label: '2年期 A&H (60%)', rate: 0.6, isAH: true, commissionRate: 0.45 },
+  'long_20':    { label: '期繳 20年 (300%)', rate: 3.0, isAH: false, commissionRate: 0.40 },
+  'long_10':    { label: '期繳 10年 (200%)', rate: 2.0, isAH: false, commissionRate: 0.25 },
+  'long_6':     { label: '期繳 6年 (100%)', rate: 1.0, isAH: false, commissionRate: 0 },
+  'long_2':     { label: '期繳 2年 (20%)', rate: 0.2, isAH: false, commissionRate: 0 },
+  'one_off':    { label: '躉繳 (5%)', rate: 0.05, isAH: false, commissionRate: 0.035 },
 };
 
 const PRODUCT_TYPES_OPTIONS = Object.entries(PRODUCT_MAPPING).map(([key, val]) => ({ code: key, ...val }));
@@ -772,6 +773,8 @@ const PRIORITY_LEVELS = {
 const REMINDER_CATEGORIES = {
   personal: { label: '私事', color: 'bg-emerald-500' },
   meeting: { label: '課程會議', color: 'bg-gray-800' },
+  claim: { label: '理賠', color: 'bg-rose-500' },
+  paperwork: { label: '文書', color: 'bg-sky-500' },
   other: { label: '其他', color: 'bg-gray-400' }
 };
 
@@ -801,6 +804,24 @@ const completeScheduleEvent = async (event, ownerId) => {
       visitLog: arrayUnion({ date: event.date, type: ALL_ACTIVITY_WEIGHTS[event.type]?.label || event.type, note: event.note || '' })
     });
   }
+};
+
+// 業績回報：標記已發單。案件本身「受理」就已經計入業績儀表板排名(不受此影響)，
+// 這裡只負責：① 把狀態改成已發單 ② 在「今天」這個日子，把核保發單 MEA 分數(含前面階段)計上去
+const markCaseIssued = async (record) => {
+  const today = getTodayDate();
+  await updateDoc(doc(db, 'case_record', record.id), { status: '已發單', issuedDate: today });
+  const cascadeKeys = getCascadeKeys('issue');
+  const incrementPayload = {};
+  cascadeKeys.forEach(k => { incrementPayload[k] = increment(1); });
+  const docId = `${record.agentId}_${today}`;
+  await setDoc(doc(db, 'activity_record', docId), {
+    agentId: record.agentId,
+    date: today,
+    month: today.substring(0, 7),
+    ...incrementPayload,
+    updatedAt: new Date().toISOString()
+  }, { merge: true });
 };
 
 // --- 固定行程 (Recurring Rules) 的虛擬場次產生工具 ---
@@ -2068,6 +2089,12 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
   const [deleteId, setDeleteId] = useState(null);
   const [isBatchOpen, setIsBatchOpen] = useState(false);
   const [celebration, setCelebration] = useState(null);
+  const [issuingId, setIssuingId] = useState(null);
+
+  const handleMarkIssued = async (record) => {
+    setIssuingId(record.id);
+    try { await markCaseIssued(record); } catch (e) { console.error(e); } finally { setIssuingId(null); }
+  };
   
   const [filterAgent, setFilterAgent] = useState('');
   const [filterMonth, setFilterMonth] = useState('');
@@ -2123,7 +2150,7 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
         await updateDoc(doc(db, 'case_record', editingId), recordData);
         setEditingId(null);
       } else {
-        await addDoc(collection(db, 'case_record'), recordData);
+        await addDoc(collection(db, 'case_record'), { ...recordData, status: '受理中' });
         const typeInfo = PRODUCT_MAPPING[form.typeCode] || PRODUCT_MAPPING['ah_general'];
         let weighted = parseInt(form.premium) * typeInfo.rate;
         if (form.isESG) weighted *= 1.05;
@@ -2149,7 +2176,8 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
              product_type: row.typeCode,
              transaction_date: Timestamp.fromDate(new Date(row.date)),
              user_id: row.agentId,
-             created_at: new Date().toISOString()
+             created_at: new Date().toISOString(),
+             status: '受理中'
           });
           const typeInfo = PRODUCT_MAPPING[row.typeCode] || PRODUCT_MAPPING['ah_general'];
           let weighted = parseInt(row.premium) * typeInfo.rate;
@@ -2280,7 +2308,27 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
       </div>
 
       <div className="space-y-4">
-        {filteredRecords.map(r=>(<Card key={r.id} className="p-4 flex justify-between items-center"><div className="flex flex-col"><span className="font-bold text-gray-900">{r.agentName} <span className="text-gray-400 font-normal text-xs">| {r.product}</span></span><span className="text-xs text-gray-500">{r.date} • {r.insuredName} {r.isESG && '• ESG'}</span></div><div className="text-right"><span className="block font-bold text-indigo-600">{formatMoney(r.weighted)}</span><div className="flex gap-2 justify-end mt-1"><Edit3 size={14} className="text-gray-400 cursor-pointer hover:text-indigo-500" onClick={()=>handleEdit(r)}/><Trash2 size={14} className="text-gray-400 cursor-pointer hover:text-red-500" onClick={()=>setDeleteId(r.id)}/></div></div></Card>))}
+        {filteredRecords.map(r=>(
+          <Card key={r.id} className="p-4 flex justify-between items-center">
+            <div className="flex flex-col">
+              <span className="font-bold text-gray-900">{r.agentName} <span className="text-gray-400 font-normal text-xs">| {r.product}</span></span>
+              <span className="text-xs text-gray-500">{r.date} • {r.insuredName} {r.isESG && '• ESG'}</span>
+              <span className={`text-[10px] font-bold mt-1 inline-block w-fit px-2 py-0.5 rounded-full ${r.status === '已發單' ? 'bg-emerald-100 text-emerald-700' : 'bg-amber-100 text-amber-700'}`}>{r.status || '已發單'}</span>
+            </div>
+            <div className="text-right">
+              <span className="block font-bold text-indigo-600">{formatMoney(r.weighted)}</span>
+              <div className="flex gap-2 justify-end items-center mt-1">
+                {r.status && r.status !== '已發單' && (
+                  <button disabled={issuingId === r.id} onClick={() => handleMarkIssued(r)} className="text-[10px] font-bold bg-indigo-600 hover:bg-indigo-700 text-white px-2 py-1 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
+                    {issuingId === r.id ? <Loader2 size={11} className="animate-spin" /> : null} 標記已發單
+                  </button>
+                )}
+                <Edit3 size={14} className="text-gray-400 cursor-pointer hover:text-indigo-500" onClick={()=>handleEdit(r)}/>
+                <Trash2 size={14} className="text-gray-400 cursor-pointer hover:text-red-500" onClick={()=>setDeleteId(r.id)}/>
+              </div>
+            </div>
+          </Card>
+        ))}
         {filteredRecords.length === 0 && <div className="text-center py-10 text-gray-400">沒有符合條件的紀錄</div>}
       </div>
     </div>
@@ -2607,7 +2655,113 @@ const NotionImportModal = ({ isOpen, onClose, loggedInUser, onImported }) => {
 };
 
 // --- 客戶管理 CRM ---
-const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
+// --- 客戶關聯網 (家庭樹 + 轉介軌跡合併) ---
+const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, customers, relationships, loggedInUser }) => {
+  const [showAddForm, setShowAddForm] = useState(false);
+  const [addCustomerId, setAddCustomerId] = useState('');
+  const [addType, setAddType] = useState('spouse');
+  const [addLabel, setAddLabel] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => { if (isOpen) { setShowAddForm(false); setAddCustomerId(''); setAddLabel(''); setAddType('spouse'); } }, [isOpen, focusId]);
+
+  const focusCustomer = customers.find(c => c.id === focusId);
+
+  const connections = useMemo(() => {
+    if (!focusId) return [];
+    return relationships.filter(r => r.fromId === focusId || r.toId === focusId).map(r => {
+      const otherId = r.fromId === focusId ? r.toId : r.fromId;
+      const other = customers.find(c => c.id === otherId);
+      let typeLabel = r.type === 'spouse' ? '配偶' : r.type === 'blood' ? '血親' : (r.fromId === focusId ? '我介紹了他' : '他介紹了我');
+      return { id: r.id, other, label: r.label || typeLabel };
+    }).filter(c => c.other);
+  }, [relationships, focusId, customers]);
+
+  const handleAdd = async () => {
+    if (!loggedInUser || !focusId || !addCustomerId) return;
+    setSaving(true);
+    try {
+      let fromId = focusId, toId = addCustomerId;
+      if (addType === 'referral_in') { fromId = addCustomerId; toId = focusId; }
+      const type = (addType === 'referral_in' || addType === 'referral_out') ? 'referral' : addType;
+      await addDoc(collection(db, 'customer_relationships'), {
+        ownerId: loggedInUser.id, fromId, toId, type, label: addLabel, createdAt: new Date().toISOString()
+      });
+      setAddCustomerId(''); setAddLabel(''); setShowAddForm(false);
+    } catch (e) { console.error(e); } finally { setSaving(false); }
+  };
+
+  const handleRemove = async (relId) => {
+    try { await deleteDoc(doc(db, 'customer_relationships', relId)); } catch (e) { console.error(e); }
+  };
+
+  if (!isOpen || !focusCustomer) return null;
+
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl w-full max-w-lg shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
+          <h3 className="text-lg font-bold text-gray-900">關聯網</h3>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X size={20} /></button>
+        </div>
+        <div className="p-6 space-y-6">
+          <div className="flex flex-col items-center">
+            <div className="w-16 h-16 rounded-full bg-indigo-100 text-indigo-700 flex items-center justify-center font-bold text-xl">{focusCustomer.name[0]}</div>
+            <p className="font-bold text-gray-900 mt-2">{focusCustomer.name}</p>
+            <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full mt-1">{focusCustomer.tag}</span>
+          </div>
+
+          {connections.length === 0 && <p className="text-center text-gray-400 text-sm">還沒有任何關聯</p>}
+
+          <div className="grid grid-cols-2 sm:grid-cols-3 gap-3">
+            {connections.map(c => (
+              <div key={c.id} className="flex flex-col items-center p-3 bg-gray-50 rounded-xl border border-gray-100 relative group">
+                <button onClick={() => handleRemove(c.id)} className="absolute top-1 right-1 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"><X size={14} /></button>
+                <button onClick={() => setFocusId(c.other.id)} className="flex flex-col items-center">
+                  <div className="w-11 h-11 rounded-full bg-teal-100 text-teal-700 flex items-center justify-center font-bold">{c.other.name[0]}</div>
+                  <p className="text-xs font-bold text-gray-800 mt-1">{c.other.name}</p>
+                  <span className="text-[9px] bg-gray-200 text-gray-500 px-1.5 py-0.5 rounded-full mt-0.5">{c.label}</span>
+                </button>
+              </div>
+            ))}
+          </div>
+
+          {!showAddForm ? (
+            <button onClick={() => setShowAddForm(true)} className="w-full flex items-center justify-center gap-1.5 bg-indigo-50 hover:bg-indigo-100 text-indigo-600 py-2.5 rounded-lg font-bold text-sm transition"><Plus size={16} /> 新增關聯</button>
+          ) : (
+            <div className="space-y-3 border-t border-gray-100 pt-4">
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">關聯對象</label>
+                <CustomerPicker customers={customers.filter(c => c.id !== focusId)} value={addCustomerId} onChange={setAddCustomerId} onCreateNew={async () => { window.alert('請先到「客戶管理」新增這位客戶，再回來建立關聯'); return null; }} />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">關係類型</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={addType} onChange={e => setAddType(e.target.value)}>
+                  <option value="spouse">配偶</option>
+                  <option value="blood">直系血親</option>
+                  <option value="referral_out">我介紹了他</option>
+                  <option value="referral_in">他介紹了我</option>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">稱謂備註（選填，例如：女兒、女婿）</label>
+                <input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={addLabel} onChange={e => setAddLabel(e.target.value)} />
+              </div>
+              <div className="flex gap-2">
+                <button onClick={() => setShowAddForm(false)} className="flex-1 py-2 text-gray-500 font-bold hover:bg-gray-100 rounded-lg transition">取消</button>
+                <button onClick={handleAdd} disabled={!addCustomerId || saving} className="flex-1 bg-indigo-600 text-white py-2 rounded-lg font-bold disabled:opacity-50 flex items-center justify-center gap-2">
+                  {saving ? <Loader2 className="animate-spin" size={16} /> : '新增'}
+                </button>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relationships }) => {
   const [search, setSearch] = useState('');
   const [showFilter, setShowFilter] = useState(false);
   const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '', vipOnly: false, igOnly: false });
@@ -2627,6 +2781,19 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
 
   // 客戶合併狀態
   const [mergeSourceId, setMergeSourceId] = useState(null); // 發起合併的那張卡片
+  const [networkFocusId, setNetworkFocusId] = useState(null);
+
+  const referralLeaderboard = useMemo(() => {
+    const counts = {};
+    (relationships || []).filter(r => r.type === 'referral').forEach(r => {
+      counts[r.fromId] = (counts[r.fromId] || 0) + 1;
+    });
+    return Object.entries(counts)
+      .map(([id, count]) => ({ customer: customers.find(c => c.id === id), count }))
+      .filter(x => x.customer)
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 5);
+  }, [relationships, customers]);
   const [mergeTargetId, setMergeTargetId] = useState('');
   const [mergeChoices, setMergeChoices] = useState({});
   const [merging, setMerging] = useState(false);
@@ -2764,6 +2931,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
     <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除客戶" message="確定要刪除此客戶資料嗎？此動作無法復原。" />
       <IGImportModal isOpen={isIGOpen} onClose={() => setIsIGOpen(false)} loggedInUser={loggedInUser} existingNames={existingNames} onImported={() => {}} />
+      <RelationshipNetworkModal isOpen={!!networkFocusId} onClose={() => setNetworkFocusId(null)} focusId={networkFocusId} setFocusId={setNetworkFocusId} customers={customers} relationships={relationships || []} loggedInUser={loggedInUser} />
       <NotionImportModal isOpen={isNotionOpen} onClose={() => setIsNotionOpen(false)} loggedInUser={loggedInUser} onImported={() => {}} />
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
@@ -2845,6 +3013,21 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
         )}
       </Card>
 
+      {referralLeaderboard.length > 0 && (
+        <Card className="p-5">
+          <h3 className="font-bold text-gray-800 mb-3 flex items-center gap-2 text-sm"><GitBranch size={16} className="text-purple-500" /> 轉介排行榜</h3>
+          <div className="flex flex-wrap gap-3">
+            {referralLeaderboard.map((item, i) => (
+              <div key={item.customer.id} className="flex items-center gap-2 bg-gray-50 px-3 py-2 rounded-lg border border-gray-100">
+                <span className="text-xs font-bold text-gray-400">#{i + 1}</span>
+                <span className="text-sm font-bold text-gray-800">{item.customer.name}</span>
+                <span className="text-xs text-purple-600 font-bold">介紹了 {item.count} 人</span>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
+
       <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-3 gap-4">
         {filteredCustomers.map(c => {
           const policies = relatedPolicies(c.name);
@@ -2866,6 +3049,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
                   </div>
                 </div>
                 <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                  <button onClick={() => setNetworkFocusId(c.id)} title="關聯網" className="p-1.5 text-gray-400 hover:text-purple-500"><GitBranch size={15} /></button>
                   <button onClick={() => openMerge(c.id)} title="合併客戶" className="p-1.5 text-gray-400 hover:text-teal-500"><Users size={15} /></button>
                   <button onClick={() => openEdit(c)} className="p-1.5 text-gray-400 hover:text-indigo-500"><Edit3 size={15} /></button>
                   <button onClick={() => setDeleteTarget(c.id)} className="p-1.5 text-gray-400 hover:text-red-500"><Trash2 size={15} /></button>
@@ -3052,27 +3236,30 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
 
 // --- 日期選擇器 (年/月/日下拉選單，避免原生 date input 在部分版面點不動的問題) ---
 const DateSelect = ({ value, onChange, yearRange = 3 }) => {
-  const [y, m, d] = (value || '').split('-');
+  const initial = (value || '').split('-');
+  const [y, setY] = useState(initial[0] || '');
+  const [m, setM] = useState(initial[1] || '');
+  const [d, setD] = useState(initial[2] || '');
   const currentYear = new Date().getFullYear();
   const years = Array.from({ length: yearRange * 2 + 1 }, (_, i) => currentYear - yearRange + i);
   const months = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
   const days = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
 
-  const update = (ny, nm, nd) => {
+  const commit = (ny, nm, nd) => {
     if (ny && nm && nd) onChange(`${ny}-${nm}-${nd}`);
   };
 
   return (
     <div className="flex gap-1">
-      <select className="p-1.5 border border-gray-200 rounded text-xs outline-none" value={y || ''} onChange={e => update(e.target.value, m || '01', d || '01')}>
+      <select className="p-1.5 border border-gray-200 rounded text-xs outline-none" value={y} onChange={e => { setY(e.target.value); commit(e.target.value, m, d); }}>
         <option value="">年</option>
         {years.map(yy => <option key={yy} value={yy}>{yy}</option>)}
       </select>
-      <select className="p-1.5 border border-gray-200 rounded text-xs outline-none" value={m || ''} onChange={e => update(y || String(currentYear), e.target.value, d || '01')}>
+      <select className="p-1.5 border border-gray-200 rounded text-xs outline-none" value={m} onChange={e => { setM(e.target.value); commit(y, e.target.value, d); }}>
         <option value="">月</option>
         {months.map(mm => <option key={mm} value={mm}>{mm}</option>)}
       </select>
-      <select className="p-1.5 border border-gray-200 rounded text-xs outline-none" value={d || ''} onChange={e => update(y || String(currentYear), m || '01', e.target.value)}>
+      <select className="p-1.5 border border-gray-200 rounded text-xs outline-none" value={d} onChange={e => { setD(e.target.value); commit(y, m, e.target.value); }}>
         <option value="">日</option>
         {days.map(dd => <option key={dd} value={dd}>{dd}</option>)}
       </select>
@@ -3313,7 +3500,104 @@ const BatchScheduleModal = ({ isOpen, onClose, loggedInUser, team }) => {
   );
 };
 
-const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recurringRules }) => {
+// --- 個人業績目標 (業績/增員/收入 三合一，放在今日待辦最上方) ---
+const PERSONAL_GOALS_DEFAULT = { salesTarget: 0, salesBasis: 'weighted', recruitTarget: 0, incomeTarget: 0 };
+
+const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
+  const [goals, setGoals] = useState(PERSONAL_GOALS_DEFAULT);
+  const [editing, setEditing] = useState(false);
+  const [form, setForm] = useState(PERSONAL_GOALS_DEFAULT);
+  const [saving, setSaving] = useState(false);
+  const currentMonth = getCurrentMonth();
+
+  useEffect(() => {
+    if (!loggedInUser) return;
+    const ref = doc(db, 'personal_goals', `${loggedInUser.id}_${currentMonth}`);
+    const unsub = onSnapshot(ref, (snap) => {
+      const data = snap.exists() ? { ...PERSONAL_GOALS_DEFAULT, ...snap.data() } : PERSONAL_GOALS_DEFAULT;
+      setGoals(data);
+      setForm(data);
+    });
+    return () => unsub();
+  }, [loggedInUser, currentMonth]);
+
+  const monthRecords = useMemo(() => (records || []).filter(r => loggedInUser && r.agentId === loggedInUser.id && r.date.startsWith(currentMonth)), [records, loggedInUser, currentMonth]);
+  const issuedRecords = useMemo(() => monthRecords.filter(r => (r.status || '已發單') === '已發單'), [monthRecords]);
+
+  const salesActual = useMemo(() => monthRecords.reduce((sum, r) => sum + (goals.salesBasis === 'premium' ? (r.premium || 0) : (r.weighted || 0)), 0), [monthRecords, goals.salesBasis]);
+  const incomeActual = useMemo(() => issuedRecords.reduce((sum, r) => {
+    const rate = PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0;
+    return sum + (r.premium || 0) * rate;
+  }, 0), [issuedRecords]);
+  const recruitActual = useMemo(() => {
+    if (!loggedInUser) return 0;
+    return (activities || []).filter(a => a.agentId === loggedInUser.id && a.month === currentMonth).reduce((sum, a) => sum + (a.recruitRegistered || 0), 0);
+  }, [activities, loggedInUser, currentMonth]);
+
+  const pct = (actual, target) => target > 0 ? Math.min(100, Math.round((actual / target) * 100)) : 0;
+
+  const handleSave = async () => {
+    if (!loggedInUser) return;
+    setSaving(true);
+    try {
+      await setDoc(doc(db, 'personal_goals', `${loggedInUser.id}_${currentMonth}`), form);
+      setEditing(false);
+    } catch (e) { console.error(e); } finally { setSaving(false); }
+  };
+
+  return (
+    <Card className="p-5">
+      <div className="flex items-center justify-between mb-4">
+        <h3 className="font-bold text-gray-800 text-sm">本月個人目標</h3>
+        <button onClick={() => { setForm(goals); setEditing(true); }} className="text-xs font-bold text-indigo-600 hover:text-indigo-700">設定目標</button>
+      </div>
+      <div className="grid grid-cols-3 gap-3">
+        <div>
+          <p className="text-[10px] text-gray-400 font-bold uppercase">業績（{goals.salesBasis === 'premium' ? '實收' : '加權'}）</p>
+          <p className="text-lg font-bold text-gray-900">{formatMoney(salesActual)}</p>
+          <p className="text-[10px] text-gray-400">目標 {formatMoney(goals.salesTarget)} · {pct(salesActual, goals.salesTarget)}%</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-gray-400 font-bold uppercase">增員登錄</p>
+          <p className="text-lg font-bold text-gray-900">{recruitActual} 人</p>
+          <p className="text-[10px] text-gray-400">目標 {goals.recruitTarget} 人 · {pct(recruitActual, goals.recruitTarget)}%</p>
+        </div>
+        <div>
+          <p className="text-[10px] text-gray-400 font-bold uppercase">預估收入</p>
+          <p className="text-lg font-bold text-gray-900">{formatMoney(incomeActual)}</p>
+          <p className="text-[10px] text-gray-400">目標 {formatMoney(goals.incomeTarget)} · {pct(incomeActual, goals.incomeTarget)}%</p>
+        </div>
+      </div>
+      {editing && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-scale-up">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">設定本月目標</h3>
+              <button onClick={() => setEditing(false)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">業績計算基礎</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.salesBasis} onChange={e => setForm({ ...form, salesBasis: e.target.value })}>
+                  <option value="weighted">加權保費</option>
+                  <option value="premium">實收保費</option>
+                </select>
+              </div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">業績目標</label><input type="number" className="w-full p-2 border border-gray-200 rounded-lg" value={form.salesTarget} onChange={e => setForm({ ...form, salesTarget: Number(e.target.value) || 0 })} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">增員登錄目標（人）</label><input type="number" className="w-full p-2 border border-gray-200 rounded-lg" value={form.recruitTarget} onChange={e => setForm({ ...form, recruitTarget: Number(e.target.value) || 0 })} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">收入目標（預估收入）</label><input type="number" className="w-full p-2 border border-gray-200 rounded-lg" value={form.incomeTarget} onChange={e => setForm({ ...form, incomeTarget: Number(e.target.value) || 0 })} /></div>
+              <button onClick={handleSave} disabled={saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {saving ? <Loader2 className="animate-spin" size={16} /> : '儲存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </Card>
+  );
+};
+
+const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recurringRules, records, activities }) => {
   const today = getTodayDate();
   const [busyId, setBusyId] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -3358,6 +3642,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
     { value: 'recruit', label: '增員' },
     { value: 'personal', label: '私事' },
     { value: 'meeting', label: '課程會議' },
+    { value: 'claim', label: '理賠' },
+    { value: 'paperwork', label: '文書' },
     { value: 'other', label: '其他' }
   ];
   const matchesFilter = (e) => (!filterCategory || getEventCategory(e) === filterCategory) && (!filterPriority || (e.priority || 'normal') === filterPriority);
@@ -3733,6 +4019,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
     <div className="max-w-4xl mx-auto space-y-6 animate-fade-in pb-12">
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除行程" message="確定要刪除這筆行程嗎？" />
       <BatchScheduleModal isOpen={showBatchSchedule} onClose={() => setShowBatchSchedule(false)} loggedInUser={loggedInUser} team={team} />
+
+      <PersonalGoalsCard loggedInUser={loggedInUser} records={records} activities={activities} />
 
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -4215,7 +4503,7 @@ const SettingsPage = ({ rankTargets, doubleAwardTargets }) => {
     setExporting(true);
     setExportMsg('');
     try {
-      const collectionsToBackup = ['case_record', 'user', 'temp_user', 'activity_record', 'settings', 'customers', 'schedule_events', 'recurring_rules'];
+      const collectionsToBackup = ['case_record', 'user', 'temp_user', 'activity_record', 'settings', 'customers', 'schedule_events', 'recurring_rules', 'customer_relationships', 'personal_goals'];
       const backup = {};
       for (const colName of collectionsToBackup) {
         const snap = await getDocs(collection(db, colName));
@@ -4643,6 +4931,7 @@ const App = () => {
   const [rankTargets, setRankTargets] = useState({ H1: DEFAULT_RANK_TARGETS_H1, H2: DEFAULT_RANK_TARGETS_H2 });
   const [doubleAwardTargets, setDoubleAwardTargets] = useState(DEFAULT_DOUBLE_AWARD_H2);
   const [customers, setCustomers] = useState([]);
+  const [relationships, setRelationships] = useState([]);
   const [customersLoaded, setCustomersLoaded] = useState(false);
   const [scheduleEvents, setScheduleEvents] = useState([]);
   const [recurringRules, setRecurringRules] = useState([]);
@@ -4687,7 +4976,7 @@ const App = () => {
 
   // 客戶資料與行程：只讀取「目前登入者自己」擁有的資料，做到隱私區隔
   useEffect(() => {
-    if (!loggedInUser) { setCustomers([]); setScheduleEvents([]); setCustomersLoaded(false); return; }
+    if (!loggedInUser) { setCustomers([]); setScheduleEvents([]); setCustomersLoaded(false); setRelationships([]); return; }
 
     const customersQuery = query(collection(db, 'customers'), where('ownerId', '==', loggedInUser.id));
     const unsubCustomers = onSnapshot(customersQuery, (snap) => {
@@ -4702,7 +4991,12 @@ const App = () => {
       setScheduleEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
 
-    return () => { unsubCustomers(); unsubSchedule(); };
+    const relationshipsQuery = query(collection(db, 'customer_relationships'), where('ownerId', '==', loggedInUser.id));
+    const unsubRelationships = onSnapshot(relationshipsQuery, (snap) => {
+      setRelationships(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+
+    return () => { unsubCustomers(); unsubSchedule(); unsubRelationships(); };
   }, [loggedInUser?.id]);
 
   // 自動登入：檢查裝置上是否記住了先前的登入狀態
@@ -4803,7 +5097,9 @@ const App = () => {
             premium: premium,
             weighted: Math.round(weighted),
             isESG: data.is_esg,
-            date: dateStr
+            date: dateStr,
+            status: data.status || '已發單',
+            issuedDate: data.issuedDate || ''
          };
       });
       setRecords(adaptedRecords.sort((a,b) => b.date.localeCompare(a.date)));
@@ -4958,8 +5254,8 @@ const App = () => {
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
 
       <main className="max-w-7xl mx-auto px-6 pt-8">
-        {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} />}
-        {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} />}
+        {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} records={enrichedRecords} activities={activities} />}
+        {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
         {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} />}
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} />}
