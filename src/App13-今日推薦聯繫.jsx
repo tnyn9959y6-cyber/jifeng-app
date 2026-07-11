@@ -72,6 +72,7 @@ import {
   Timestamp,
   setDoc,
   getDocs,
+  getDoc,
   where,
   increment,
   arrayUnion
@@ -229,6 +230,30 @@ const parseCSV = (text) => {
   }
   if (field !== '' || row.length) { row.push(field); rows.push(row); }
   return rows.filter(r => r.length > 0 && !(r.length === 1 && r[0].trim() === ''));
+};
+
+// 批次新增行程文字解析：每行「日期(YYYY-MM-DD 或 MM/DD) 時間(選填 HH:MM) 標題」
+const parseBatchScheduleText = (text, defaultYear) => {
+  return text.split('\n').map(l => l.trim()).filter(Boolean).map((line, i) => {
+    let rest = line;
+    let date = '';
+    const isoMatch = rest.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
+    const slashMatch = rest.match(/^(\d{1,2})\/(\d{1,2})/);
+    if (isoMatch) {
+      date = `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+      rest = rest.slice(isoMatch[0].length).trim();
+    } else if (slashMatch) {
+      date = `${defaultYear}-${slashMatch[1].padStart(2, '0')}-${slashMatch[2].padStart(2, '0')}`;
+      rest = rest.slice(slashMatch[0].length).trim();
+    }
+    const timeMatch = rest.match(/^(\d{1,2}:\d{2})/);
+    let time = '';
+    if (timeMatch) {
+      time = timeMatch[1];
+      rest = rest.slice(timeMatch[0].length).trim();
+    }
+    return { id: Date.now() + i, date, time, title: rest };
+  });
 };
 
 const PRODUCT_MAPPING = {
@@ -727,6 +752,14 @@ const RECRUIT_ACTIVITY_WEIGHTS = {
 
 const ALL_ACTIVITY_WEIGHTS = { ...ACTIVITY_WEIGHTS, ...RECRUIT_ACTIVITY_WEIGHTS };
 
+// 業務漏斗階段順序 (不含準客戶)：完成後面的階段時，前面的階段視同也一併完成一次
+const SALES_FUNNEL_CHAIN = ['appointment', 'interview', 'proposal', 'application', 'issue'];
+const getCascadeKeys = (type) => {
+  const idx = SALES_FUNNEL_CHAIN.indexOf(type);
+  if (idx === -1) return [type];
+  return SALES_FUNNEL_CHAIN.slice(0, idx + 1);
+};
+
 // 重要x緊急 四象限優先度
 const PRIORITY_LEVELS = {
   urgent_important: { label: '重要且緊急', color: 'bg-red-500', textColor: 'text-red-600', order: 0 },
@@ -753,11 +786,14 @@ const completeScheduleEvent = async (event, ownerId) => {
   await updateDoc(doc(db, 'schedule_events', event.id), { status: 'completed', completedAt: new Date().toISOString() });
   if (event.isReminder) return;
   const docId = `${ownerId}_${event.date}`;
+  const cascadeKeys = getCascadeKeys(event.type);
+  const incrementPayload = {};
+  cascadeKeys.forEach(k => { incrementPayload[k] = increment(1); });
   await setDoc(doc(db, 'activity_record', docId), {
     agentId: ownerId,
     date: event.date,
     month: event.date.substring(0, 7),
-    [event.type]: increment(1),
+    ...incrementPayload,
     updatedAt: new Date().toISOString()
   }, { merge: true });
   if (event.customerId) {
@@ -1136,7 +1172,12 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
                           value={formData[key]} 
                           onChange={e => setFormData(p => ({...p, [key]: parseInt(e.target.value) || 0}))}
                         />
-                        <button type="button" onClick={() => setFormData(p => ({...p, [key]: p[key] + 1}))} className="w-6 h-6 flex items-center justify-center bg-white rounded border hover:bg-gray-100 text-gray-500">+</button>
+                        <button type="button" onClick={() => setFormData(p => {
+                          const keys = getCascadeKeys(key);
+                          const next = { ...p };
+                          keys.forEach(k => { next[k] = (next[k] || 0) + 1; });
+                          return next;
+                        })} className="w-6 h-6 flex items-center justify-center bg-white rounded border hover:bg-gray-100 text-gray-500" title="完成此階段會自動補上前面的階段">+</button>
                       </div>
                     </div>
                   ))}
@@ -1991,10 +2032,14 @@ const RecruitmentDashboard = ({ recruits, team, user }) => {
                           <p className="text-xs font-bold text-gray-400 uppercase tracking-wider">關鍵日期</p>
                           {[{ label: '臨時帳號', key: 'tempAccountDate' },{ label: '內考日期', key: 'internalExamDate' },{ label: '外考日期', key: 'externalExamDate' },{ label: '預計登錄', key: 'registeredDate' },{ label: '優培開始', key: 'trainingDate' }].map(d => (
                             <div key={d.key} className="flex items-center justify-between"><label className="text-xs text-gray-500 font-medium">{d.label}</label>
-                              <input type="date" disabled={recruit.isPromoted} className="bg-gray-50 border border-gray-200 rounded px-2 py-1 text-xs text-gray-700 outline-none focus:border-blue-500 transition w-32 disabled:opacity-50" value={recruit.dates?.[d.key] || ''} onChange={(e) => {
+                              {recruit.isPromoted ? (
+                                <span className="text-xs text-gray-400">{recruit.dates?.[d.key] || '-'}</span>
+                              ) : (
+                                <DateSelect value={recruit.dates?.[d.key] || ''} onChange={(val) => {
                                   const currentDates = recruit.dates || {};
-                                  updateRecruit(recruit.id, { dates: { ...currentDates, [d.key]: e.target.value } });
+                                  updateRecruit(recruit.id, { dates: { ...currentDates, [d.key]: val } });
                                 }}/>
+                              )}
                             </div>))}
                        </div>
                        <div>
@@ -3005,6 +3050,36 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded }) => {
 };
 
 
+// --- 日期選擇器 (年/月/日下拉選單，避免原生 date input 在部分版面點不動的問題) ---
+const DateSelect = ({ value, onChange, yearRange = 3 }) => {
+  const [y, m, d] = (value || '').split('-');
+  const currentYear = new Date().getFullYear();
+  const years = Array.from({ length: yearRange * 2 + 1 }, (_, i) => currentYear - yearRange + i);
+  const months = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
+  const days = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
+
+  const update = (ny, nm, nd) => {
+    if (ny && nm && nd) onChange(`${ny}-${nm}-${nd}`);
+  };
+
+  return (
+    <div className="flex gap-1">
+      <select className="p-1.5 border border-gray-200 rounded text-xs outline-none" value={y || ''} onChange={e => update(e.target.value, m || '01', d || '01')}>
+        <option value="">年</option>
+        {years.map(yy => <option key={yy} value={yy}>{yy}</option>)}
+      </select>
+      <select className="p-1.5 border border-gray-200 rounded text-xs outline-none" value={m || ''} onChange={e => update(y || String(currentYear), e.target.value, d || '01')}>
+        <option value="">月</option>
+        {months.map(mm => <option key={mm} value={mm}>{mm}</option>)}
+      </select>
+      <select className="p-1.5 border border-gray-200 rounded text-xs outline-none" value={d || ''} onChange={e => update(y || String(currentYear), m || '01', e.target.value)}>
+        <option value="">日</option>
+        {days.map(dd => <option key={dd} value={dd}>{dd}</option>)}
+      </select>
+    </div>
+  );
+};
+
 // --- 時間選擇器 (用時/分下拉選單取代原生 time input，避免部分 Safari 版本在巢狀彈窗中點不動的問題) ---
 const TimeSelect = ({ value, onChange }) => {
   const [h, m] = (value || '').split(':');
@@ -3088,6 +3163,156 @@ const WEEKDAY_OPTIONS = [
 ];
 const WEEK_OF_MONTH_OPTIONS = [{ value: 1, label: '第1個' }, { value: 2, label: '第2個' }, { value: 3, label: '第3個' }, { value: 4, label: '第4個' }];
 
+// --- 批次新增行程 (貼上文字快速建立多筆，適合課表這類固定課程) ---
+const BatchScheduleModal = ({ isOpen, onClose, loggedInUser, team }) => {
+  const [step, setStep] = useState(1);
+  const [rawText, setRawText] = useState('');
+  const [rows, setRows] = useState([]);
+  const [participantIds, setParticipantIds] = useState(() => loggedInUser ? [loggedInUser.id] : []);
+  const [category, setCategory] = useState('meeting');
+  const [priority, setPriority] = useState('normal');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setStep(1); setRawText(''); setRows([]);
+      setParticipantIds(loggedInUser ? [loggedInUser.id] : []);
+      setCategory('meeting'); setPriority('normal'); setIsSubmitting(false);
+    }
+  }, [isOpen, loggedInUser]);
+
+  const handleParse = () => {
+    const parsed = parseBatchScheduleText(rawText, new Date().getFullYear());
+    setRows(parsed.filter(r => r.title));
+    setStep(2);
+  };
+
+  const updateRow = (id, field, value) => {
+    setRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
+  };
+
+  const removeRow = (id) => setRows(prev => prev.filter(r => r.id !== id));
+
+  const toggleParticipant = (id) => {
+    setParticipantIds(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
+  };
+
+  const handleSubmit = async () => {
+    const validRows = rows.filter(r => r.date && r.title);
+    if (validRows.length === 0 || participantIds.length === 0) return;
+    setIsSubmitting(true);
+    try {
+      const batch = writeBatch(db);
+      validRows.forEach(row => {
+        participantIds.forEach(pid => {
+          const ref = doc(collection(db, 'schedule_events'));
+          batch.set(ref, {
+            ownerId: pid,
+            customerId: '', customerName: '',
+            isReminder: true, type: 'reminder',
+            title: row.title, category, priority,
+            date: row.date, time: row.time, note: '',
+            status: 'scheduled', completedAt: null,
+            createdAt: new Date().toISOString()
+          });
+        });
+      });
+      await batch.commit();
+      onClose();
+    } catch (e) { console.error(e); } finally { setIsSubmitting(false); }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl animate-scale-up border border-gray-100 flex flex-col max-h-[90vh]">
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
+          <h3 className="text-lg font-bold text-gray-900">批次新增行程</h3>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X size={20} /></button>
+        </div>
+        <div className="p-6 overflow-y-auto flex-1 space-y-4">
+          {step === 1 ? (
+            <>
+              <div className="bg-blue-50 p-4 rounded-lg text-xs text-blue-700 leading-relaxed border border-blue-100">
+                每行一筆，格式：<code>日期 時間(選填) 標題</code>，例如：<br />
+                <code>7/15 14:00 新人訓練第一堂：商品概論</code><br />
+                <code>2026-07-22 14:00 新人訓練第二堂：話術演練</code><br />
+                如果課表是照片，把照片傳給 Claude，請它幫你轉成這個格式再貼上來。
+              </div>
+              <textarea
+                className="w-full h-48 p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-indigo-500 font-mono text-sm resize-none"
+                placeholder="貼上課表文字..."
+                value={rawText}
+                onChange={e => setRawText(e.target.value)}
+              />
+            </>
+          ) : (
+            <>
+              <div className="overflow-x-auto border border-gray-100 rounded-xl">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead className="bg-gray-50 text-gray-500 font-bold uppercase">
+                    <tr><th className="px-3 py-2">日期</th><th className="px-3 py-2">時間</th><th className="px-3 py-2">標題</th><th className="px-3 py-2 w-10"></th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {rows.map(row => (
+                      <tr key={row.id}>
+                        <td className="p-2"><input type="text" placeholder="YYYY-MM-DD" className="bg-transparent border border-gray-200 rounded px-1 w-28 outline-none" value={row.date} onChange={e => updateRow(row.id, 'date', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" placeholder="HH:MM" className="bg-transparent border border-gray-200 rounded px-1 w-16 outline-none" value={row.time} onChange={e => updateRow(row.id, 'time', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" className="bg-transparent border border-gray-200 rounded px-1 w-full outline-none" value={row.title} onChange={e => updateRow(row.id, 'title', e.target.value)} /></td>
+                        <td className="p-2 text-center"><button onClick={() => removeRow(row.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={14} /></button></td>
+                      </tr>
+                    ))}
+                    {rows.length === 0 && <tr><td colSpan="4" className="text-center py-6 text-gray-400">無法解析出任何資料，請確認格式</td></tr>}
+                  </tbody>
+                </table>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
+                  <select className="w-full p-2 border border-gray-200 rounded-lg" value={category} onChange={e => setCategory(e.target.value)}>
+                    {Object.entries(REMINDER_CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  </select>
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-500 block mb-1">優先度</label>
+                  <select className="w-full p-2 border border-gray-200 rounded-lg" value={priority} onChange={e => setPriority(e.target.value)}>
+                    {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">套用給哪些人（每個人各自獨立在自己的今日待辦中看到）</label>
+                <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto border border-gray-100 rounded-lg p-2">
+                  {(team || []).map(m => (
+                    <label key={m.id} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                      <input type="checkbox" checked={participantIds.includes(m.id)} onChange={() => toggleParticipant(m.id)} className="w-3.5 h-3.5" />
+                      {m.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <p className="text-right text-xs text-gray-400">共 {rows.filter(r => r.date && r.title).length} 筆有效資料 × {participantIds.length} 人 = {rows.filter(r => r.date && r.title).length * participantIds.length} 筆行程</p>
+            </>
+          )}
+        </div>
+        <div className="p-6 border-t border-gray-100 flex justify-end gap-3 bg-gray-50 rounded-b-2xl">
+          {step === 1 ? (
+            <button onClick={handleParse} disabled={!rawText} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50">下一步：確認內容</button>
+          ) : (
+            <>
+              <button onClick={() => setStep(1)} className="px-6 py-2 text-gray-500 font-bold hover:bg-gray-200 rounded-lg transition">返回</button>
+              <button onClick={handleSubmit} disabled={isSubmitting || rows.filter(r => r.date && r.title).length === 0 || participantIds.length === 0} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50 flex items-center gap-2">
+                {isSubmitting && <Loader2 className="animate-spin" size={16} />} 確認新增
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recurringRules }) => {
   const today = getTodayDate();
   const [busyId, setBusyId] = useState(null);
@@ -3096,6 +3321,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   const [showReminderForm, setShowReminderForm] = useState(false);
   const [showRecurringForm, setShowRecurringForm] = useState(false);
   const [showRecurringManage, setShowRecurringManage] = useState(false);
+  const [showBatchSchedule, setShowBatchSchedule] = useState(false);
   const emptyForm = { customerId: '', type: 'appointment', date: getTodayDate(), time: '', note: '', priority: 'normal' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -3148,7 +3374,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   const virtualOccurrences = useMemo(() => {
     if (!loggedInUser) return [];
     const windowStart = new Date(today);
-    const windowEnd = new Date(today); windowEnd.setDate(windowEnd.getDate() + 60);
+    const windowEnd = new Date(today); windowEnd.setDate(windowEnd.getDate() + 30);
     const results = [];
     (recurringRules || []).filter(r => (r.participantIds || []).includes(loggedInUser.id)).forEach(rule => {
       const dates = generateRecurringOccurrences(rule, windowStart, windowEnd);
@@ -3177,7 +3403,9 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
 
   // 今日焦點：今天/過期的行程與提醒
   const dueEvents = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date <= today && matchesFilter(e)).sort(sortByPriorityThenDate), [allItems, today, filterCategory, filterPriority]);
-  const dueCustomers = useMemo(() => customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today), [customers, today]);
+  const isContactedToday = (c) => (c.visitLog || []).some(v => v.date === today);
+
+  const dueCustomers = useMemo(() => customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today && !isContactedToday(c)), [customers, today]);
   const birthdayCustomers = useMemo(() => {
     const now = new Date();
     const todayNoTime = new Date(now.getFullYear(), now.getMonth(), now.getDate());
@@ -3192,25 +3420,51 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   }, [customers]);
 
   // 每日自動推薦聯繫名單：既有客戶池挑3、準客戶池挑7 (依最久沒聯繫優先)，不夠就互相補滿
+  // 這份名單「當天固定」，存進 Firestore 後整天不再重算，聯繫完就從畫面上消失、不會遞補新的人進來
+  const [suggestedIds, setSuggestedIds] = useState(null);
+
+  useEffect(() => {
+    if (!loggedInUser || customers.length === 0) { setSuggestedIds(null); return; }
+    let cancelled = false;
+    const suggestionRef = doc(db, 'daily_suggestions', `${loggedInUser.id}_${today}`);
+    (async () => {
+      try {
+        const snap = await getDoc(suggestionRef);
+        if (snap.exists()) {
+          if (!cancelled) setSuggestedIds(snap.data().customerIds || []);
+          return;
+        }
+        const dueIdsAtGenTime = new Set(customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today).map(c => c.id));
+        const eligible = customers.filter(c => !dueIdsAtGenTime.has(c.id));
+        const daysSinceContact = (c) => {
+          const lastVisit = (c.visitLog && c.visitLog.length) ? [...c.visitLog].sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0].date : null;
+          const refDate = lastVisit || (c.createdAt ? c.createdAt.split('T')[0] : '2000-01-01');
+          return Math.floor((new Date(today) - new Date(refDate)) / 86400000);
+        };
+        const existingPool = eligible.filter(c => c.tag === '既有客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
+        const prospectPool = eligible.filter(c => c.tag === '準客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
+        let picked = [...existingPool.slice(0, 3), ...prospectPool.slice(0, 7)];
+        if (picked.length < 10) {
+          const pickedIds = new Set(picked.map(c => c.id));
+          const remaining = eligible.filter(c => !pickedIds.has(c.id)).sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
+          picked = [...picked, ...remaining.slice(0, 10 - picked.length)];
+        }
+        const ids = picked.slice(0, 10).map(c => c.id);
+        await setDoc(suggestionRef, { customerIds: ids, createdAt: new Date().toISOString() });
+        if (!cancelled) setSuggestedIds(ids);
+      } catch (e) { console.error(e); }
+    })();
+    return () => { cancelled = true; };
+    // 只在登入者或日期變動時重新產生，不隨 customers 內容變化重算，避免整天一直遞補
+    // eslint-disable-next-line
+  }, [loggedInUser?.id, today]);
+
   const autoSuggested = useMemo(() => {
-    if (!customers.length) return [];
-    const dueIds = new Set(dueCustomers.map(c => c.id));
-    const eligible = customers.filter(c => !dueIds.has(c.id));
-    const daysSinceContact = (c) => {
-      const lastVisit = (c.visitLog && c.visitLog.length) ? [...c.visitLog].sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0].date : null;
-      const refDate = lastVisit || (c.createdAt ? c.createdAt.split('T')[0] : '2000-01-01');
-      return Math.floor((new Date(today) - new Date(refDate)) / 86400000);
-    };
-    const existingPool = eligible.filter(c => c.tag === '既有客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
-    const prospectPool = eligible.filter(c => c.tag === '準客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
-    let picked = [...existingPool.slice(0, 3), ...prospectPool.slice(0, 7)];
-    if (picked.length < 10) {
-      const pickedIds = new Set(picked.map(c => c.id));
-      const remaining = eligible.filter(c => !pickedIds.has(c.id)).sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
-      picked = [...picked, ...remaining.slice(0, 10 - picked.length)];
-    }
-    return picked.slice(0, 10);
-  }, [customers, dueCustomers, today]);
+    if (!suggestedIds) return [];
+    return suggestedIds
+      .map(id => customers.find(c => c.id === id))
+      .filter(c => c && !isContactedToday(c) && !dueCustomers.some(d => d.id === c.id));
+  }, [suggestedIds, customers, dueCustomers]);
 
   // 即將到來：未來的行程 (依明天/本週/未來分組)
   const upcoming = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date > today && matchesFilter(e)).sort(sortByPriorityThenDate), [allItems, today, filterCategory, filterPriority]);
@@ -3229,6 +3483,16 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
       if (!groups[label]) groups[label] = [];
       groups[label].push(e);
     });
+    // 「未來」區塊裡，同一個固定行程規則只顯示最近一次，避免同一場週會洗版
+    if (groups['未來']) {
+      const seenRules = new Set();
+      groups['未來'] = groups['未來'].filter(e => {
+        if (!e.ruleId) return true;
+        if (seenRules.has(e.ruleId)) return false;
+        seenRules.add(e.ruleId);
+        return true;
+      });
+    }
     return groups;
   }, [upcoming]);
   const groupOrder = ['明天', '本週', '未來'];
@@ -3288,11 +3552,14 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         nextFollowUpDate: contactFollowUp || ''
       });
       const docId = `${loggedInUser.id}_${today}`;
+      const cascadeKeys = getCascadeKeys(contactType);
+      const incrementPayload = {};
+      cascadeKeys.forEach(k => { incrementPayload[k] = increment(1); });
       await setDoc(doc(db, 'activity_record', docId), {
         agentId: loggedInUser.id,
         date: today,
         month: today.substring(0, 7),
-        [contactType]: increment(1),
+        ...incrementPayload,
         updatedAt: new Date().toISOString()
       }, { merge: true });
       setCompletingContact(null);
@@ -3465,6 +3732,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   return (
     <div className="max-w-4xl mx-auto space-y-6 animate-fade-in pb-12">
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除行程" message="確定要刪除這筆行程嗎？" />
+      <BatchScheduleModal isOpen={showBatchSchedule} onClose={() => setShowBatchSchedule(false)} loggedInUser={loggedInUser} team={team} />
 
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -3473,6 +3741,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         </div>
         <div className="flex flex-wrap gap-2">
           <button onClick={() => setShowRecurringManage(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Calendar size={14} /> 固定行程</button>
+          <button onClick={() => setShowBatchSchedule(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><ListPlus size={14} /> 批次新增</button>
           <button onClick={() => setShowReminderForm(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 純提醒</button>
           <button onClick={() => setShowForm(true)} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 新增行程</button>
         </div>

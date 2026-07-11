@@ -72,6 +72,7 @@ import {
   Timestamp,
   setDoc,
   getDocs,
+  getDoc,
   where,
   increment,
   arrayUnion
@@ -3419,25 +3420,51 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   }, [customers]);
 
   // 每日自動推薦聯繫名單：既有客戶池挑3、準客戶池挑7 (依最久沒聯繫優先)，不夠就互相補滿
+  // 這份名單「當天固定」，存進 Firestore 後整天不再重算，聯繫完就從畫面上消失、不會遞補新的人進來
+  const [suggestedIds, setSuggestedIds] = useState(null);
+
+  useEffect(() => {
+    if (!loggedInUser || customers.length === 0) { setSuggestedIds(null); return; }
+    let cancelled = false;
+    const suggestionRef = doc(db, 'daily_suggestions', `${loggedInUser.id}_${today}`);
+    (async () => {
+      try {
+        const snap = await getDoc(suggestionRef);
+        if (snap.exists()) {
+          if (!cancelled) setSuggestedIds(snap.data().customerIds || []);
+          return;
+        }
+        const dueIdsAtGenTime = new Set(customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today).map(c => c.id));
+        const eligible = customers.filter(c => !dueIdsAtGenTime.has(c.id));
+        const daysSinceContact = (c) => {
+          const lastVisit = (c.visitLog && c.visitLog.length) ? [...c.visitLog].sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0].date : null;
+          const refDate = lastVisit || (c.createdAt ? c.createdAt.split('T')[0] : '2000-01-01');
+          return Math.floor((new Date(today) - new Date(refDate)) / 86400000);
+        };
+        const existingPool = eligible.filter(c => c.tag === '既有客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
+        const prospectPool = eligible.filter(c => c.tag === '準客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
+        let picked = [...existingPool.slice(0, 3), ...prospectPool.slice(0, 7)];
+        if (picked.length < 10) {
+          const pickedIds = new Set(picked.map(c => c.id));
+          const remaining = eligible.filter(c => !pickedIds.has(c.id)).sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
+          picked = [...picked, ...remaining.slice(0, 10 - picked.length)];
+        }
+        const ids = picked.slice(0, 10).map(c => c.id);
+        await setDoc(suggestionRef, { customerIds: ids, createdAt: new Date().toISOString() });
+        if (!cancelled) setSuggestedIds(ids);
+      } catch (e) { console.error(e); }
+    })();
+    return () => { cancelled = true; };
+    // 只在登入者或日期變動時重新產生，不隨 customers 內容變化重算，避免整天一直遞補
+    // eslint-disable-next-line
+  }, [loggedInUser?.id, today]);
+
   const autoSuggested = useMemo(() => {
-    if (!customers.length) return [];
-    const dueIds = new Set(dueCustomers.map(c => c.id));
-    const eligible = customers.filter(c => !dueIds.has(c.id) && !isContactedToday(c));
-    const daysSinceContact = (c) => {
-      const lastVisit = (c.visitLog && c.visitLog.length) ? [...c.visitLog].sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0].date : null;
-      const refDate = lastVisit || (c.createdAt ? c.createdAt.split('T')[0] : '2000-01-01');
-      return Math.floor((new Date(today) - new Date(refDate)) / 86400000);
-    };
-    const existingPool = eligible.filter(c => c.tag === '既有客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
-    const prospectPool = eligible.filter(c => c.tag === '準客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
-    let picked = [...existingPool.slice(0, 3), ...prospectPool.slice(0, 7)];
-    if (picked.length < 10) {
-      const pickedIds = new Set(picked.map(c => c.id));
-      const remaining = eligible.filter(c => !pickedIds.has(c.id)).sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
-      picked = [...picked, ...remaining.slice(0, 10 - picked.length)];
-    }
-    return picked.slice(0, 10);
-  }, [customers, dueCustomers, today]);
+    if (!suggestedIds) return [];
+    return suggestedIds
+      .map(id => customers.find(c => c.id === id))
+      .filter(c => c && !isContactedToday(c) && !dueCustomers.some(d => d.id === c.id));
+  }, [suggestedIds, customers, dueCustomers]);
 
   // 即將到來：未來的行程 (依明天/本週/未來分組)
   const upcoming = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date > today && matchesFilter(e)).sort(sortByPriorityThenDate), [allItems, today, filterCategory, filterPriority]);
