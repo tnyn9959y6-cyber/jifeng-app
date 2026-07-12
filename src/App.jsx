@@ -35,7 +35,8 @@ import {
   Upload,
   SlidersHorizontal,
   Search,
-  GitBranch
+  GitBranch,
+  Star
 } from 'lucide-react';
 import { 
   BarChart,
@@ -2696,6 +2697,8 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
   // BFS 分層：blood 的 fromId=父母(上層) toId=子女(下層)；spouse 同層。接著把配偶合併成一個「單元」計算座標與連線
   const layout = useMemo(() => {
     if (!focusId || !customers.some(c => c.id === focusId)) return null;
+
+    // 第一步：BFS 算出每個人相對於 focus 的「輩分」(Y 軸用)
     const level = { [focusId]: 0 };
     const queue = [focusId];
     const visited = new Set([focusId]);
@@ -2719,10 +2722,11 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
       if (!byLevel[lvl]) byLevel[lvl] = [];
       byLevel[lvl].push(id);
     });
+    const sortedLevelKeys = Object.keys(byLevel).map(Number).sort((a, b) => a - b);
 
+    // 第二步：把配偶合併成「單元」(一對夫妻算一個定位單位)
     const usedInUnit = new Set();
     const unitsByLevel = {};
-    const sortedLevelKeys = Object.keys(byLevel).map(Number).sort((a, b) => a - b);
     sortedLevelKeys.forEach(lvl => {
       const ids = byLevel[lvl];
       const units = [];
@@ -2732,83 +2736,79 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
         if (spouseEdge) {
           const partner = spouseEdge.fromId === id ? spouseEdge.toId : spouseEdge.fromId;
           if (!usedInUnit.has(partner)) {
-            units.push({ key: `${id}_${partner}`, ids: [id, partner] });
+            units.push({ key: `${id}_${partner}`, ids: [id, partner], children: [], parent: null });
             usedInUnit.add(id); usedInUnit.add(partner);
             return;
           }
         }
-        units.push({ key: id, ids: [id] });
+        units.push({ key: id, ids: [id], children: [], parent: null });
         usedInUnit.add(id);
       });
       unitsByLevel[lvl] = units;
     });
 
     const unitOfPerson = {};
-    sortedLevelKeys.forEach(lvl => { unitsByLevel[lvl].forEach(u => { u.ids.forEach(id => { unitOfPerson[id] = u; }); }); });
+    const allUnits = [];
+    sortedLevelKeys.forEach(lvl => { unitsByLevel[lvl].forEach(u => { allUnits.push(u); u.ids.forEach(id => { unitOfPerson[id] = u; }); }); });
 
-    const findParentUnit = (unit) => {
-      for (const id of unit.ids) {
+    // 第三步：建立單元與單元之間的「親子」樹狀關係 (只用來計算 X 座標)
+    allUnits.forEach(u => {
+      for (const id of u.ids) {
         const parentEdge = treeEdges.find(e => e.type === 'blood' && e.toId === id);
-        if (parentEdge && unitOfPerson[parentEdge.fromId]) return unitOfPerson[parentEdge.fromId];
+        if (parentEdge) {
+          const parentUnit = unitOfPerson[parentEdge.fromId];
+          if (parentUnit && parentUnit.key !== u.key) { u.parent = parentUnit; break; }
+        }
       }
-      return null;
-    };
+    });
+    allUnits.forEach(u => { if (u.parent && !u.parent.children.includes(u)) u.parent.children.push(u); });
+    const roots = allUnits.filter(u => !u.parent);
 
-    const NODE_W = 84, COUPLE_GAP = 16, UNIT_GAP = 40, ROW_H = 130;
+    const NODE_W = 84, COUPLE_GAP = 16, SIBLING_GAP = 40, ROW_H = 130;
     const rowY = {};
     sortedLevelKeys.forEach((lvl, idx) => { rowY[lvl] = 60 + idx * ROW_H; });
+    allUnits.forEach(u => { u.ownWidth = u.ids.length === 2 ? NODE_W * 2 + COUPLE_GAP : NODE_W; });
 
-    sortedLevelKeys.forEach((lvl, idx) => {
-      const units = unitsByLevel[lvl];
-      if (idx > 0) {
-        units.sort((u1, u2) => {
-          const p1 = findParentUnit(u1), p2 = findParentUnit(u2);
-          return (p1 ? p1.x : 0) - (p2 ? p2.x : 0);
-        });
+    // 第四步 (由下往上)：每個單元的「子樹寬度」= 自己寬度 與 底下所有子孫需要的總寬度，取較大者
+    // 這一步保證每個分支都會預留剛好足夠、不互相重疊的空間，且每次資料變動都會整個重新計算，不需要手動調整
+    const computeWidth = (u) => {
+      if (u.children.length === 0) { u.subtreeWidth = u.ownWidth; return u.subtreeWidth; }
+      const childWidths = u.children.map(computeWidth);
+      const childrenSpan = childWidths.reduce((a, b) => a + b, 0) + SIBLING_GAP * (u.children.length - 1);
+      u.subtreeWidth = Math.max(u.ownWidth, childrenSpan);
+      return u.subtreeWidth;
+    };
+    roots.forEach(computeWidth);
+
+    // 第五步 (由上往下)：依照子樹寬度分配實際 X 座標，父母自動置中在子女的正上方
+    const assignX = (u, leftEdge) => {
+      u.x = leftEdge + u.subtreeWidth / 2;
+      if (u.children.length > 0) {
+        const childrenSpan = u.children.reduce((sum, c) => sum + c.subtreeWidth, 0) + SIBLING_GAP * (u.children.length - 1);
+        let cursor = leftEdge + (u.subtreeWidth - childrenSpan) / 2;
+        u.children.forEach(c => { assignX(c, cursor); cursor += c.subtreeWidth + SIBLING_GAP; });
       }
-      let cursor = 20;
-      units.forEach(u => {
-        const width = u.ids.length === 2 ? NODE_W * 2 + COUPLE_GAP : NODE_W;
-        u.x = cursor + width / 2;
-        u.width = width;
-        cursor += width + UNIT_GAP;
-      });
-    });
+    };
+    let rootCursor = 20;
+    roots.forEach(r => { assignX(r, rootCursor); rootCursor += r.subtreeWidth + SIBLING_GAP; });
 
     const personX = {};
-    sortedLevelKeys.forEach(lvl => {
-      unitsByLevel[lvl].forEach(u => {
-        if (u.ids.length === 2) {
-          personX[u.ids[0]] = u.x - (NODE_W / 2 + COUPLE_GAP / 2);
-          personX[u.ids[1]] = u.x + (NODE_W / 2 + COUPLE_GAP / 2);
-        } else {
-          personX[u.ids[0]] = u.x;
-        }
-      });
+    allUnits.forEach(u => {
+      if (u.ids.length === 2) {
+        personX[u.ids[0]] = u.x - (NODE_W / 2 + COUPLE_GAP / 2);
+        personX[u.ids[1]] = u.x + (NODE_W / 2 + COUPLE_GAP / 2);
+      } else {
+        personX[u.ids[0]] = u.x;
+      }
     });
 
-    const connectorGroups = {};
-    sortedLevelKeys.forEach(lvl => {
-      unitsByLevel[lvl].forEach(u => {
-        const parent = findParentUnit(u);
-        if (parent) {
-          if (!connectorGroups[parent.key]) connectorGroups[parent.key] = { parent, children: [] };
-          connectorGroups[parent.key].children.push(u);
-        }
-      });
-    });
-
-    const totalWidth = Math.max(...sortedLevelKeys.map(lvl => {
-      const units = unitsByLevel[lvl];
-      if (units.length === 0) return 300;
-      const last = units[units.length - 1];
-      return last.x + last.width / 2 + 20;
-    }), 300);
+    const connectorGroups = allUnits.filter(u => u.children.length > 0).map(u => ({ parent: u, children: u.children }));
+    const totalWidth = Math.max(rootCursor - SIBLING_GAP + 20, 300);
 
     return {
       level, unitsByLevel, sortedLevelKeys, rowY, personX,
-      coupleUnits: sortedLevelKeys.flatMap(lvl => unitsByLevel[lvl].filter(u => u.ids.length === 2)),
-      connectorGroups: Object.values(connectorGroups),
+      coupleUnits: allUnits.filter(u => u.ids.length === 2),
+      connectorGroups,
       totalWidth, totalHeight: 60 + sortedLevelKeys.length * ROW_H
     };
   }, [focusId, treeEdges, customers]);
@@ -2944,7 +2944,7 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
 const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relationships }) => {
   const [search, setSearch] = useState('');
   const [showFilter, setShowFilter] = useState(false);
-  const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '', vipOnly: false, igOnly: false });
+  const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '', vipOnly: false, igOnly: false, specialFocusOnly: false });
   const [editCustomer, setEditCustomer] = useState(null);
   const [isAdding, setIsAdding] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -2992,7 +2992,8 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
       const matchTag = !filters.tag || c.tag === filters.tag;
       const matchVip = !filters.vipOnly || isVIPCustomer(c, records);
       const matchIg = !filters.igOnly || isIGListCustomer(c);
-      return matchSearch && matchAgeMin && matchAgeMax && matchGender && matchRegion && matchIncome && matchTag && matchVip && matchIg;
+      const matchSpecialFocus = !filters.specialFocusOnly || c.specialFocus;
+      return matchSearch && matchAgeMin && matchAgeMax && matchGender && matchRegion && matchIncome && matchTag && matchVip && matchIg && matchSpecialFocus;
     });
   }, [customers, search, filters, records]);
 
@@ -3026,6 +3027,10 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
       }
       setForm(emptyForm);
     } catch (e) { console.error(e); } finally { setSaving(false); }
+  };
+
+  const toggleSpecialFocus = async (customer) => {
+    try { await updateDoc(doc(db, 'customers', customer.id), { specialFocus: !customer.specialFocus }); } catch (e) { console.error(e); }
   };
 
   const handleDeleteConfirm = async () => {
@@ -3188,6 +3193,9 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
               <label className="flex items-center gap-2 text-xs font-bold text-gray-600 cursor-pointer">
                 <input type="checkbox" checked={filters.igOnly} onChange={e => setFilters({ ...filters, igOnly: e.target.checked })} className="w-4 h-4" /> 只顯示有 IG 的
               </label>
+              <label className="flex items-center gap-2 text-xs font-bold text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={filters.specialFocusOnly} onChange={e => setFilters({ ...filters, specialFocusOnly: e.target.checked })} className="w-4 h-4" /> 只顯示特別關注
+              </label>
             </div>
           </div>
         )}
@@ -3216,6 +3224,9 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
           const igList = isIGListCustomer(c);
           return (
             <Card key={c.id} className={`p-5 relative group ${isFollowUpDue(c) ? 'border-amber-300 ring-1 ring-amber-100' : ''}`}>
+              <button onClick={() => toggleSpecialFocus(c)} title="特別關注" className="absolute top-4 right-4 z-10">
+                <Star size={18} className={c.specialFocus ? 'fill-amber-400 text-amber-400' : 'text-gray-200 hover:text-amber-300'} />
+              </button>
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
                   <div className="w-11 h-11 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-700 font-bold text-lg">{c.name[0]}</div>
@@ -3228,7 +3239,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                     </div>
                   </div>
                 </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition">
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition mr-6">
                   <button onClick={() => setNetworkFocusId(c.id)} title="關聯網" className="p-1.5 text-gray-400 hover:text-purple-500"><GitBranch size={15} /></button>
                   <button onClick={() => openMerge(c.id)} title="合併客戶" className="p-1.5 text-gray-400 hover:text-teal-500"><Users size={15} /></button>
                   <button onClick={() => openEdit(c)} className="p-1.5 text-gray-400 hover:text-indigo-500"><Edit3 size={15} /></button>
@@ -3896,6 +3907,12 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
     }).sort((a, b) => a.birthday.slice(5).localeCompare(b.birthday.slice(5)));
   }, [customers]);
 
+  // 本月特別關注：手動用星星標記的客戶，會一直提醒直到你自己取消標記
+  const specialFocusCustomers = useMemo(() => customers.filter(c => c.specialFocus), [customers]);
+  const handleUnstar = async (customer) => {
+    try { await updateDoc(doc(db, 'customers', customer.id), { specialFocus: false }); } catch (e) { console.error(e); }
+  };
+
   // 每日自動推薦聯繫名單：既有客戶池挑3、準客戶池挑7 (依最久沒聯繫優先)，不夠就互相補滿
   // 這份名單「當天固定」，存進 Firestore 後整天不再重算，聯繫完就從畫面上消失、不會遞補新的人進來
   useEffect(() => {
@@ -4251,6 +4268,29 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
           <button onClick={() => { setFilterCategory(''); setFilterPriority(''); }} className="text-xs font-bold text-gray-400 hover:text-gray-600 px-2">清除篩選</button>
         )}
       </Card>
+
+      {/* 本月特別關注：手動標記，持續提醒直到取消星星 */}
+      {specialFocusCustomers.length > 0 && (
+        <Card className="p-5 border-t-4 border-t-amber-400">
+          <h3 className="font-bold text-gray-800 mb-1 flex items-center gap-2 text-sm"><Star size={16} className="fill-amber-400 text-amber-400" /> 本月特別關注</h3>
+          <p className="text-[10px] text-gray-400 mb-4">在客戶管理頁面點星星標記，會一直提醒直到你自己取消</p>
+          <div className="space-y-3">
+            {specialFocusCustomers.map(c => (
+              <div key={c.id} className="flex items-center justify-between gap-3 p-3 rounded-xl border bg-amber-50 border-amber-100">
+                <div className="min-w-0">
+                  <p className="font-bold text-gray-900 text-sm truncate">{c.name} <span className="text-[10px] text-gray-400 font-normal">· {c.tag}</span></p>
+                </div>
+                <div className="flex gap-1.5 shrink-0">
+                  <button disabled={busyId === c.id} onClick={() => openContactModal(c)} className="bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
+                    {busyId === c.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 標記聯繫
+                  </button>
+                  <button onClick={() => handleUnstar(c)} title="取消特別關注" className="text-amber-400 hover:text-gray-300 p-2"><Star size={16} className="fill-current" /></button>
+                </div>
+              </div>
+            ))}
+          </div>
+        </Card>
+      )}
 
       {/* 今日焦點 */}
       <div>
