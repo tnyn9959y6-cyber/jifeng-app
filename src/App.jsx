@@ -36,7 +36,8 @@ import {
   SlidersHorizontal,
   Search,
   GitBranch,
-  Star
+  Star,
+  MapPin
 } from 'lucide-react';
 import { 
   BarChart,
@@ -177,7 +178,7 @@ const MANAGER_RANKS = ['業務主任', '新進業務主任', '業務襄理', '�
 const RECRUIT_STATUSES = ['新名單', '臨時帳號', '內考', '外考', '登錄', '優培'];
 
 // --- 客戶管理 (CRM) 設定 ---
-const CUSTOMER_TAGS = ['準客戶', '既有客戶'];
+const CUSTOMER_TAGS = ['準客戶', '既有客戶', '準增員'];
 const GENDER_OPTIONS = ['男', '女', '其他'];
 const VIP_INCOME_THRESHOLD = '200萬以上';
 const VIP_PREMIUM_THRESHOLD = 120000;
@@ -206,6 +207,14 @@ const calcAge = (birthday) => {
   const hasHadBirthdayThisYear = (today.getMonth() > b.getMonth()) || (today.getMonth() === b.getMonth() && today.getDate() >= b.getDate());
   if (!hasHadBirthdayThisYear) age -= 1;
   return age;
+};
+
+const getGoogleMapsUrl = (address) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
+const getAppleMapsUrl = (address) => `https://maps.apple.com/?q=${encodeURIComponent(address)}`;
+const getInstagramUrl = (handle) => `https://instagram.com/${encodeURIComponent(handle.replace(/^@/, ''))}`;
+const openLineChat = (lineId) => {
+  try { navigator.clipboard?.writeText(lineId); } catch (e) { /* ignore */ }
+  window.open(`https://line.me/ti/p/~${encodeURIComponent(lineId)}`, '_blank');
 };
 
 // 簡易 CSV 解析工具 (支援雙引號內含逗號，用於 Notion 匯出檔匯入)
@@ -2403,8 +2412,8 @@ const IGImportModal = ({ isOpen, onClose, loggedInUser, existingNames, onImporte
         const ref = doc(collection(db, 'customers'));
         batch.set(ref, {
           name: username,
-          phone: '', lineId: '', igHandle: username, birthday: '', gender: '', region: '', incomeRange: '',
-          tag: '準客戶',
+          phone: '', lineId: '', igHandle: username, birthday: '', gender: '', region: '', incomeRange: '', address: '',
+          tags: ['準客戶'],
           notes: '由 IG 匯入，待補充聯絡資訊',
           nextFollowUpDate: '',
           source: 'IG匯入',
@@ -2542,8 +2551,8 @@ const NotionImportModal = ({ isOpen, onClose, loggedInUser, onImported }) => {
           name: r.name,
           phone: r.phone || '',
           birthday: r.birthday || '',
-          gender: '', region: '', incomeRange: '',
-          tag: CUSTOMER_TAGS.includes(r.tag) ? r.tag : '既有客戶',
+          gender: '', region: '', incomeRange: '', address: '', lineId: '', igHandle: '',
+          tags: [CUSTOMER_TAGS.includes(r.tag) ? r.tag : '既有客戶'],
           notes: r.notes || '',
           nextFollowUpDate: '',
           source: 'Notion匯入',
@@ -2663,8 +2672,10 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
   const [addType, setAddType] = useState('spouse');
   const [addLabel, setAddLabel] = useState('');
   const [saving, setSaving] = useState(false);
+  const [editingRelId, setEditingRelId] = useState(null);
+  const [editLabel, setEditLabel] = useState('');
 
-  useEffect(() => { if (isOpen) { setShowAddForm(false); setAddCustomerId(''); setAddLabel(''); setAddType('spouse'); } }, [isOpen, focusId]);
+  useEffect(() => { if (isOpen) { setShowAddForm(false); setAddCustomerId(''); setAddLabel(''); setAddType('spouse'); setEditingRelId(null); } }, [isOpen, focusId]);
 
   const focusCustomer = customers.find(c => c.id === focusId);
 
@@ -2693,6 +2704,17 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
     });
     return map;
   }, [treeEdges, focusId]);
+
+  // 目前 focus 這個人的所有配偶/血親關係 (供編輯/刪除用列表)
+  const directConnections = useMemo(() => {
+    if (!focusId) return [];
+    return treeEdges.filter(r => r.fromId === focusId || r.toId === focusId).map(r => {
+      const otherId = r.fromId === focusId ? r.toId : r.fromId;
+      const other = customers.find(c => c.id === otherId);
+      const relDesc = r.type === 'spouse' ? '配偶' : (r.fromId === focusId ? '他是我的子女' : '他是我的父母');
+      return { id: r.id, other, label: r.label || '', relDesc };
+    }).filter(c => c.other);
+  }, [treeEdges, focusId, customers]);
 
   // BFS 分層：blood 的 fromId=父母(上層) toId=子女(下層)；spouse 同層。接著把配偶合併成一個「單元」計算座標與連線
   const layout = useMemo(() => {
@@ -2764,7 +2786,7 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
     allUnits.forEach(u => { if (u.parent && !u.parent.children.includes(u)) u.parent.children.push(u); });
     const roots = allUnits.filter(u => !u.parent);
 
-    const NODE_W = 84, COUPLE_GAP = 16, SIBLING_GAP = 40, ROW_H = 130;
+    const NODE_W = 84, COUPLE_GAP = 16, SIBLING_GAP = 40, ROW_H = 170;
     const rowY = {};
     sortedLevelKeys.forEach((lvl, idx) => { rowY[lvl] = 60 + idx * ROW_H; });
     allUnits.forEach(u => { u.ownWidth = u.ids.length === 2 ? NODE_W * 2 + COUPLE_GAP : NODE_W; });
@@ -2833,6 +2855,13 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
     try { await deleteDoc(doc(db, 'customer_relationships', relId)); } catch (e) { console.error(e); }
   };
 
+  const handleSaveRelationshipLabel = async (relId) => {
+    try {
+      await updateDoc(doc(db, 'customer_relationships', relId), { label: editLabel });
+      setEditingRelId(null);
+    } catch (e) { console.error(e); }
+  };
+
   if (!isOpen || !focusCustomer) return null;
 
   return (
@@ -2890,6 +2919,33 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
             <p className="text-center text-gray-400 text-sm">還沒有配偶或血親關聯，點下方「新增關聯」開始建立</p>
           )}
 
+          {directConnections.length > 0 && (
+            <div>
+              <p className="text-xs font-bold text-gray-400 uppercase mb-2">配偶／血親關聯（可編輯稱謂或刪除）</p>
+              <div className="space-y-2">
+                {directConnections.map(c => (
+                  <div key={c.id} className="flex items-center justify-between gap-2 bg-gray-50 px-3 py-2 rounded-lg border border-gray-100 text-xs">
+                    <button onClick={() => setFocusId(c.other.id)} className="font-bold text-gray-800 hover:text-indigo-600 shrink-0">{c.other.name}</button>
+                    <span className="text-gray-400 shrink-0">{c.relDesc}</span>
+                    {editingRelId === c.id ? (
+                      <>
+                        <input type="text" autoFocus className="flex-1 min-w-0 p-1 border border-gray-200 rounded" placeholder="稱謂（選填）" value={editLabel} onChange={e => setEditLabel(e.target.value)} />
+                        <button onClick={() => handleSaveRelationshipLabel(c.id)} className="text-indigo-600 font-bold shrink-0">儲存</button>
+                        <button onClick={() => setEditingRelId(null)} className="text-gray-300 shrink-0">取消</button>
+                      </>
+                    ) : (
+                      <>
+                        <span className="flex-1 min-w-0 truncate text-purple-600">{c.label}</span>
+                        <button onClick={() => { setEditingRelId(c.id); setEditLabel(c.label); }} className="text-gray-300 hover:text-indigo-500 shrink-0"><Edit3 size={12} /></button>
+                        <button onClick={() => handleRemove(c.id)} className="text-gray-300 hover:text-red-500 shrink-0"><X size={12} /></button>
+                      </>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
           {referralConnections.length > 0 && (
             <div>
               <p className="text-xs font-bold text-gray-400 uppercase mb-2">轉介紀錄</p>
@@ -2944,13 +3000,13 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
 const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relationships }) => {
   const [search, setSearch] = useState('');
   const [showFilter, setShowFilter] = useState(false);
-  const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '', vipOnly: false, igOnly: false, specialFocusOnly: false });
+  const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '', vipOnly: false, igOnly: false, salesWatchOnly: false, recruitWatchOnly: false });
   const [editCustomer, setEditCustomer] = useState(null);
   const [isAdding, setIsAdding] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isIGOpen, setIsIGOpen] = useState(false);
   const [isNotionOpen, setIsNotionOpen] = useState(false);
-  const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', tag: '準客戶', notes: '', nextFollowUpDate: '' };
+  const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', tags: ['準客戶'], notes: '', nextFollowUpDate: '', address: '' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const loaded = customersLoaded;
@@ -2989,11 +3045,12 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
       const matchGender = !filters.gender || c.gender === filters.gender;
       const matchRegion = !filters.region || c.region === filters.region;
       const matchIncome = !filters.incomeRange || c.incomeRange === filters.incomeRange;
-      const matchTag = !filters.tag || c.tag === filters.tag;
+      const matchTag = !filters.tag || (c.tags || []).includes(filters.tag);
       const matchVip = !filters.vipOnly || isVIPCustomer(c, records);
       const matchIg = !filters.igOnly || isIGListCustomer(c);
-      const matchSpecialFocus = !filters.specialFocusOnly || c.specialFocus;
-      return matchSearch && matchAgeMin && matchAgeMax && matchGender && matchRegion && matchIncome && matchTag && matchVip && matchIg && matchSpecialFocus;
+      const matchSalesWatch = !filters.salesWatchOnly || c.specialFocus;
+      const matchRecruitWatch = !filters.recruitWatchOnly || c.specialFocusRecruit;
+      return matchSearch && matchAgeMin && matchAgeMax && matchGender && matchRegion && matchIncome && matchTag && matchVip && matchIg && matchSalesWatch && matchRecruitWatch;
     });
   }, [customers, search, filters, records]);
 
@@ -3005,7 +3062,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   const openAdd = () => { setForm(emptyForm); setIsAdding(true); };
   const openEdit = (c) => {
     setEditCustomer(c);
-    setForm({ name: c.name, phone: c.phone || '', lineId: c.lineId || '', igHandle: c.igHandle || '', birthday: c.birthday || '', gender: c.gender || '', region: c.region || '', incomeRange: c.incomeRange || '', tag: c.tag || '準客戶', notes: c.notes || '', nextFollowUpDate: c.nextFollowUpDate || '' });
+    setForm({ name: c.name, phone: c.phone || '', lineId: c.lineId || '', igHandle: c.igHandle || '', birthday: c.birthday || '', gender: c.gender || '', region: c.region || '', incomeRange: c.incomeRange || '', tags: (c.tags && c.tags.length) ? c.tags : ['準客戶'], notes: c.notes || '', nextFollowUpDate: c.nextFollowUpDate || '', address: c.address || '' });
   };
 
   const handleSave = async () => {
@@ -3029,8 +3086,11 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
     } catch (e) { console.error(e); } finally { setSaving(false); }
   };
 
-  const toggleSpecialFocus = async (customer) => {
+  const toggleSalesWatch = async (customer) => {
     try { await updateDoc(doc(db, 'customers', customer.id), { specialFocus: !customer.specialFocus }); } catch (e) { console.error(e); }
+  };
+  const toggleRecruitWatch = async (customer) => {
+    try { await updateDoc(doc(db, 'customers', customer.id), { specialFocusRecruit: !customer.specialFocusRecruit }); } catch (e) { console.error(e); }
   };
 
   const handleDeleteConfirm = async () => {
@@ -3077,7 +3137,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
 
   useEffect(() => {
     if (mergeSource && mergeTarget) {
-      const fields = ['name', 'phone', 'lineId', 'igHandle', 'birthday', 'gender', 'region', 'incomeRange', 'tag', 'notes', 'nextFollowUpDate'];
+      const fields = ['name', 'phone', 'lineId', 'igHandle', 'birthday', 'gender', 'region', 'incomeRange', 'address', 'notes', 'nextFollowUpDate'];
       const defaults = {};
       fields.forEach(f => { defaults[f] = mergeTarget[f] || mergeSource[f] || ''; });
       setMergeChoices(defaults);
@@ -3091,9 +3151,11 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
     try {
       const combinedLog = [...(mergeTarget.visitLog || []), ...(mergeSource.visitLog || [])]
         .sort((a, b) => (a.date || '').localeCompare(b.date || ''));
+      const combinedTags = [...new Set([...(mergeTarget.tags || []), ...(mergeSource.tags || [])])];
 
       await updateDoc(doc(db, 'customers', mergeTarget.id), {
         ...mergeChoices,
+        tags: combinedTags,
         visitLog: combinedLog
       });
 
@@ -3194,7 +3256,10 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                 <input type="checkbox" checked={filters.igOnly} onChange={e => setFilters({ ...filters, igOnly: e.target.checked })} className="w-4 h-4" /> 只顯示有 IG 的
               </label>
               <label className="flex items-center gap-2 text-xs font-bold text-gray-600 cursor-pointer">
-                <input type="checkbox" checked={filters.specialFocusOnly} onChange={e => setFilters({ ...filters, specialFocusOnly: e.target.checked })} className="w-4 h-4" /> 只顯示特別關注
+                <input type="checkbox" checked={filters.salesWatchOnly} onChange={e => setFilters({ ...filters, salesWatchOnly: e.target.checked })} className="w-4 h-4" /> 只顯示關注銷售
+              </label>
+              <label className="flex items-center gap-2 text-xs font-bold text-gray-600 cursor-pointer">
+                <input type="checkbox" checked={filters.recruitWatchOnly} onChange={e => setFilters({ ...filters, recruitWatchOnly: e.target.checked })} className="w-4 h-4" /> 只顯示關注增員
               </label>
             </div>
           </div>
@@ -3224,22 +3289,28 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
           const igList = isIGListCustomer(c);
           return (
             <Card key={c.id} className={`p-5 relative group ${isFollowUpDue(c) ? 'border-amber-300 ring-1 ring-amber-100' : ''}`}>
-              <button onClick={() => toggleSpecialFocus(c)} title="特別關注" className="absolute top-4 right-4 z-10">
-                <Star size={18} className={c.specialFocus ? 'fill-amber-400 text-amber-400' : 'text-gray-200 hover:text-amber-300'} />
-              </button>
+              <div className="absolute top-4 right-4 z-10 flex gap-1">
+                <button onClick={() => toggleSalesWatch(c)} title="關注銷售">
+                  <Star size={18} className={c.specialFocus ? 'fill-amber-400 text-amber-400' : 'text-gray-200 hover:text-amber-300'} />
+                </button>
+                <button onClick={() => toggleRecruitWatch(c)} title="關注增員">
+                  <Star size={18} className={c.specialFocusRecruit ? 'fill-teal-500 text-teal-500' : 'text-gray-200 hover:text-teal-300'} />
+                </button>
+              </div>
               <div className="flex items-start justify-between mb-3">
                 <div className="flex items-center gap-3">
                   <div className="w-11 h-11 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-700 font-bold text-lg">{c.name[0]}</div>
                   <div>
                     <h4 className="font-bold text-gray-900">{c.name}</h4>
                     <div className="flex flex-wrap gap-1 mt-0.5">
-                      <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{c.tag}{age !== null ? ` · ${age}歲` : ''}</span>
+                      {(c.tags || []).map(t => <span key={t} className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{t}</span>)}
+                      {age !== null && <span className="text-[10px] bg-gray-100 text-gray-500 px-2 py-0.5 rounded-full">{age}歲</span>}
                       {vip && <span className="text-[10px] bg-amber-100 text-amber-700 px-2 py-0.5 rounded-full font-bold">VIP</span>}
                       {igList && <span className="text-[10px] bg-pink-100 text-pink-600 px-2 py-0.5 rounded-full font-bold">IG名單</span>}
                     </div>
                   </div>
                 </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition mr-6">
+                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition mr-12">
                   <button onClick={() => setNetworkFocusId(c.id)} title="關聯網" className="p-1.5 text-gray-400 hover:text-purple-500"><GitBranch size={15} /></button>
                   <button onClick={() => openMerge(c.id)} title="合併客戶" className="p-1.5 text-gray-400 hover:text-teal-500"><Users size={15} /></button>
                   <button onClick={() => openEdit(c)} className="p-1.5 text-gray-400 hover:text-indigo-500"><Edit3 size={15} /></button>
@@ -3248,10 +3319,26 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
               </div>
               <div className="space-y-1 text-xs text-gray-500">
                 {c.phone && <p className="flex items-center gap-1.5"><Phone size={12} /> {c.phone}</p>}
-                {c.lineId && <p className="flex items-center gap-1.5"><MessageSquare size={12} /> LINE: {c.lineId}</p>}
-                {c.igHandle && <p className="flex items-center gap-1.5"><Upload size={12} /> IG: {c.igHandle}</p>}
+                {c.lineId && (
+                  <button onClick={() => openLineChat(c.lineId)} className="flex items-center gap-1.5 text-emerald-600 hover:underline">
+                    <MessageSquare size={12} /> LINE: {c.lineId}
+                  </button>
+                )}
+                {c.igHandle && (
+                  <a href={getInstagramUrl(c.igHandle)} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-pink-600 hover:underline">
+                    <Upload size={12} /> IG: {c.igHandle}
+                  </a>
+                )}
                 {c.birthday && <p className="flex items-center gap-1.5"><Cake size={12} /> {c.birthday}</p>}
                 {c.region && <p>{c.region}{c.incomeRange ? ` · ${c.incomeRange}` : ''}</p>}
+                {c.address && (
+                  <div className="flex items-center gap-1.5">
+                    <MapPin size={12} className="shrink-0" />
+                    <span className="truncate">{c.address}</span>
+                    <a href={getGoogleMapsUrl(c.address)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[9px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-bold hover:bg-blue-100">Google</a>
+                    <a href={getAppleMapsUrl(c.address)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[9px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-bold hover:bg-gray-200">Apple</a>
+                  </div>
+                )}
               </div>
               {c.notes && <p className="text-xs text-gray-600 bg-gray-50 rounded-lg p-2 mt-3 flex gap-1.5"><MessageSquare size={12} className="shrink-0 mt-0.5" /> {c.notes}</p>}
               {isFollowUpDue(c) && <p className="text-[10px] font-bold text-amber-600 mt-2">⚠ 追蹤日期已到：{c.nextFollowUpDate}</p>}
@@ -3338,11 +3425,21 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                     {INCOME_RANGES.map(r => <option key={r} value={r}>{r}</option>)}
                   </select>
                 </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-500 block mb-1">標籤</label>
-                  <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.tag} onChange={e => setForm({ ...form, tag: e.target.value })}>
-                    {CUSTOMER_TAGS.map(t => <option key={t} value={t}>{t}</option>)}
-                  </select>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">地址（選填，可開啟地圖）</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} /></div>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-2">標籤（可複選）</label>
+                <div className="flex flex-wrap gap-3">
+                  {CUSTOMER_TAGS.map(t => (
+                    <label key={t} className="flex items-center gap-1.5 text-sm text-gray-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={form.tags.includes(t)}
+                        onChange={e => setForm({ ...form, tags: e.target.checked ? [...form.tags, t] : form.tags.filter(x => x !== t) })}
+                        className="w-4 h-4"
+                      /> {t}
+                    </label>
+                  ))}
                 </div>
               </div>
               <p className="text-[10px] text-gray-400">VIP 與 IG名單為系統自動判斷（年收入200萬以上或實收保費逾12萬即為VIP；填寫IG帳號即自動列為IG名單），不需手動設定。</p>
@@ -3393,8 +3490,9 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
             </div>
             {mergeTarget && mergeSource && (
               <div className="space-y-3 border-t border-gray-100 pt-4">
-                {['name', 'phone', 'lineId', 'igHandle', 'birthday', 'gender', 'region', 'incomeRange', 'tag', 'nextFollowUpDate', 'notes'].map(field => {
-                  const labelMap = { name: '姓名', phone: '電話', lineId: 'LINE ID', igHandle: 'IG帳號', birthday: '生日', gender: '性別', region: '地區', incomeRange: '年收入', tag: '標籤', nextFollowUpDate: '下次追蹤日期', notes: '備註' };
+                <p className="text-[10px] text-gray-400">標籤會自動合併兩邊的所有標籤，不需要選擇。</p>
+                {['name', 'phone', 'lineId', 'igHandle', 'birthday', 'gender', 'region', 'incomeRange', 'address', 'nextFollowUpDate', 'notes'].map(field => {
+                  const labelMap = { name: '姓名', phone: '電話', lineId: 'LINE ID', igHandle: 'IG帳號', birthday: '生日', gender: '性別', region: '地區', incomeRange: '年收入', address: '地址', nextFollowUpDate: '下次追蹤日期', notes: '備註' };
                   if (!mergeSource[field] && !mergeTarget[field]) return null;
                   return (
                     <div key={field} className="text-xs">
@@ -3797,6 +3895,117 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
   );
 };
 
+// --- 關注名單 (獨立分頁：關注銷售 + 關注增員 兩個列表) ---
+const WatchlistPage = ({ loggedInUser, customers }) => {
+  const today = getTodayDate();
+  const [busyId, setBusyId] = useState(null);
+  const [completingContact, setCompletingContact] = useState(null);
+  const [contactType, setContactType] = useState('appointment');
+  const [contactNote, setContactNote] = useState('');
+
+  const salesWatch = useMemo(() => customers.filter(c => c.specialFocus), [customers]);
+  const recruitWatch = useMemo(() => customers.filter(c => c.specialFocusRecruit), [customers]);
+
+  const openContactModal = (customer) => {
+    setCompletingContact(customer);
+    setContactType('appointment');
+    setContactNote('');
+  };
+
+  const handleConfirmContact = async () => {
+    if (!completingContact || !loggedInUser) return;
+    setBusyId(completingContact.id);
+    try {
+      await updateDoc(doc(db, 'customers', completingContact.id), {
+        visitLog: arrayUnion({ date: today, type: ALL_ACTIVITY_WEIGHTS[contactType]?.label || contactType, note: contactNote })
+      });
+      const cascadeKeys = getCascadeKeys(contactType);
+      const incrementPayload = {};
+      cascadeKeys.forEach(k => { incrementPayload[k] = increment(1); });
+      const docId = `${loggedInUser.id}_${today}`;
+      await setDoc(doc(db, 'activity_record', docId), {
+        agentId: loggedInUser.id, date: today, month: today.substring(0, 7),
+        ...incrementPayload, updatedAt: new Date().toISOString()
+      }, { merge: true });
+      setCompletingContact(null);
+    } catch (e) { console.error(e); } finally { setBusyId(null); }
+  };
+
+  const toggleSalesWatch = async (c) => { try { await updateDoc(doc(db, 'customers', c.id), { specialFocus: !c.specialFocus }); } catch (e) { console.error(e); } };
+  const toggleRecruitWatch = async (c) => { try { await updateDoc(doc(db, 'customers', c.id), { specialFocusRecruit: !c.specialFocusRecruit }); } catch (e) { console.error(e); } };
+
+  const COLOR_STYLES = {
+    amber: { row: 'bg-amber-50 border-amber-100', btn: 'bg-amber-500 hover:bg-amber-600', star: 'text-amber-400' },
+    teal: { row: 'bg-teal-50 border-teal-100', btn: 'bg-teal-500 hover:bg-teal-600', star: 'text-teal-400' }
+  };
+
+  const renderList = (list, colorKey, toggleFn) => {
+    const s = COLOR_STYLES[colorKey];
+    return (
+      <div className="space-y-3">
+        {list.length === 0 && <p className="text-center text-gray-400 text-sm py-8">還沒有標記任何人，到「客戶管理」點客戶卡片上的星星開始標記</p>}
+        {list.map(c => (
+          <div key={c.id} className={`flex items-center justify-between gap-3 p-3 rounded-xl border ${s.row}`}>
+            <div className="min-w-0">
+              <p className="font-bold text-gray-900 text-sm truncate">{c.name} <span className="text-[10px] text-gray-400 font-normal">· {(c.tags || []).join('、')}</span></p>
+              {c.phone && <p className="text-xs text-gray-400">{c.phone}</p>}
+            </div>
+            <div className="flex gap-1.5 shrink-0">
+              <button disabled={busyId === c.id} onClick={() => openContactModal(c)} className={`${s.btn} text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1`}>
+                {busyId === c.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 標記聯繫
+              </button>
+              <button onClick={() => toggleFn(c)} title="取消關注" className={`${s.star} hover:text-gray-300 p-2`}><Star size={16} className="fill-current" /></button>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  return (
+    <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
+      <div>
+        <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">關注名單</h2>
+        <p className="text-xs sm:text-sm text-gray-400 mt-1">在「客戶管理」點客戶卡片上的星星標記，會一直提醒直到你自己取消</p>
+      </div>
+      <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+        <Card className="p-5 border-t-4 border-t-amber-400">
+          <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-sm"><Star size={16} className="fill-amber-400 text-amber-400" /> 關注銷售名單 ({salesWatch.length})</h3>
+          {renderList(salesWatch, 'amber', toggleSalesWatch)}
+        </Card>
+        <Card className="p-5 border-t-4 border-t-teal-400">
+          <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-sm"><Star size={16} className="fill-teal-500 text-teal-500" /> 關注增員名單 ({recruitWatch.length})</h3>
+          {renderList(recruitWatch, 'teal', toggleRecruitWatch)}
+        </Card>
+      </div>
+
+      {completingContact && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-scale-up">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">標記已聯繫：{completingContact.name}</h3>
+              <button onClick={() => setCompletingContact(null)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">這次聯繫要算哪個 MEA 類別？</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={contactType} onChange={e => setContactType(e.target.value)}>
+                  <optgroup label="業務活動">{Object.entries(ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</optgroup>
+                  <optgroup label="增員活動">{Object.entries(RECRUIT_ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</optgroup>
+                </select>
+              </div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">備註（選填）</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={contactNote} onChange={e => setContactNote(e.target.value)} /></div>
+              <button onClick={handleConfirmContact} disabled={busyId === completingContact.id} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {busyId === completingContact.id ? <Loader2 className="animate-spin" size={16} /> : '確認'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recurringRules, records, activities }) => {
   const today = getTodayDate();
   const [busyId, setBusyId] = useState(null);
@@ -3806,7 +4015,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   const [showRecurringForm, setShowRecurringForm] = useState(false);
   const [showRecurringManage, setShowRecurringManage] = useState(false);
   const [showBatchSchedule, setShowBatchSchedule] = useState(false);
-  const emptyForm = { customerId: '', type: 'appointment', date: getTodayDate(), time: '', note: '', priority: 'normal' };
+  const emptyForm = { customerId: '', type: 'appointment', date: getTodayDate(), time: '', note: '', priority: 'normal', address: '' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [reminderTitle, setReminderTitle] = useState('');
@@ -3907,12 +4116,6 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
     }).sort((a, b) => a.birthday.slice(5).localeCompare(b.birthday.slice(5)));
   }, [customers]);
 
-  // 本月特別關注：手動用星星標記的客戶，會一直提醒直到你自己取消標記
-  const specialFocusCustomers = useMemo(() => customers.filter(c => c.specialFocus), [customers]);
-  const handleUnstar = async (customer) => {
-    try { await updateDoc(doc(db, 'customers', customer.id), { specialFocus: false }); } catch (e) { console.error(e); }
-  };
-
   // 每日自動推薦聯繫名單：既有客戶池挑3、準客戶池挑7 (依最久沒聯繫優先)，不夠就互相補滿
   // 這份名單「當天固定」，存進 Firestore 後整天不再重算，聯繫完就從畫面上消失、不會遞補新的人進來
   useEffect(() => {
@@ -3936,8 +4139,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
           const refDate = lastVisit || (c.createdAt ? c.createdAt.split('T')[0] : '2000-01-01');
           return Math.floor((new Date(today) - new Date(refDate)) / 86400000);
         };
-        const existingPool = eligible.filter(c => c.tag === '既有客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
-        const prospectPool = eligible.filter(c => c.tag === '準客戶').sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
+        const existingPool = eligible.filter(c => (c.tags || []).includes('既有客戶')).sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
+        const prospectPool = eligible.filter(c => (c.tags || []).includes('準客戶')).sort((a, b) => daysSinceContact(b) - daysSinceContact(a));
         let picked = [...existingPool.slice(0, 3), ...prospectPool.slice(0, 7)];
         if (picked.length < 10) {
           const pickedIds = new Set(picked.map(c => c.id));
@@ -4082,8 +4285,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
     }
     try {
       const ref = await addDoc(collection(db, 'customers'), {
-        name: trimmed, phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '',
-        tag: '準客戶', notes: '', nextFollowUpDate: '',
+        name: trimmed, phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', address: '',
+        tags: ['準客戶'], notes: '', nextFollowUpDate: '',
         source: '行程建立', ownerId: loggedInUser.id, visitLog: [], createdAt: new Date().toISOString()
       });
       return ref.id;
@@ -4106,6 +4309,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         date: form.date,
         time: form.time,
         note: form.note,
+        address: form.address,
         status: 'scheduled',
         completedAt: null,
         createdAt: new Date().toISOString()
@@ -4154,7 +4358,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         payload = { title: editingEvent.title, date: editingEvent.date, category: editingEvent.category, priority: editingEvent.priority };
       } else {
         const customer = customers.find(c => c.id === editingEvent.customerId);
-        payload = { type: editingEvent.type, customerId: editingEvent.customerId || '', customerName: customer ? customer.name : '', date: editingEvent.date, time: editingEvent.time, note: editingEvent.note, priority: editingEvent.priority };
+        payload = { type: editingEvent.type, customerId: editingEvent.customerId || '', customerName: customer ? customer.name : '', date: editingEvent.date, time: editingEvent.time, note: editingEvent.note, priority: editingEvent.priority, address: editingEvent.address || '' };
       }
       await updateDoc(doc(db, 'schedule_events', editingEvent.id), payload);
       setEditingEvent(null);
@@ -4269,29 +4473,6 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         )}
       </Card>
 
-      {/* 本月特別關注：手動標記，持續提醒直到取消星星 */}
-      {specialFocusCustomers.length > 0 && (
-        <Card className="p-5 border-t-4 border-t-amber-400">
-          <h3 className="font-bold text-gray-800 mb-1 flex items-center gap-2 text-sm"><Star size={16} className="fill-amber-400 text-amber-400" /> 本月特別關注</h3>
-          <p className="text-[10px] text-gray-400 mb-4">在客戶管理頁面點星星標記，會一直提醒直到你自己取消</p>
-          <div className="space-y-3">
-            {specialFocusCustomers.map(c => (
-              <div key={c.id} className="flex items-center justify-between gap-3 p-3 rounded-xl border bg-amber-50 border-amber-100">
-                <div className="min-w-0">
-                  <p className="font-bold text-gray-900 text-sm truncate">{c.name} <span className="text-[10px] text-gray-400 font-normal">· {c.tag}</span></p>
-                </div>
-                <div className="flex gap-1.5 shrink-0">
-                  <button disabled={busyId === c.id} onClick={() => openContactModal(c)} className="bg-amber-500 hover:bg-amber-600 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
-                    {busyId === c.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 標記聯繫
-                  </button>
-                  <button onClick={() => handleUnstar(c)} title="取消特別關注" className="text-amber-400 hover:text-gray-300 p-2"><Star size={16} className="fill-current" /></button>
-                </div>
-              </div>
-            ))}
-          </div>
-        </Card>
-      )}
-
       {/* 今日焦點 */}
       <div>
         <h3 className="text-sm font-bold text-gray-500 mb-3">今日焦點</h3>
@@ -4312,6 +4493,14 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                           {e.priority && e.priority !== 'normal' && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${getEventPriority(e).color} text-white`}>{getEventPriority(e).label}</span>}
                         </div>
                         <p className="text-xs text-gray-400">{e.date}{e.time && <span className="font-bold text-gray-600"> · {e.time}</span>}{e.date < today ? '（已過期）' : ''}</p>
+                        {e.address && (
+                          <div className="flex items-center gap-1.5 mt-0.5">
+                            <MapPin size={10} className="text-gray-400 shrink-0" />
+                            <span className="text-[10px] text-gray-400 truncate">{e.address}</span>
+                            <a href={getGoogleMapsUrl(e.address)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[9px] bg-blue-50 text-blue-600 px-1 py-0.5 rounded font-bold">Google</a>
+                            <a href={getAppleMapsUrl(e.address)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[9px] bg-gray-100 text-gray-600 px-1 py-0.5 rounded font-bold">Apple</a>
+                          </div>
+                        )}
                       </div>
                     </div>
                     <div className="flex gap-1.5 shrink-0">
@@ -4361,7 +4550,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                 {autoSuggested.map(c => (
                   <div key={c.id} className="flex items-center justify-between gap-3 p-3 rounded-xl border bg-teal-50 border-teal-100">
                     <div className="min-w-0">
-                      <p className="font-bold text-gray-900 text-sm truncate">{c.name} <span className="text-[10px] text-gray-400 font-normal">· {c.tag}</span></p>
+                      <p className="font-bold text-gray-900 text-sm truncate">{c.name} <span className="text-[10px] text-gray-400 font-normal">· {(c.tags || []).join('、')}</span></p>
                     </div>
                     <div className="flex gap-1.5 shrink-0">
                       <button disabled={busyId === c.id} onClick={() => openContactModal(c)} className="bg-teal-600 hover:bg-teal-700 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
@@ -4479,6 +4668,13 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                   {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                 </select>
               </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">地點（選填，可開啟地圖）</label>
+                <input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
+                {(() => { const c = customers.find(x => x.id === form.customerId); return c && c.address && form.address !== c.address ? (
+                  <button type="button" onClick={() => setForm({ ...form, address: c.address })} className="text-[10px] text-indigo-600 hover:underline mt-1">帶入 {c.name} 的地址</button>
+                ) : null; })()}
+              </div>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">備註</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-20 resize-none" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} /></div>
               <button onClick={handleAddSchedule} disabled={!form.date || saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
                 {saving ? <Loader2 className="animate-spin" size={16} /> : '新增'}
@@ -4557,6 +4753,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                     <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.date} onChange={e => setEditingEvent({ ...editingEvent, date: e.target.value })} /></div>
                     <div><label className="text-xs font-bold text-gray-500 block mb-1">時間</label><TimeSelect value={editingEvent.time || ''} onChange={(t) => setEditingEvent({ ...editingEvent, time: t })} /></div>
                   </div>
+                  <div><label className="text-xs font-bold text-gray-500 block mb-1">地點（選填）</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.address || ''} onChange={e => setEditingEvent({ ...editingEvent, address: e.target.value })} /></div>
                   <div><label className="text-xs font-bold text-gray-500 block mb-1">備註</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-16 resize-none" value={editingEvent.note || ''} onChange={e => setEditingEvent({ ...editingEvent, note: e.target.value })} /></div>
                 </>
               )}
@@ -5012,7 +5209,7 @@ const GlobalSearchModal = ({ isOpen, onClose, customers, records, scheduleEvents
                 {results.customers.map(c => (
                   <div key={c.id} className="p-2.5 bg-gray-50 rounded-lg text-sm flex justify-between">
                     <span className="font-bold text-gray-800">{c.name}</span>
-                    <span className="text-gray-400 text-xs">{c.phone || c.tag}</span>
+                    <span className="text-gray-400 text-xs">{c.phone || (c.tags || []).join('、')}</span>
                   </div>
                 ))}
               </div>
@@ -5228,7 +5425,14 @@ const App = () => {
 
     const customersQuery = query(collection(db, 'customers'), where('ownerId', '==', loggedInUser.id));
     const unsubCustomers = onSnapshot(customersQuery, (snap) => {
-      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      const list = snap.docs.map(d => {
+        const data = d.data();
+        return {
+          id: d.id,
+          ...data,
+          tags: Array.isArray(data.tags) ? data.tags : (data.tag ? [data.tag] : [])
+        };
+      });
       list.sort((a, b) => (b.createdAt || '').localeCompare(a.createdAt || ''));
       setCustomers(list);
       setCustomersLoaded(true);
@@ -5420,6 +5624,7 @@ const App = () => {
   const navItems = [
     { id: 'todo', label: '今日待辦', icon: CheckSquare, badge: todoCount },
     { id: 'customers', label: '客戶管理', icon: Phone },
+    { id: 'watchlist', label: '關注名單', icon: Star },
     { id: 'dashboard', label: '業績儀表板', icon: LayoutDashboard },
     { id: 'activity', label: 'MEA 活動量', icon: Activity },
     { id: 'entry', label: '業績回報', icon: Plus },
@@ -5504,6 +5709,7 @@ const App = () => {
       <main className="max-w-7xl mx-auto px-6 pt-8">
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} records={enrichedRecords} activities={activities} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
+        {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
         {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} />}
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} />}
