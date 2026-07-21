@@ -1042,7 +1042,9 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
     // 2. 統計選定月份的業績與商品線
     const monthRecords = records.filter(r => r.agentId === selectedAgentId && r.date.startsWith(selectedMonth));
     const totalPremium = monthRecords.reduce((sum, r) => sum + (r.premium || 0), 0);
-    const totalFYC = monthRecords.reduce((sum, r) => sum + (r.weighted || 0), 0);
+    // FYC = 實收保費 × 佣金轉換率，代表實際收入估算，不是競賽用的加權保費
+    const getCommission = (r) => (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0);
+    const totalFYC = monthRecords.reduce((sum, r) => sum + getCommission(r), 0);
 
     let rpPremium = 0, rpCases = 0, rpFYC = 0;
     let ahPremium = 0, ahCases = 0, ahFYC = 0;
@@ -1050,7 +1052,7 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
 
     monthRecords.forEach(r => {
        const p = r.premium || 0;
-       const fyc = r.weighted || 0;
+       const fyc = getCommission(r);
        if (r.typeCode === 'one_off') {
           spPremium += p; spCases += 1; spFYC += fyc;
        } else if (r.isAH) {
@@ -4194,7 +4196,30 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   // 每日自動推薦聯繫名單：頂級業務的經營節奏 —— 新名單要快速跟進、既有客戶要定期維繫、
   // 準客戶要持續推進漏斗、準增員要穩定培養組織、久未聯繫的人要喚醒關係避免流失。
   // 這份名單「當天固定」，存進 Firestore 後整天不再重算，聯繫完就從畫面上消失、不會遞補新的人進來。
-  // 另外會排除最近4天內出現過的人，確保每天推薦的對象會輪替，不會連續好幾天看到同一批人。
+  // 排除規則：① 最近7天內出現過的人，7天內不再重複推薦 ② 未來7天內已經有排定行程的人，暫時不推薦(已經在關係管理軌道上了)
+  const getUpcomingScheduleCustomerIds = () => {
+    const weekLater = new Date(today); weekLater.setDate(weekLater.getDate() + 7);
+    const weekLaterStr = dateToStr(weekLater);
+    const ids = new Set();
+    scheduleEvents.forEach(e => {
+      if (e.customerId && e.status === 'scheduled' && e.date >= today && e.date <= weekLaterStr) ids.add(e.customerId);
+    });
+    return ids;
+  };
+
+  const getRecentlyShownIds = async () => {
+    const historySnap = await getDocs(query(collection(db, 'daily_suggestions'), where('ownerId', '==', loggedInUser.id)));
+    const sevenDaysAgo = new Date(today); sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+    const shown = new Set();
+    historySnap.docs.forEach(d => {
+      const data = d.data();
+      if (data.date && data.date !== today && new Date(data.date) >= sevenDaysAgo) {
+        (data.customerIds || []).forEach(id => shown.add(id));
+      }
+    });
+    return shown;
+  };
+
   useEffect(() => {
     if (!loggedInUser || customers.length === 0) { setSuggestedIds(null); setDismissedIds([]); return; }
     let cancelled = false;
@@ -4204,33 +4229,27 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         const snap = await getDoc(suggestionRef);
         if (snap.exists()) {
           if (!cancelled) {
-            setSuggestedIds(snap.data().customerIds || []);
-            setDismissedIds(snap.data().dismissedIds || []);
+            const data = snap.data();
+            setSuggestedIds(data.displayIds || data.customerIds || []);
+            setDismissedIds(data.dismissedIds || []);
           }
           return;
         }
 
-        // 抓最近4天(不含今天)出現過的推薦名單，用來避免連續重複
-        const historySnap = await getDocs(query(collection(db, 'daily_suggestions'), where('ownerId', '==', loggedInUser.id)));
-        const fourDaysAgo = new Date(today); fourDaysAgo.setDate(fourDaysAgo.getDate() - 4);
-        const recentlyShown = new Set();
-        historySnap.docs.forEach(d => {
-          const data = d.data();
-          if (data.date && data.date !== today && new Date(data.date) >= fourDaysAgo) {
-            (data.customerIds || []).forEach(id => recentlyShown.add(id));
-          }
-        });
-
+        const recentlyShown = await getRecentlyShownIds();
         const dueIdsAtGenTime = new Set(customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today).map(c => c.id));
-        const picked = buildContactSuggestions(customers, today, new Set([...dueIdsAtGenTime, ...recentlyShown]), 15);
-        // 排除最近4天的人選不夠湊滿15人時，放寬限制再補一次 (寧可重複也要湊滿當日人數)
+        const hasUpcoming = getUpcomingScheduleCustomerIds();
+        const excludeIds = new Set([...dueIdsAtGenTime, ...recentlyShown, ...hasUpcoming]);
+        const picked = buildContactSuggestions(customers, today, excludeIds, 15);
         let ids = picked.map(c => c.id);
+        // 排除條件太嚴格湊不滿15人時，放寬「7天內出現過」的限制再補一次 (但仍然不排未來7天已有行程的人)
         if (ids.length < 15) {
-          const more = buildContactSuggestions(customers, today, new Set([...dueIdsAtGenTime, ...ids]), 15 - ids.length);
+          const relaxedExclude = new Set([...dueIdsAtGenTime, ...hasUpcoming, ...ids]);
+          const more = buildContactSuggestions(customers, today, relaxedExclude, 15 - ids.length);
           ids = [...ids, ...more.map(c => c.id)];
         }
 
-        await setDoc(suggestionRef, { ownerId: loggedInUser.id, date: today, customerIds: ids, dismissedIds: [], createdAt: new Date().toISOString() });
+        await setDoc(suggestionRef, { ownerId: loggedInUser.id, date: today, customerIds: ids, displayIds: ids, dismissedIds: [], createdAt: new Date().toISOString() });
         if (!cancelled) { setSuggestedIds(ids); setDismissedIds([]); }
       } catch (e) { console.error(e); }
     })();
@@ -4239,20 +4258,32 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
     // eslint-disable-next-line
   }, [loggedInUser?.id, today]);
 
-  // 換一批：當天有空的時候，主動再多要一批新的人選 (排除今天已經出現過的人)，用來補進今天的清單，不是取代
+  // 換一批：完全換掉目前畫面上的名單 (不是疊加)，換掉的人依然算「今天推薦過」，7天內不會再被推薦
   const [refreshingBatch, setRefreshingBatch] = useState(false);
   const handleGetMoreSuggestions = async () => {
     if (!loggedInUser || refreshingBatch) return;
     setRefreshingBatch(true);
     try {
-      const dueIdsNow = new Set(customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today).map(c => c.id));
-      const excludeIds = new Set([...dueIdsNow, ...(suggestedIds || [])]);
-      const more = buildContactSuggestions(customers, today, excludeIds, 10);
-      const newIds = more.map(c => c.id);
-      const combined = [...(suggestedIds || []), ...newIds];
       const suggestionRef = doc(db, 'daily_suggestions', `${loggedInUser.id}_${today}`);
-      await setDoc(suggestionRef, { customerIds: combined }, { merge: true });
-      setSuggestedIds(combined);
+      const snap = await getDoc(suggestionRef);
+      const existingCumulative = snap.exists() ? (snap.data().customerIds || []) : (suggestedIds || []);
+
+      const dueIdsNow = new Set(customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today).map(c => c.id));
+      const hasUpcoming = getUpcomingScheduleCustomerIds();
+      const recentlyShown = await getRecentlyShownIds();
+      const excludeIds = new Set([...dueIdsNow, ...hasUpcoming, ...recentlyShown, ...existingCumulative]);
+      let more = buildContactSuggestions(customers, today, excludeIds, 15);
+      if (more.length < 15) {
+        const relaxedExclude = new Set([...dueIdsNow, ...hasUpcoming, ...existingCumulative, ...more.map(c => c.id)]);
+        const extra = buildContactSuggestions(customers, today, relaxedExclude, 15 - more.length);
+        more = [...more, ...extra];
+      }
+
+      const newDisplayIds = more.map(c => c.id);
+      const newCumulative = [...new Set([...existingCumulative, ...newDisplayIds])];
+      await setDoc(suggestionRef, { customerIds: newCumulative, displayIds: newDisplayIds }, { merge: true });
+      setSuggestedIds(newDisplayIds);
+      setDismissedIds([]);
     } catch (e) { console.error(e); } finally { setRefreshingBatch(false); }
   };
 
@@ -4656,7 +4687,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                   {refreshingBatch ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} 換一批
                 </button>
               </div>
-              <p className="text-[10px] text-gray-400 mb-4">每天15人：最近建檔3、既有客戶3、準客戶4、準增員3、久未聯繫2，4天內不重複推薦同一人；有空時可以點「換一批」多要10人</p>
+              <p className="text-[10px] text-gray-400 mb-4">每天15人：最近建檔3、既有客戶3、準客戶4、準增員3、久未聯繫2；7天內推薦過或已有排定行程的人不會重複出現；有空時可點「換一批」整批換掉，換掉的人一樣算7天內推薦過</p>
               {autoSuggested.length === 0 && <p className="text-center text-gray-400 text-sm py-4">今天推薦的人都處理完了，點「換一批」可以再多要一些</p>}
               <div className="space-y-3">
                 {autoSuggested.map(c => (
