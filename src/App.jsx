@@ -774,6 +774,41 @@ const getCascadeKeys = (type) => {
   return SALES_FUNNEL_CHAIN.slice(0, idx + 1);
 };
 
+// 頂級業務的經營節奏：新名單要快速跟進、既有客戶要定期維繫、準客戶要持續推進漏斗、
+// 準增員要穩定培養組織、久未聯繫的人要喚醒關係避免流失。從 customers 裡挑出一批 (預設15人)，
+// excludeIds 是這次不想再挑到的人 (例如今天已經推薦過的)。
+const buildContactSuggestions = (customers, today, excludeIds, count = 15) => {
+  const eligible = customers.filter(c => !excludeIds.has(c.id));
+  const daysSinceContact = (c) => {
+    const lastVisit = (c.visitLog && c.visitLog.length) ? [...c.visitLog].sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0].date : null;
+    const refDate = lastVisit || (c.createdAt ? c.createdAt.split('T')[0] : '2000-01-01');
+    return Math.floor((new Date(today) - new Date(refDate)) / 86400000);
+  };
+  const daysSinceCreated = (c) => Math.floor((new Date(today) - new Date((c.createdAt || '2000-01-01').split('T')[0])) / 86400000);
+  const sortStalestFirst = (a, b) => daysSinceContact(b) - daysSinceContact(a);
+  const sortNewestFirst = (a, b) => daysSinceCreated(a) - daysSinceCreated(b);
+
+  const pickedIds = new Set();
+  const picked = [];
+  const takeFromPool = (filterFn, n, sortFn) => {
+    const source = eligible.filter(c => filterFn(c) && !pickedIds.has(c.id));
+    source.sort(sortFn).slice(0, n).forEach(c => { picked.push(c); pickedIds.add(c.id); });
+  };
+
+  const q = (n) => Math.max(1, Math.round(count * n / 15));
+  takeFromPool(c => daysSinceCreated(c) <= 14, q(3), sortNewestFirst);
+  takeFromPool(c => (c.tags || []).includes('既有客戶'), q(3), sortStalestFirst);
+  takeFromPool(c => (c.tags || []).includes('準客戶'), q(4), sortStalestFirst);
+  takeFromPool(c => (c.tags || []).includes('準增員'), q(3), sortStalestFirst);
+  takeFromPool(c => daysSinceContact(c) >= 90, q(2), sortStalestFirst);
+
+  if (picked.length < count) {
+    const remaining = eligible.filter(c => !pickedIds.has(c.id)).sort(sortStalestFirst);
+    remaining.slice(0, count - picked.length).forEach(c => { picked.push(c); pickedIds.add(c.id); });
+  }
+  return picked.slice(0, count);
+};
+
 // 重要x緊急 四象限優先度
 const PRIORITY_LEVELS = {
   urgent_important: { label: '重要且緊急', color: 'bg-red-500', textColor: 'text-red-600', order: 0 },
@@ -1972,7 +2007,10 @@ const RecruitmentDashboard = ({ recruits, team, user }) => {
     try {
       let updatePayload = {};
       if (partialData.dates) {
-         updatePayload.timeline = partialData.dates;
+         // Firestore 不接受 undefined 值，還沒填過的日期欄位要轉成空字串，不然整包寫入會被拒絕
+         const sanitizedDates = {};
+         Object.entries(partialData.dates).forEach(([k, v]) => { sanitizedDates[k] = v === undefined ? '' : v; });
+         updatePayload.timeline = sanitizedDates;
       }
       if (partialData.docs) {
          updatePayload.checkItem = {
@@ -4043,6 +4081,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   const [reminderTitle, setReminderTitle] = useState('');
   const [reminderDate, setReminderDate] = useState(getTodayDate());
   const [reminderTime, setReminderTime] = useState('');
+  const [reminderEndDate, setReminderEndDate] = useState('');
   const [reminderCategory, setReminderCategory] = useState('personal');
   const [reminderPriority, setReminderPriority] = useState('normal');
   const [reminderSaving, setReminderSaving] = useState(false);
@@ -4087,6 +4126,15 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
     if (pa !== pb) return pa - pb;
     return (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''));
   };
+  const sortByDateThenPriority = (a, b) => {
+    const dateCompare = (a.date + (a.time || '')).localeCompare(b.date + (b.time || ''));
+    if (dateCompare !== 0) return dateCompare;
+    return getEventPriority(a).order - getEventPriority(b).order;
+  };
+  const getWeekdayLabel = (dateStr) => {
+    const [y, m, d] = dateStr.split('-').map(Number);
+    return ['週日', '週一', '週二', '週三', '週四', '週五', '週六'][new Date(y, m - 1, d).getDay()];
+  };
 
   // --- 固定行程：計算未來60天內的虛擬場次 (未完成前不會真的建立文件) ---
   const virtualOccurrences = useMemo(() => {
@@ -4120,7 +4168,11 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   const allItems = useMemo(() => [...scheduleEvents, ...virtualOccurrences], [scheduleEvents, virtualOccurrences]);
 
   // 今日焦點：今天/過期的行程與提醒
-  const dueEvents = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date <= today && matchesFilter(e)).sort(sortByPriorityThenDate), [allItems, today, filterCategory, filterPriority]);
+  const isEventActiveToday = (e) => {
+    if (e.isReminder && e.endDate) return e.date <= today && today <= e.endDate;
+    return e.date <= today;
+  };
+  const dueEvents = useMemo(() => allItems.filter(e => e.status === 'scheduled' && isEventActiveToday(e) && matchesFilter(e)).sort(sortByPriorityThenDate), [allItems, today, filterCategory, filterPriority]);
   const isContactedToday = (c) => (c.visitLog || []).some(v => v.date === today);
   const [suggestedIds, setSuggestedIds] = useState(null);
   const [dismissedIds, setDismissedIds] = useState([]);
@@ -4170,44 +4222,14 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         });
 
         const dueIdsAtGenTime = new Set(customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today).map(c => c.id));
-        const eligible = customers.filter(c => !dueIdsAtGenTime.has(c.id));
-        const notRecentlyShown = eligible.filter(c => !recentlyShown.has(c.id));
-
-        const daysSinceContact = (c) => {
-          const lastVisit = (c.visitLog && c.visitLog.length) ? [...c.visitLog].sort((a, b) => (b.date || '').localeCompare(a.date || ''))[0].date : null;
-          const refDate = lastVisit || (c.createdAt ? c.createdAt.split('T')[0] : '2000-01-01');
-          return Math.floor((new Date(today) - new Date(refDate)) / 86400000);
-        };
-        const daysSinceCreated = (c) => Math.floor((new Date(today) - new Date((c.createdAt || '2000-01-01').split('T')[0])) / 86400000);
-        const sortStalestFirst = (a, b) => daysSinceContact(b) - daysSinceContact(a);
-        const sortNewestFirst = (a, b) => daysSinceCreated(a) - daysSinceCreated(b);
-
-        const pickedIds = new Set();
-        const picked = [];
-        // 優先從「最近4天沒被推薦過」的池子挑，不夠才回頭從全部合格名單裡補 (寧可重複也要湊滿當日人數)
-        const takeFromPool = (filterFn, count, sortFn) => {
-          const primary = notRecentlyShown.filter(c => filterFn(c) && !pickedIds.has(c.id));
-          let source = [...primary];
-          if (source.length < count) {
-            const fallback = eligible.filter(c => filterFn(c) && !pickedIds.has(c.id) && !source.some(s => s.id === c.id));
-            source = [...source, ...fallback];
-          }
-          source.sort(sortFn).slice(0, count).forEach(c => { picked.push(c); pickedIds.add(c.id); });
-        };
-
-        takeFromPool(c => daysSinceCreated(c) <= 14, 3, sortNewestFirst);                    // 最近建檔：新名單要快速跟進，越新越優先
-        takeFromPool(c => (c.tags || []).includes('既有客戶'), 3, sortStalestFirst);          // 既有客戶：定期維繫關係
-        takeFromPool(c => (c.tags || []).includes('準客戶'), 4, sortStalestFirst);            // 準客戶：持續推進銷售漏斗
-        takeFromPool(c => (c.tags || []).includes('準增員'), 3, sortStalestFirst);            // 準增員：穩定培養組織發展
-        takeFromPool(c => daysSinceContact(c) >= 90, 2, sortStalestFirst);                    // 久未聯繫：喚醒關係，避免客戶流失
-
-        // 湊不滿15人，從其餘還沒被選中的人裡面依最久沒聯繫補滿
-        if (picked.length < 15) {
-          const remaining = eligible.filter(c => !pickedIds.has(c.id)).sort(sortStalestFirst);
-          remaining.slice(0, 15 - picked.length).forEach(c => { picked.push(c); pickedIds.add(c.id); });
+        const picked = buildContactSuggestions(customers, today, new Set([...dueIdsAtGenTime, ...recentlyShown]), 15);
+        // 排除最近4天的人選不夠湊滿15人時，放寬限制再補一次 (寧可重複也要湊滿當日人數)
+        let ids = picked.map(c => c.id);
+        if (ids.length < 15) {
+          const more = buildContactSuggestions(customers, today, new Set([...dueIdsAtGenTime, ...ids]), 15 - ids.length);
+          ids = [...ids, ...more.map(c => c.id)];
         }
 
-        const ids = picked.slice(0, 15).map(c => c.id);
         await setDoc(suggestionRef, { ownerId: loggedInUser.id, date: today, customerIds: ids, dismissedIds: [], createdAt: new Date().toISOString() });
         if (!cancelled) { setSuggestedIds(ids); setDismissedIds([]); }
       } catch (e) { console.error(e); }
@@ -4216,6 +4238,23 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
     // 只在登入者或日期變動時重新產生，不隨 customers 內容變化重算，避免整天一直遞補
     // eslint-disable-next-line
   }, [loggedInUser?.id, today]);
+
+  // 換一批：當天有空的時候，主動再多要一批新的人選 (排除今天已經出現過的人)，用來補進今天的清單，不是取代
+  const [refreshingBatch, setRefreshingBatch] = useState(false);
+  const handleGetMoreSuggestions = async () => {
+    if (!loggedInUser || refreshingBatch) return;
+    setRefreshingBatch(true);
+    try {
+      const dueIdsNow = new Set(customers.filter(c => c.nextFollowUpDate && c.nextFollowUpDate <= today).map(c => c.id));
+      const excludeIds = new Set([...dueIdsNow, ...(suggestedIds || [])]);
+      const more = buildContactSuggestions(customers, today, excludeIds, 10);
+      const newIds = more.map(c => c.id);
+      const combined = [...(suggestedIds || []), ...newIds];
+      const suggestionRef = doc(db, 'daily_suggestions', `${loggedInUser.id}_${today}`);
+      await setDoc(suggestionRef, { customerIds: combined }, { merge: true });
+      setSuggestedIds(combined);
+    } catch (e) { console.error(e); } finally { setRefreshingBatch(false); }
+  };
 
   // 關閉：今天先不處理這個人，明天會重新出現(不是永久移除，只是今天不再提醒)
   const handleDismissToday = async (customerId) => {
@@ -4235,7 +4274,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   }, [suggestedIds, customers, dueCustomers, dismissedIds]);
 
   // 即將到來：未來的行程 (依明天/本週/未來分組)
-  const upcoming = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date > today && matchesFilter(e)).sort(sortByPriorityThenDate), [allItems, today, filterCategory, filterPriority]);
+  const upcoming = useMemo(() => allItems.filter(e => e.status === 'scheduled' && e.date > today && matchesFilter(e)).sort(sortByDateThenPriority), [allItems, today, filterCategory, filterPriority]);
 
   const groupLabel = (dateStr) => {
     const tmr = new Date(); tmr.setDate(tmr.getDate() + 1);
@@ -4394,6 +4433,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         category: reminderCategory,
         priority: reminderPriority,
         date: reminderDate,
+        endDate: reminderEndDate || '',
         time: reminderTime,
         note: '',
         status: 'scheduled',
@@ -4403,6 +4443,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
       setReminderTitle('');
       setReminderDate(getTodayDate());
       setReminderTime('');
+      setReminderEndDate('');
       setReminderCategory('personal');
       setReminderPriority('normal');
       setShowReminderForm(false);
@@ -4417,7 +4458,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
     try {
       let payload;
       if (editingEvent.isReminder) {
-        payload = { title: editingEvent.title, date: editingEvent.date, category: editingEvent.category, priority: editingEvent.priority };
+        payload = { title: editingEvent.title, date: editingEvent.date, endDate: editingEvent.endDate || '', time: editingEvent.time || '', category: editingEvent.category, priority: editingEvent.priority };
       } else {
         const customer = customers.find(c => c.id === editingEvent.customerId);
         payload = { type: editingEvent.type, customerId: editingEvent.customerId || '', customerName: customer ? customer.name : '', date: editingEvent.date, time: editingEvent.time, endTime: editingEvent.endTime || '', note: editingEvent.note, priority: editingEvent.priority, address: editingEvent.address || '' };
@@ -4545,8 +4586,10 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
             <Card className="p-5">
               <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-sm"><Clock size={16} className="text-indigo-500" /> 待完成行程與提醒</h4>
               <div className="space-y-3">
-                {dueEvents.map(e => (
-                  <div key={e.id} className={`flex items-center justify-between gap-3 p-3 rounded-xl border ${e.date < today ? 'bg-red-50 border-red-100' : 'bg-gray-50 border-gray-100'}`}>
+                {dueEvents.map(e => {
+                  const isOverdue = e.date < today && !(e.isReminder && e.endDate && today <= e.endDate);
+                  return (
+                  <div key={e.id} className={`flex items-center justify-between gap-3 p-3 rounded-xl border ${isOverdue ? 'bg-red-50 border-red-100' : 'bg-gray-50 border-gray-100'}`}>
                     <div className="min-w-0 flex items-center gap-2">
                       <span className={`w-2 h-2 rounded-full shrink-0 ${getEventColor(e)}`}></span>
                       <div className="min-w-0">
@@ -4554,7 +4597,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                           <p className="font-bold text-gray-900 text-sm truncate">{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</p>
                           {e.priority && e.priority !== 'normal' && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${getEventPriority(e).color} text-white`}>{getEventPriority(e).label}</span>}
                         </div>
-                        <p className="text-xs text-gray-400">{e.date}{e.time && <span className="font-bold text-gray-600"> · {e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}{e.date < today ? '（已過期）' : ''}</p>
+                        <p className="text-xs text-gray-400">{e.date}{e.isReminder && e.endDate ? ` ~ ${e.endDate}` : ''}{e.time && <span className="font-bold text-gray-600"> · {e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}{isOverdue ? '（已過期）' : ''}</p>
                         {e.address && (
                           <div className="flex items-center gap-1.5 mt-0.5">
                             <MapPin size={10} className="text-gray-400 shrink-0" />
@@ -4577,7 +4620,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                       )}
                     </div>
                   </div>
-                ))}
+                  );
+                })}
               </div>
             </Card>
           )}
@@ -4604,10 +4648,16 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
             </Card>
           )}
 
-          {autoSuggested.length > 0 && (
+          {suggestedIds !== null && (
             <Card className="p-5">
-              <h4 className="font-bold text-gray-800 mb-1 flex items-center gap-2 text-sm"><Users size={16} className="text-teal-500" /> 今日推薦聯繫</h4>
-              <p className="text-[10px] text-gray-400 mb-4">每天15人：最近建檔3、既有客戶3、準客戶4、準增員3、久未聯繫2，4天內不重複推薦同一人</p>
+              <div className="flex items-center justify-between mb-1">
+                <h4 className="font-bold text-gray-800 flex items-center gap-2 text-sm"><Users size={16} className="text-teal-500" /> 今日推薦聯繫</h4>
+                <button onClick={handleGetMoreSuggestions} disabled={refreshingBatch} className="flex items-center gap-1 text-xs font-bold text-teal-600 hover:text-teal-700 disabled:opacity-50">
+                  {refreshingBatch ? <Loader2 size={12} className="animate-spin" /> : <Plus size={12} />} 換一批
+                </button>
+              </div>
+              <p className="text-[10px] text-gray-400 mb-4">每天15人：最近建檔3、既有客戶3、準客戶4、準增員3、久未聯繫2，4天內不重複推薦同一人；有空時可以點「換一批」多要10人</p>
+              {autoSuggested.length === 0 && <p className="text-center text-gray-400 text-sm py-4">今天推薦的人都處理完了，點「換一批」可以再多要一些</p>}
               <div className="space-y-3">
                 {autoSuggested.map(c => (
                   <div key={c.id} className="flex items-center justify-between gap-3 p-3 rounded-xl border bg-teal-50 border-teal-100">
@@ -4660,7 +4710,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                           {e.customerName && <span className="text-xs text-gray-400">· {e.customerName}</span>}
                           {e.priority && e.priority !== 'normal' && <span className={`text-[9px] font-bold px-1.5 py-0.5 rounded ${getEventPriority(e).color} text-white`}>{getEventPriority(e).label}</span>}
                         </div>
-                        <p className="text-xs text-gray-400 mt-1">{e.date}{e.time && <span className="font-bold text-gray-600"> · {e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}{e.note ? ` · ${e.note}` : ''}</p>
+                        <p className="text-xs text-gray-400 mt-1">{e.date}（{getWeekdayLabel(e.date)}）{e.time && <span className="font-bold text-gray-600"> · {e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}{e.note ? ` · ${e.note}` : ''}</p>
                       </div>
                       <div className="flex gap-1.5 shrink-0">
                         <button disabled={busyId === e.id} onClick={() => handleCompleteEvent(e)} className="bg-emerald-500 hover:bg-emerald-600 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
@@ -4760,6 +4810,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
               <div><label className="text-xs font-bold text-gray-500 block mb-1">提醒內容</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" placeholder="例如：交報表給總公司" value={reminderTitle} onChange={e => setReminderTitle(e.target.value)} /></div>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderDate} onChange={e => setReminderDate(e.target.value)} /></div>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">時間（選填）</label><TimeSelect value={reminderTime} onChange={setReminderTime} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填，多天的事情例如出差可以填，會整段期間都提醒）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderEndDate} onChange={e => setReminderEndDate(e.target.value)} /></div>
               <div>
                 <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
                 <select className="w-full p-2 border border-gray-200 rounded-lg" value={reminderCategory} onChange={e => setReminderCategory(e.target.value)}>
@@ -4793,6 +4844,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                 <>
                   <div><label className="text-xs font-bold text-gray-500 block mb-1">提醒內容</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.title} onChange={e => setEditingEvent({ ...editingEvent, title: e.target.value })} /></div>
                   <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.date} onChange={e => setEditingEvent({ ...editingEvent, date: e.target.value })} /></div>
+                  <div><label className="text-xs font-bold text-gray-500 block mb-1">時間（選填）</label><TimeSelect value={editingEvent.time || ''} onChange={(t) => setEditingEvent({ ...editingEvent, time: t })} /></div>
+                  <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填，多天的事情可以填）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.endDate || ''} onChange={e => setEditingEvent({ ...editingEvent, endDate: e.target.value })} /></div>
                   <div>
                     <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
                     <select className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.category} onChange={e => setEditingEvent({ ...editingEvent, category: e.target.value })}>
