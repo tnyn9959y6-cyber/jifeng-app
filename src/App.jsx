@@ -2109,7 +2109,7 @@ const RecruitmentDashboard = ({ recruits, team, user }) => {
                               {recruit.isPromoted ? (
                                 <span className="text-xs text-gray-400">{recruit.dates?.[d.key] || '-'}</span>
                               ) : (
-                                <DateSelect value={recruit.dates?.[d.key] || ''} onChange={(val) => {
+                                <DateSelect yearsBack={3} yearsForward={3} value={recruit.dates?.[d.key] || ''} onChange={(val) => {
                                   const currentDates = recruit.dates || {};
                                   updateRecruit(recruit.id, { dates: { ...currentDates, [d.key]: val } });
                                 }}/>
@@ -3452,7 +3452,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
               <div><label className="text-xs font-bold text-gray-500 block mb-1">姓名 *</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.name} onChange={e => setForm({ ...form, name: e.target.value })} /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">電話</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.phone} onChange={e => setForm({ ...form, phone: e.target.value })} /></div>
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">生日</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={form.birthday} onChange={e => setForm({ ...form, birthday: e.target.value })} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">生日</label><DateSelect yearsBack={100} yearsForward={0} value={form.birthday} onChange={(val) => setForm({ ...form, birthday: val })} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">LINE ID</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.lineId} onChange={e => setForm({ ...form, lineId: e.target.value })} /></div>
@@ -3586,13 +3586,14 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
 
 
 // --- 日期選擇器 (年/月/日下拉選單，避免原生 date input 在部分版面點不動的問題) ---
-const DateSelect = ({ value, onChange, yearRange = 3 }) => {
+const DateSelect = ({ value, onChange, yearsBack = 3, yearsForward = 3, descending = false }) => {
   const initial = (value || '').split('-');
   const [y, setY] = useState(initial[0] || '');
   const [m, setM] = useState(initial[1] || '');
   const [d, setD] = useState(initial[2] || '');
   const currentYear = new Date().getFullYear();
-  const years = Array.from({ length: yearRange * 2 + 1 }, (_, i) => currentYear - yearRange + i);
+  let years = Array.from({ length: yearsBack + yearsForward + 1 }, (_, i) => currentYear - yearsBack + i);
+  if (descending) years = [...years].reverse();
   const months = Array.from({ length: 12 }, (_, i) => String(i + 1).padStart(2, '0'));
   const days = Array.from({ length: 31 }, (_, i) => String(i + 1).padStart(2, '0'));
 
@@ -4068,7 +4069,125 @@ const WatchlistPage = ({ loggedInUser, customers }) => {
   );
 };
 
-const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recurringRules, records, activities }) => {
+// --- 一日時間軸視圖 (取代純文字清單，用空間位置表現時間長短，有質感的行事曆感) ---
+const toMinutes = (t) => { const [h, m] = t.split(':').map(Number); return h * 60 + m; };
+
+const layoutDayEvents = (events) => {
+  const withTimes = events.filter(e => e.time).map(e => {
+    const startMin = toMinutes(e.time);
+    const endMin = e.endTime ? toMinutes(e.endTime) : startMin + 40;
+    return { ...e, startMin, endMin: Math.max(endMin, startMin + 25) };
+  }).sort((a, b) => a.startMin - b.startMin);
+
+  // 把互相重疊的行程分成同一群
+  let clusters = withTimes.map(e => [e]);
+  let merged = true;
+  while (merged) {
+    merged = false;
+    outer: for (let i = 0; i < clusters.length; i++) {
+      for (let j = i + 1; j < clusters.length; j++) {
+        if (clusters[i].some(a => clusters[j].some(b => a.startMin < b.endMin && b.startMin < a.endMin))) {
+          clusters[i] = [...clusters[i], ...clusters[j]];
+          clusters.splice(j, 1);
+          merged = true;
+          break outer;
+        }
+      }
+    }
+  }
+
+  const positioned = [];
+  clusters.forEach(cluster => {
+    const sorted = [...cluster].sort((a, b) => a.startMin - b.startMin);
+    const laneEnds = [];
+    const clusterPositioned = [];
+    sorted.forEach(e => {
+      let lane = laneEnds.findIndex(end => end <= e.startMin);
+      if (lane === -1) { lane = laneEnds.length; laneEnds.push(e.endMin); }
+      else laneEnds[lane] = e.endMin;
+      clusterPositioned.push({ ...e, lane });
+    });
+    clusterPositioned.forEach(p => positioned.push({ ...p, totalLanes: laneEnds.length }));
+  });
+  return positioned;
+};
+
+const DayTimelineView = ({ events, isToday, onEventClick, getEventLabel, getEventPriority }) => {
+  const HOUR_H = 56;
+  const timed = events.filter(e => e.time);
+  const untimed = events.filter(e => !e.time);
+
+  let startHour = 8, endHour = 20;
+  timed.forEach(e => {
+    const sh = Math.floor(toMinutes(e.time) / 60);
+    const eh = Math.ceil((e.endTime ? toMinutes(e.endTime) : toMinutes(e.time) + 40) / 60);
+    startHour = Math.min(startHour, sh);
+    endHour = Math.max(endHour, eh);
+  });
+
+  const positioned = layoutDayEvents(events);
+  const totalHeight = (endHour - startHour) * HOUR_H;
+  const hours = Array.from({ length: endHour - startHour + 1 }, (_, i) => startHour + i);
+
+  const now = new Date();
+  const nowMin = now.getHours() * 60 + now.getMinutes();
+  const showNowLine = isToday && nowMin >= startHour * 60 && nowMin <= endHour * 60;
+  const nowY = ((nowMin - startHour * 60) / 60) * HOUR_H;
+
+  return (
+    <div>
+      {untimed.length > 0 && (
+        <div className="flex flex-wrap gap-1.5 mb-3">
+          {untimed.map(e => (
+            <button key={e.id} onClick={() => onEventClick(e)} className="flex items-center gap-1.5 bg-gray-50 hover:bg-gray-100 border border-gray-200 rounded-full pl-1.5 pr-2.5 py-1 transition">
+              <span className={`w-1.5 h-1.5 rounded-full ${getEventColor(e)}`}></span>
+              <span className="text-[11px] font-bold text-gray-700">{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</span>
+            </button>
+          ))}
+        </div>
+      )}
+      <div className="relative" style={{ display: 'grid', gridTemplateColumns: '42px 1fr' }}>
+        <div style={{ height: totalHeight }} className="relative">
+          {hours.map((h, i) => (
+            <div key={h} style={{ position: 'absolute', top: i * HOUR_H - 6, right: 6 }} className="text-[10px] text-gray-400">
+              {String(h).padStart(2, '0')}:00
+            </div>
+          ))}
+        </div>
+        <div className="relative border-l border-gray-100" style={{ height: totalHeight }}>
+          {hours.map((h, i) => (
+            <div key={h} style={{ position: 'absolute', top: i * HOUR_H, left: 0, right: 0, borderTop: '1px solid #F3F4F6' }}></div>
+          ))}
+          {showNowLine && (
+            <div style={{ position: 'absolute', top: nowY, left: 0, right: 0, zIndex: 20 }} className="flex items-center">
+              <div className="w-1.5 h-1.5 rounded-full bg-red-500 -ml-0.75"></div>
+              <div className="flex-1 h-px bg-red-400"></div>
+            </div>
+          )}
+          {positioned.map(e => {
+            const top = ((e.startMin - startHour * 60) / 60) * HOUR_H;
+            const height = ((e.endMin - e.startMin) / 60) * HOUR_H;
+            const widthPct = 100 / e.totalLanes;
+            const leftPct = e.lane * widthPct;
+            return (
+              <button
+                key={e.id}
+                onClick={() => onEventClick(e)}
+                style={{ position: 'absolute', top: top + 1, height: height - 2, left: `calc(${leftPct}% + 3px)`, width: `calc(${widthPct}% - 6px)` }}
+                className={`${getEventColor(e)} rounded-lg text-left px-2 py-1 overflow-hidden hover:brightness-95 transition shadow-sm`}
+              >
+                <p className="text-white text-[11px] font-bold leading-tight truncate">{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</p>
+                {height > 32 && <p className="text-white/80 text-[10px] leading-tight">{e.time}{e.endTime ? `-${e.endTime}` : ''}</p>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recurringRules, records, activities, teamScheduleEvents, isTeamScheduleViewer }) => {
   const today = getTodayDate();
   const [busyId, setBusyId] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -4105,6 +4224,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
 
   // 分類/優先度篩選
   const [filterCategory, setFilterCategory] = useState('');
+  const [viewMode, setViewMode] = useState('timeline');
   const [filterPriority, setFilterPriority] = useState('');
   const getEventCategory = (e) => {
     if (e.isReminder) return e.category || 'other';
@@ -4334,6 +4454,32 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
     return groups;
   }, [upcoming]);
   const groupOrder = ['明天', '本週', '未來'];
+
+  // 時間軸模式用：依實際日期分組 (只顯示最近14天，避免時間軸拉太長)
+  const groupedByDate = useMemo(() => {
+    const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() + 14);
+    const cutoffStr = dateToStr(cutoff);
+    const byDate = {};
+    upcoming.filter(e => e.date <= cutoffStr).forEach(e => {
+      if (!byDate[e.date]) byDate[e.date] = [];
+      byDate[e.date].push(e);
+    });
+    return Object.entries(byDate).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [upcoming, today]);
+
+  // 團隊行程總覽 (主管視角)：全體同仁未來14天的行程，依日期分組
+  const teamGroupedByDate = useMemo(() => {
+    if (!isTeamScheduleViewer) return [];
+    const cutoff = new Date(today); cutoff.setDate(cutoff.getDate() + 14);
+    const cutoffStr = dateToStr(cutoff);
+    const byDate = {};
+    (teamScheduleEvents || []).filter(e => e.status === 'scheduled' && e.date >= today && e.date <= cutoffStr).forEach(e => {
+      if (!byDate[e.date]) byDate[e.date] = [];
+      const owner = (team || []).find(m => m.id === e.ownerId);
+      byDate[e.date].push({ ...e, ownerName: owner ? owner.name : '未知同仁' });
+    });
+    return Object.entries(byDate).sort((a, b) => a[0].localeCompare(b[0]));
+  }, [teamScheduleEvents, team, isTeamScheduleViewer, today]);
 
   const completedRecent = useMemo(() => [...scheduleEvents].filter(e => e.status === 'completed').sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || '')).slice(0, 15), [scheduleEvents]);
 
@@ -4605,6 +4751,10 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         {(filterCategory || filterPriority) && (
           <button onClick={() => { setFilterCategory(''); setFilterPriority(''); }} className="text-xs font-bold text-gray-400 hover:text-gray-600 px-2">清除篩選</button>
         )}
+        <div className="ml-auto flex gap-1 bg-gray-100 p-0.5 rounded-lg">
+          <button onClick={() => setViewMode('timeline')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${viewMode === 'timeline' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>時間軸</button>
+          <button onClick={() => setViewMode('list')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${viewMode === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>清單</button>
+        </div>
       </Card>
 
       {/* 今日焦點 */}
@@ -4616,6 +4766,9 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
           {dueEvents.length > 0 && (
             <Card className="p-5">
               <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-sm"><Clock size={16} className="text-indigo-500" /> 待完成行程與提醒</h4>
+              {viewMode === 'timeline' ? (
+                <DayTimelineView events={dueEvents} isToday={true} onEventClick={handleCompleteEvent} getEventLabel={getEventLabel} getEventPriority={getEventPriority} />
+              ) : (
               <div className="space-y-3">
                 {dueEvents.map(e => {
                   const isOverdue = e.date < today && !(e.isReminder && e.endDate && today <= e.endDate);
@@ -4654,6 +4807,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                   );
                 })}
               </div>
+              )}
             </Card>
           )}
 
@@ -4727,6 +4881,16 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
       {upcoming.length > 0 && (
         <div>
           <h3 className="text-sm font-bold text-gray-500 mb-3">即將到來</h3>
+          {viewMode === 'timeline' ? (
+            <div className="space-y-4">
+              {groupedByDate.map(([date, events]) => (
+                <Card key={date} className="p-5">
+                  <h4 className="text-xs font-bold text-gray-500 mb-3">{date}（{getWeekdayLabel(date)}）</h4>
+                  <DayTimelineView events={events} isToday={false} onEventClick={openEditEvent} getEventLabel={getEventLabel} getEventPriority={getEventPriority} />
+                </Card>
+              ))}
+            </div>
+          ) : (
           <div className="space-y-4">
             {groupOrder.map(label => grouped[label] && grouped[label].length > 0 && (
               <div key={label}>
@@ -4758,6 +4922,30 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                   ))}
                 </div>
               </div>
+            ))}
+          </div>
+          )}
+        </div>
+      )}
+
+      {isTeamScheduleViewer && teamGroupedByDate.length > 0 && (
+        <div>
+          <h3 className="text-sm font-bold text-gray-500 mb-3 flex items-center gap-1.5"><Users size={14} /> 團隊行程總覽（未來14天）</h3>
+          <div className="space-y-3">
+            {teamGroupedByDate.map(([date, events]) => (
+              <Card key={date} className="p-4">
+                <h4 className="text-xs font-bold text-gray-500 mb-2">{date}（{getWeekdayLabel(date)}）</h4>
+                <div className="space-y-1.5">
+                  {events.sort((a, b) => (a.time || '').localeCompare(b.time || '')).map(e => (
+                    <div key={e.id} className="flex items-center gap-2 text-xs">
+                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getEventColor(e)}`}></span>
+                      <span className="font-bold text-gray-700 shrink-0">{e.ownerName}</span>
+                      <span className="text-gray-400">{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</span>
+                      {e.time && <span className="text-gray-400 ml-auto shrink-0">{e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}
+                    </div>
+                  ))}
+                </div>
+              </Card>
             ))}
           </div>
         </div>
@@ -5529,6 +5717,7 @@ const App = () => {
   const [customersLoaded, setCustomersLoaded] = useState(false);
   const [scheduleEvents, setScheduleEvents] = useState([]);
   const [recurringRules, setRecurringRules] = useState([]);
+  const [teamScheduleEvents, setTeamScheduleEvents] = useState([]);
 
   useEffect(() => {
     const initAuth = async () => { await signInAnonymously(auth); };
@@ -5567,6 +5756,16 @@ const App = () => {
     });
     return () => unsubRecurring();
   }, [user]);
+
+  // 主管視角 (第一階段，先只開放給吳政翰)：讀取全體同仁的行程，用來顯示「團隊行程總覽」
+  const isTeamScheduleViewer = loggedInUser?.name === '吳政翰';
+  useEffect(() => {
+    if (!user || !isTeamScheduleViewer) { setTeamScheduleEvents([]); return; }
+    const unsubTeamSchedule = onSnapshot(collection(db, 'schedule_events'), (snap) => {
+      setTeamScheduleEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsubTeamSchedule();
+  }, [user, isTeamScheduleViewer]);
 
   // 客戶資料與行程：只讀取「目前登入者自己」擁有的資料，做到隱私區隔
   useEffect(() => {
@@ -5856,7 +6055,7 @@ const App = () => {
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
 
       <main className="max-w-7xl mx-auto px-6 pt-8">
-        {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} records={enrichedRecords} activities={activities} />}
+        {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} records={enrichedRecords} activities={activities} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
