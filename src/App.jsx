@@ -38,7 +38,9 @@ import {
   GitBranch,
   Star,
   MapPin,
-  Trophy
+  Trophy,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 import { 
   BarChart,
@@ -4073,30 +4075,28 @@ const computeBingoCard = (card, tasks, agentId, monthKey, ctx) => {
 };
 
 // --- 區運作 BINGO 挑戰賽頁面 ---
-const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits }) => {
-  const monthKey = getCurrentMonth();
-  const [myCard, setMyCard] = useState(null);
+const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits, isManagerViewer }) => {
+  const [selectedMonth, setSelectedMonth] = useState(getCurrentMonth());
   const [allCards, setAllCards] = useState([]);
   const [igLogs, setIgLogs] = useState([]);
-  const [viewAgentId, setViewAgentId] = useState(null);
+  const [editTargetId, setEditTargetId] = useState(loggedInUser?.id || null);
   const [saving, setSaving] = useState(false);
   const [newIgCount, setNewIgCount] = useState('');
+  const [newIgDate, setNewIgDate] = useState(getTodayDate());
+  const [newIgAgentId, setNewIgAgentId] = useState(loggedInUser?.id || '');
+
+  const shiftMonth = (delta) => {
+    const [y, m] = selectedMonth.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    setSelectedMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  };
 
   useEffect(() => {
-    if (!loggedInUser) return;
-    const ref = doc(db, 'bingo_cards', `${loggedInUser.id}_${monthKey}`);
-    const unsub = onSnapshot(ref, (snap) => {
-      setMyCard(snap.exists() ? snap.data() : { selectedTaskIds: [], manualCounts: {}, manualChecks: {} });
-    });
-    return () => unsub();
-  }, [loggedInUser, monthKey]);
-
-  useEffect(() => {
-    const unsub = onSnapshot(query(collection(db, 'bingo_cards'), where('monthKey', '==', monthKey)), (snap) => {
+    const unsub = onSnapshot(query(collection(db, 'bingo_cards'), where('monthKey', '==', selectedMonth)), (snap) => {
       setAllCards(snap.docs.map(d => ({ id: d.id, ...d.data() })));
     });
     return () => unsub();
-  }, [monthKey]);
+  }, [selectedMonth]);
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'ig_follower_logs'), (snap) => {
@@ -4110,50 +4110,50 @@ const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits 
   const leaderboard = useMemo(() => {
     return team.map(member => {
       const card = allCards.find(c => c.agentId === member.id) || { selectedTaskIds: [] };
-      const result = computeBingoCard(card, DEFAULT_BINGO_TASKS, member.id, monthKey, ctx);
+      const result = computeBingoCard(card, DEFAULT_BINGO_TASKS, member.id, selectedMonth, ctx);
       return { member, card, ...result };
     }).sort((a, b) => b.totalScore - a.totalScore);
-  }, [team, allCards, records, activities, recruits, igLogs, monthKey]);
+  }, [team, allCards, records, activities, recruits, igLogs, selectedMonth]);
 
-  const myResult = useMemo(() => computeBingoCard(myCard, DEFAULT_BINGO_TASKS, loggedInUser?.id, monthKey, ctx), [myCard, records, activities, recruits, igLogs, loggedInUser, monthKey]);
+  const canEditTarget = editTargetId === loggedInUser?.id || isManagerViewer;
+  const editTargetMember = team.find(m => m.id === editTargetId);
+  const editingCard = allCards.find(c => c.agentId === editTargetId) || { selectedTaskIds: [], manualCounts: {}, manualChecks: {} };
+  const editingResult = useMemo(() => computeBingoCard(editingCard, DEFAULT_BINGO_TASKS, editTargetId, selectedMonth, ctx), [editingCard, records, activities, recruits, igLogs, editTargetId, selectedMonth]);
 
-  const toggleTaskInGrid = async (taskId) => {
-    if (!loggedInUser || !myCard) return;
-    const current = myCard.selectedTaskIds || [];
-    let next;
-    if (current.includes(taskId)) {
-      next = current.filter(id => id !== taskId);
-    } else {
-      if (current.length >= 9) return;
-      next = [...current, taskId];
-    }
+  const saveCard = async (payload) => {
+    if (!editTargetId || !canEditTarget) return;
     setSaving(true);
     try {
-      await setDoc(doc(db, 'bingo_cards', `${loggedInUser.id}_${monthKey}`), { agentId: loggedInUser.id, monthKey, selectedTaskIds: next, manualCounts: myCard.manualCounts || {}, manualChecks: myCard.manualChecks || {} }, { merge: true });
+      await setDoc(doc(db, 'bingo_cards', `${editTargetId}_${selectedMonth}`), { agentId: editTargetId, monthKey: selectedMonth, ...payload }, { merge: true });
     } catch (e) { console.error(e); } finally { setSaving(false); }
   };
 
+  const toggleTaskInGrid = async (taskId) => {
+    const current = editingCard.selectedTaskIds || [];
+    let next;
+    if (current.includes(taskId)) next = current.filter(id => id !== taskId);
+    else { if (current.length >= 9) return; next = [...current, taskId]; }
+    await saveCard({ selectedTaskIds: next, manualCounts: editingCard.manualCounts || {}, manualChecks: editingCard.manualChecks || {} });
+  };
+
   const updateManualCount = async (taskId, value) => {
-    if (!loggedInUser) return;
-    const newCounts = { ...(myCard?.manualCounts || {}), [taskId]: Number(value) || 0 };
-    try { await setDoc(doc(db, 'bingo_cards', `${loggedInUser.id}_${monthKey}`), { manualCounts: newCounts }, { merge: true }); } catch (e) { console.error(e); }
+    const newCounts = { ...(editingCard.manualCounts || {}), [taskId]: Number(value) || 0 };
+    await saveCard({ manualCounts: newCounts });
   };
 
   const toggleManualCheck = async (taskId) => {
-    if (!loggedInUser) return;
-    const newChecks = { ...(myCard?.manualChecks || {}), [taskId]: !(myCard?.manualChecks?.[taskId]) };
-    try { await setDoc(doc(db, 'bingo_cards', `${loggedInUser.id}_${monthKey}`), { manualChecks: newChecks }, { merge: true }); } catch (e) { console.error(e); }
+    const newChecks = { ...(editingCard.manualChecks || {}), [taskId]: !(editingCard.manualChecks?.[taskId]) };
+    await saveCard({ manualChecks: newChecks });
   };
 
   const handleLogIgCount = async () => {
-    if (!loggedInUser || !newIgCount) return;
+    const targetAgentId = isManagerViewer ? newIgAgentId : loggedInUser?.id;
+    if (!targetAgentId || !newIgCount || !newIgDate) return;
     try {
-      await addDoc(collection(db, 'ig_follower_logs'), { agentId: loggedInUser.id, date: getTodayDate(), count: Number(newIgCount), createdAt: new Date().toISOString() });
+      await addDoc(collection(db, 'ig_follower_logs'), { agentId: targetAgentId, date: newIgDate, count: Number(newIgCount), createdAt: new Date().toISOString() });
       setNewIgCount('');
     } catch (e) { console.error(e); }
   };
-
-  const viewedEntry = viewAgentId ? leaderboard.find(l => l.member.id === viewAgentId) : null;
 
   const renderGrid = (cellResults) => (
     <div className="grid grid-cols-3 gap-2">
@@ -4177,14 +4177,19 @@ const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits 
         <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(circle at 50% 0%, rgba(251,191,36,0.15), transparent 65%)' }}></div>
         <Trophy className="mx-auto text-amber-400 mb-2 relative" size={32} />
         <h2 className="text-amber-300 font-bold text-2xl relative">六邊形戰士 BINGO 挑戰賽</h2>
-        <p className="text-gray-400 text-xs mt-1 relative">{monthKey} · 每格 {BINGO_CELL_SCORE} 分，連線再 +{BINGO_LINE_BONUS} 分，累積達 {BINGO_QUALIFY_THRESHOLD} 分才有排名資格</p>
+        <div className="flex items-center justify-center gap-3 mt-2 relative">
+          <button onClick={() => shiftMonth(-1)} className="text-gray-400 hover:text-amber-300"><ChevronLeft size={18} /></button>
+          <span className="text-amber-200 font-bold text-sm">{selectedMonth}</span>
+          <button onClick={() => shiftMonth(1)} className="text-gray-400 hover:text-amber-300"><ChevronRight size={18} /></button>
+        </div>
+        <p className="text-gray-400 text-xs mt-1 relative">每格 {BINGO_CELL_SCORE} 分，連線再 +{BINGO_LINE_BONUS} 分，累積達 {BINGO_QUALIFY_THRESHOLD} 分才有排名資格</p>
       </div>
 
       <Card className="p-5">
         <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-sm"><TrendingUp size={16} className="text-amber-500" /> 總分排行榜</h3>
         <div className="space-y-2">
           {leaderboard.map((entry, i) => (
-            <button key={entry.member.id} onClick={() => setViewAgentId(entry.member.id)} className="w-full flex items-center justify-between gap-3 p-3 rounded-xl border border-gray-100 hover:border-amber-200 hover:bg-amber-50/50 transition text-left">
+            <button key={entry.member.id} onClick={() => setEditTargetId(entry.member.id)} className={`w-full flex items-center justify-between gap-3 p-3 rounded-xl border transition text-left ${editTargetId === entry.member.id ? 'border-amber-300 bg-amber-50/50' : 'border-gray-100 hover:border-amber-200 hover:bg-amber-50/30'}`}>
               <div className="flex items-center gap-3">
                 <span className={`w-6 text-center font-bold text-sm ${i === 0 ? 'text-amber-500' : i === 1 ? 'text-gray-400' : i === 2 ? 'text-amber-700' : 'text-gray-300'}`}>{i + 1}</span>
                 <span className="font-bold text-gray-800 text-sm">{entry.member.name}</span>
@@ -4196,54 +4201,58 @@ const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits 
         </div>
       </Card>
 
-      {viewedEntry && (
+      {editTargetMember && (
         <Card className="p-5">
-          <div className="flex justify-between items-center mb-4">
-            <h3 className="font-bold text-gray-800 text-sm">{viewedEntry.member.name} 的賓果卡（{viewedEntry.totalScore}分，{viewedEntry.lineBonusCount}條連線）</h3>
-            <button onClick={() => setViewAgentId(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
-          </div>
-          {renderGrid(viewedEntry.cellResults)}
+          <h3 className="font-bold text-gray-800 mb-1 text-sm">
+            {editTargetId === loggedInUser?.id ? '我的賓果卡' : `${editTargetMember.name} 的賓果卡`}
+            {!canEditTarget && <span className="text-[10px] text-gray-400 font-normal ml-2">（唯讀）</span>}
+          </h3>
+          <p className="text-[10px] text-gray-400 mb-4">{editingResult.totalScore} 分 · {editingResult.lineBonusCount} 條連線{canEditTarget ? ' · 點下方任務加入九宮格（最多9個）' : ''}</p>
+          {renderGrid(editingResult.cellResults)}
+
+          {canEditTarget && (
+            <div className="mt-5 pt-5 border-t border-gray-100">
+              <p className="text-xs font-bold text-gray-500 mb-2">任務清單（點擊加入／移出九宮格）</p>
+              <div className="space-y-2">
+                {DEFAULT_BINGO_TASKS.map(task => {
+                  const inGrid = (editingCard.selectedTaskIds || []).includes(task.id);
+                  const cellResult = editingResult.cellResults.find(c => c.taskId === task.id);
+                  return (
+                    <div key={task.id} className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${inGrid ? 'border-amber-300 bg-amber-50/50' : 'border-gray-100'}`}>
+                      <button onClick={() => toggleTaskInGrid(task.id)} disabled={saving} className="flex-1 text-left">
+                        <p className="text-sm font-bold text-gray-800">{task.label}</p>
+                        {task.desc && <p className="text-[10px] text-gray-400">{task.desc}</p>}
+                      </button>
+                      {inGrid && cellResult && (
+                        <span className="text-xs font-bold text-amber-600 shrink-0">{cellResult.multiplier >= 1 ? `完成 x${cellResult.multiplier}` : '未完成'}</span>
+                      )}
+                      {inGrid && task.type === 'manual_count' && (
+                        <input type="number" min="0" className="w-16 p-1.5 border border-gray-200 rounded text-xs shrink-0" placeholder={`共${task.unit}`} value={editingCard.manualCounts?.[task.id] || ''} onChange={e => updateManualCount(task.id, e.target.value)} />
+                      )}
+                      {inGrid && task.type === 'manual_check' && (
+                        <input type="checkbox" className="w-5 h-5 shrink-0" checked={!!editingCard.manualChecks?.[task.id]} onChange={() => toggleManualCheck(task.id)} />
+                      )}
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          )}
         </Card>
       )}
 
       <Card className="p-5">
-        <h3 className="font-bold text-gray-800 mb-1 text-sm">我的賓果卡</h3>
-        <p className="text-[10px] text-gray-400 mb-4">{myResult.totalScore} 分 · {myResult.lineBonusCount} 條連線 · 點下方任務加入九宮格（最多9個）</p>
-        {renderGrid(myResult.cellResults)}
-
-        <div className="mt-5 pt-5 border-t border-gray-100">
-          <p className="text-xs font-bold text-gray-500 mb-2">任務清單（點擊加入／移出九宮格）</p>
-          <div className="space-y-2">
-            {DEFAULT_BINGO_TASKS.map(task => {
-              const inGrid = (myCard?.selectedTaskIds || []).includes(task.id);
-              const cellResult = myResult.cellResults.find(c => c.taskId === task.id);
-              return (
-                <div key={task.id} className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${inGrid ? 'border-amber-300 bg-amber-50/50' : 'border-gray-100'}`}>
-                  <button onClick={() => toggleTaskInGrid(task.id)} disabled={saving} className="flex-1 text-left">
-                    <p className="text-sm font-bold text-gray-800">{task.label}</p>
-                    {task.desc && <p className="text-[10px] text-gray-400">{task.desc}</p>}
-                  </button>
-                  {inGrid && cellResult && (
-                    <span className="text-xs font-bold text-amber-600 shrink-0">{cellResult.multiplier >= 1 ? `完成 x${cellResult.multiplier}` : '未完成'}</span>
-                  )}
-                  {inGrid && task.type === 'manual_count' && (
-                    <input type="number" min="0" className="w-16 p-1.5 border border-gray-200 rounded text-xs shrink-0" placeholder={`共${task.unit}`} value={myCard?.manualCounts?.[task.id] || ''} onChange={e => updateManualCount(task.id, e.target.value)} />
-                  )}
-                  {inGrid && task.type === 'manual_check' && (
-                    <input type="checkbox" className="w-5 h-5 shrink-0" checked={!!myCard?.manualChecks?.[task.id]} onChange={() => toggleManualCheck(task.id)} />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
-
-        <div className="mt-5 pt-5 border-t border-gray-100">
-          <p className="text-xs font-bold text-gray-500 mb-2">更新我的 IG 粉絲數（用來計算本月新增粉絲，也能看出長期趨勢）</p>
-          <div className="flex gap-2">
-            <input type="number" min="0" placeholder="目前粉絲數" className="flex-1 p-2 border border-gray-200 rounded-lg text-sm" value={newIgCount} onChange={e => setNewIgCount(e.target.value)} />
-            <button onClick={handleLogIgCount} disabled={!newIgCount} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold text-sm disabled:opacity-50">記錄</button>
-          </div>
+        <p className="text-xs font-bold text-gray-500 mb-2">更新 IG 粉絲數（用來計算當月新增粉絲，也能看出長期趨勢）</p>
+        <div className="flex flex-wrap gap-2">
+          {isManagerViewer && (
+            <select className="p-2 border border-gray-200 rounded-lg text-sm" value={newIgAgentId} onChange={e => setNewIgAgentId(e.target.value)}>
+              <option value="">選擇同仁</option>
+              {team.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          )}
+          <input type="date" className="p-2 border border-gray-200 rounded-lg text-sm" value={newIgDate} onChange={e => setNewIgDate(e.target.value)} />
+          <input type="number" min="0" placeholder="粉絲數" className="flex-1 min-w-[100px] p-2 border border-gray-200 rounded-lg text-sm" value={newIgCount} onChange={e => setNewIgCount(e.target.value)} />
+          <button onClick={handleLogIgCount} disabled={!newIgCount || (isManagerViewer && !newIgAgentId)} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold text-sm disabled:opacity-50">記錄</button>
         </div>
       </Card>
     </div>
@@ -6403,7 +6412,7 @@ const App = () => {
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} records={enrichedRecords} activities={activities} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
-        {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} />}
+        {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} isManagerViewer={isTeamScheduleViewer} />}
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
         {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} />}
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} />}
