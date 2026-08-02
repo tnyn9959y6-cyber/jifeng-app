@@ -37,7 +37,8 @@ import {
   Search,
   GitBranch,
   Star,
-  MapPin
+  MapPin,
+  Trophy
 } from 'lucide-react';
 import { 
   BarChart,
@@ -765,6 +766,28 @@ const RECRUIT_ACTIVITY_WEIGHTS = {
 };
 
 const ALL_ACTIVITY_WEIGHTS = { ...ACTIVITY_WEIGHTS, ...RECRUIT_ACTIVITY_WEIGHTS };
+
+// --- 區運作 BINGO 挑戰賽：預設10項任務 (可在賽事設定裡編輯，不綁死在7月) ---
+const DEFAULT_BINGO_TASKS = [
+  { id: 'four_star', label: '完成四星會', desc: '一個月受理4位不同客戶', type: 'auto_customer_count', unit: 4, once: false },
+  { id: 'weighted_30w', label: '加權保費累積30萬', desc: '', type: 'auto_weighted_premium', unit: 300000, once: false },
+  { id: 'premium_50w', label: '實收保費累積50萬', desc: '', type: 'auto_premium', unit: 500000, once: false },
+  { id: 'potential_test', label: '完成1位潛能測驗', desc: '增員儀表板達「臨時帳號」階段', type: 'auto_temp_account', unit: 1, once: false },
+  { id: 'policy_checkup', label: '完成10位保單健檢', desc: '自行勾選與填寫人數', type: 'manual_count', unit: 10, once: false },
+  { id: 'ig_followers', label: '新增30位IG新粉絲', desc: '依自行記錄的粉絲數成長計算', type: 'auto_ig_growth', unit: 30, once: false },
+  { id: 'exam', label: '完成1位內考/外考', desc: '增員儀表板達「內考」或「外考」階段', type: 'auto_exam', unit: 1, once: false },
+  { id: 'weekly_activity', label: '每週銷售活動量100分', desc: '本月內達成100分的週數', type: 'auto_weekly_activity', unit: 1, once: false },
+  { id: 'read_book', label: '看完一本書', desc: '自行勾選，限完成一次', type: 'manual_check', once: true },
+  { id: 'exercise', label: '每月運動4次', desc: '自行勾選，限完成一次', type: 'manual_check', once: true }
+];
+const BINGO_CELL_SCORE = 5;
+const BINGO_LINE_BONUS = 10;
+const BINGO_QUALIFY_THRESHOLD = 30;
+const BINGO_LINES = [
+  [0, 1, 2], [3, 4, 5], [6, 7, 8],
+  [0, 3, 6], [1, 4, 7], [2, 5, 8],
+  [0, 4, 8], [2, 4, 6]
+];
 
 // 業務漏斗階段順序 (不含準客戶)：完成後面的階段時，前面的階段視同也一併完成一次
 const SALES_FUNNEL_CHAIN = ['appointment', 'interview', 'proposal', 'application', 'issue'];
@@ -3959,6 +3982,274 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
 };
 
 // --- 關注名單 (獨立分頁：關注銷售 + 關注增員 兩個列表) ---
+// --- 區運作 BINGO 挑戰賽：計分邏輯 ---
+const getISOWeekKey = (d) => {
+  const date = new Date(Date.UTC(d.getFullYear(), d.getMonth(), d.getDate()));
+  const dayNum = date.getUTCDay() || 7;
+  date.setUTCDate(date.getUTCDate() + 4 - dayNum);
+  const yearStart = new Date(Date.UTC(date.getUTCFullYear(), 0, 1));
+  const weekNo = Math.ceil((((date - yearStart) / 86400000) + 1) / 7);
+  return `${date.getUTCFullYear()}-W${weekNo}`;
+};
+
+const countWeeksAboveThreshold = (activities, agentId, monthKey, threshold) => {
+  const agentActivities = activities.filter(a => a.agentId === agentId && a.date && a.date.startsWith(monthKey));
+  const weekTotals = {};
+  agentActivities.forEach(a => {
+    const weekKey = getISOWeekKey(new Date(a.date));
+    let dayScore = 0;
+    Object.keys(ALL_ACTIVITY_WEIGHTS).forEach(k => { if (a[k]) dayScore += (a[k] || 0) * ALL_ACTIVITY_WEIGHTS[k].score; });
+    weekTotals[weekKey] = (weekTotals[weekKey] || 0) + dayScore;
+  });
+  return Object.values(weekTotals).filter(v => v >= threshold).length;
+};
+
+const getIGGrowth = (igLogs, agentId, monthKey) => {
+  const agentLogs = igLogs.filter(l => l.agentId === agentId).sort((a, b) => a.date.localeCompare(b.date));
+  const thisMonthLogs = agentLogs.filter(l => l.date.startsWith(monthKey));
+  if (thisMonthLogs.length === 0) return 0;
+  const latest = thisMonthLogs[thisMonthLogs.length - 1].count;
+  const beforeThisMonth = agentLogs.filter(l => l.date < `${monthKey}-01`);
+  const baseline = beforeThisMonth.length > 0 ? beforeThisMonth[beforeThisMonth.length - 1].count : thisMonthLogs[0].count;
+  return Math.max(0, latest - baseline);
+};
+
+const computeBingoTaskMultiplier = (task, agentId, monthKey, ctx) => {
+  const { records, activities, recruits, igLogs, manualCounts, manualChecks } = ctx;
+  switch (task.type) {
+    case 'auto_customer_count': {
+      const monthRecords = records.filter(r => r.agentId === agentId && r.date.startsWith(monthKey));
+      const distinct = new Set(monthRecords.map(r => (r.insuredName || '').trim()).filter(Boolean)).size;
+      return Math.floor(distinct / task.unit);
+    }
+    case 'auto_weighted_premium': {
+      const sum = records.filter(r => r.agentId === agentId && r.date.startsWith(monthKey)).reduce((s, r) => s + (r.weighted || 0), 0);
+      return Math.floor(sum / task.unit);
+    }
+    case 'auto_premium': {
+      const sum = records.filter(r => r.agentId === agentId && r.date.startsWith(monthKey)).reduce((s, r) => s + (r.premium || 0), 0);
+      return Math.floor(sum / task.unit);
+    }
+    case 'auto_temp_account': {
+      const count = recruits.filter(r => r.recruiterId === agentId && r.dates?.tempAccountDate && r.dates.tempAccountDate.startsWith(monthKey)).length;
+      return Math.floor(count / task.unit);
+    }
+    case 'auto_exam': {
+      const count = recruits.filter(r => r.recruiterId === agentId && ((r.dates?.internalExamDate && r.dates.internalExamDate.startsWith(monthKey)) || (r.dates?.externalExamDate && r.dates.externalExamDate.startsWith(monthKey)))).length;
+      return Math.floor(count / task.unit);
+    }
+    case 'auto_ig_growth': {
+      return Math.floor(getIGGrowth(igLogs, agentId, monthKey) / task.unit);
+    }
+    case 'auto_weekly_activity': {
+      return countWeeksAboveThreshold(activities, agentId, monthKey, 100);
+    }
+    case 'manual_count': {
+      const n = (manualCounts && manualCounts[task.id]) || 0;
+      return Math.floor(n / task.unit);
+    }
+    case 'manual_check': {
+      return (manualChecks && manualChecks[task.id]) ? 1 : 0;
+    }
+    default: return 0;
+  }
+};
+
+const computeBingoCard = (card, tasks, agentId, monthKey, ctx) => {
+  const selectedIds = card?.selectedTaskIds || [];
+  const cellResults = selectedIds.map(taskId => {
+    const task = tasks.find(t => t.id === taskId);
+    if (!task) return { taskId, task: null, multiplier: 0, score: 0 };
+    const rawMultiplier = computeBingoTaskMultiplier(task, agentId, monthKey, { ...ctx, manualCounts: card?.manualCounts || {}, manualChecks: card?.manualChecks || {} });
+    const multiplier = task.once ? Math.min(rawMultiplier, 1) : rawMultiplier;
+    return { taskId, task, multiplier, score: multiplier * BINGO_CELL_SCORE };
+  });
+  let lineBonusCount = 0;
+  BINGO_LINES.forEach(line => {
+    if (line.every(idx => cellResults[idx] && cellResults[idx].multiplier >= 1)) lineBonusCount++;
+  });
+  const totalScore = cellResults.reduce((s, c) => s + c.score, 0) + lineBonusCount * BINGO_LINE_BONUS;
+  return { cellResults, lineBonusCount, totalScore, qualifies: totalScore >= BINGO_QUALIFY_THRESHOLD };
+};
+
+// --- 區運作 BINGO 挑戰賽頁面 ---
+const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits }) => {
+  const monthKey = getCurrentMonth();
+  const [myCard, setMyCard] = useState(null);
+  const [allCards, setAllCards] = useState([]);
+  const [igLogs, setIgLogs] = useState([]);
+  const [viewAgentId, setViewAgentId] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [newIgCount, setNewIgCount] = useState('');
+
+  useEffect(() => {
+    if (!loggedInUser) return;
+    const ref = doc(db, 'bingo_cards', `${loggedInUser.id}_${monthKey}`);
+    const unsub = onSnapshot(ref, (snap) => {
+      setMyCard(snap.exists() ? snap.data() : { selectedTaskIds: [], manualCounts: {}, manualChecks: {} });
+    });
+    return () => unsub();
+  }, [loggedInUser, monthKey]);
+
+  useEffect(() => {
+    const unsub = onSnapshot(query(collection(db, 'bingo_cards'), where('monthKey', '==', monthKey)), (snap) => {
+      setAllCards(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsub();
+  }, [monthKey]);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'ig_follower_logs'), (snap) => {
+      setIgLogs(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsub();
+  }, []);
+
+  const ctx = { records, activities, recruits, igLogs };
+
+  const leaderboard = useMemo(() => {
+    return team.map(member => {
+      const card = allCards.find(c => c.agentId === member.id) || { selectedTaskIds: [] };
+      const result = computeBingoCard(card, DEFAULT_BINGO_TASKS, member.id, monthKey, ctx);
+      return { member, card, ...result };
+    }).sort((a, b) => b.totalScore - a.totalScore);
+  }, [team, allCards, records, activities, recruits, igLogs, monthKey]);
+
+  const myResult = useMemo(() => computeBingoCard(myCard, DEFAULT_BINGO_TASKS, loggedInUser?.id, monthKey, ctx), [myCard, records, activities, recruits, igLogs, loggedInUser, monthKey]);
+
+  const toggleTaskInGrid = async (taskId) => {
+    if (!loggedInUser || !myCard) return;
+    const current = myCard.selectedTaskIds || [];
+    let next;
+    if (current.includes(taskId)) {
+      next = current.filter(id => id !== taskId);
+    } else {
+      if (current.length >= 9) return;
+      next = [...current, taskId];
+    }
+    setSaving(true);
+    try {
+      await setDoc(doc(db, 'bingo_cards', `${loggedInUser.id}_${monthKey}`), { agentId: loggedInUser.id, monthKey, selectedTaskIds: next, manualCounts: myCard.manualCounts || {}, manualChecks: myCard.manualChecks || {} }, { merge: true });
+    } catch (e) { console.error(e); } finally { setSaving(false); }
+  };
+
+  const updateManualCount = async (taskId, value) => {
+    if (!loggedInUser) return;
+    const newCounts = { ...(myCard?.manualCounts || {}), [taskId]: Number(value) || 0 };
+    try { await setDoc(doc(db, 'bingo_cards', `${loggedInUser.id}_${monthKey}`), { manualCounts: newCounts }, { merge: true }); } catch (e) { console.error(e); }
+  };
+
+  const toggleManualCheck = async (taskId) => {
+    if (!loggedInUser) return;
+    const newChecks = { ...(myCard?.manualChecks || {}), [taskId]: !(myCard?.manualChecks?.[taskId]) };
+    try { await setDoc(doc(db, 'bingo_cards', `${loggedInUser.id}_${monthKey}`), { manualChecks: newChecks }, { merge: true }); } catch (e) { console.error(e); }
+  };
+
+  const handleLogIgCount = async () => {
+    if (!loggedInUser || !newIgCount) return;
+    try {
+      await addDoc(collection(db, 'ig_follower_logs'), { agentId: loggedInUser.id, date: getTodayDate(), count: Number(newIgCount), createdAt: new Date().toISOString() });
+      setNewIgCount('');
+    } catch (e) { console.error(e); }
+  };
+
+  const viewedEntry = viewAgentId ? leaderboard.find(l => l.member.id === viewAgentId) : null;
+
+  const renderGrid = (cellResults) => (
+    <div className="grid grid-cols-3 gap-2">
+      {Array.from({ length: 9 }).map((_, i) => {
+        const cell = cellResults[i];
+        if (!cell) return <div key={i} className="aspect-square rounded-xl border-2 border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-xs">空格</div>;
+        const done = cell.multiplier >= 1;
+        return (
+          <div key={i} className={`aspect-square rounded-xl border-2 p-2 flex flex-col items-center justify-center text-center ${done ? 'bg-gradient-to-br from-amber-400 to-amber-500 border-amber-500' : 'bg-gray-50 border-gray-200'}`}>
+            <p className={`text-[10px] font-bold leading-tight ${done ? 'text-white' : 'text-gray-500'}`}>{cell.task?.label}</p>
+            {cell.multiplier > 1 && <span className="text-[9px] font-bold text-white bg-black/20 rounded-full px-1.5 mt-1">x{cell.multiplier}</span>}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  return (
+    <div className="max-w-4xl mx-auto space-y-6 animate-fade-in pb-12">
+      <div className="bg-gradient-to-br from-gray-900 via-gray-800 to-black rounded-2xl p-6 text-center relative overflow-hidden">
+        <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(circle at 50% 0%, rgba(251,191,36,0.15), transparent 65%)' }}></div>
+        <Trophy className="mx-auto text-amber-400 mb-2 relative" size={32} />
+        <h2 className="text-amber-300 font-bold text-2xl relative">六邊形戰士 BINGO 挑戰賽</h2>
+        <p className="text-gray-400 text-xs mt-1 relative">{monthKey} · 每格 {BINGO_CELL_SCORE} 分，連線再 +{BINGO_LINE_BONUS} 分，累積達 {BINGO_QUALIFY_THRESHOLD} 分才有排名資格</p>
+      </div>
+
+      <Card className="p-5">
+        <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-sm"><TrendingUp size={16} className="text-amber-500" /> 總分排行榜</h3>
+        <div className="space-y-2">
+          {leaderboard.map((entry, i) => (
+            <button key={entry.member.id} onClick={() => setViewAgentId(entry.member.id)} className="w-full flex items-center justify-between gap-3 p-3 rounded-xl border border-gray-100 hover:border-amber-200 hover:bg-amber-50/50 transition text-left">
+              <div className="flex items-center gap-3">
+                <span className={`w-6 text-center font-bold text-sm ${i === 0 ? 'text-amber-500' : i === 1 ? 'text-gray-400' : i === 2 ? 'text-amber-700' : 'text-gray-300'}`}>{i + 1}</span>
+                <span className="font-bold text-gray-800 text-sm">{entry.member.name}</span>
+                {!entry.qualifies && <span className="text-[9px] bg-gray-100 text-gray-400 px-1.5 py-0.5 rounded-full">未達門檻</span>}
+              </div>
+              <span className="font-bold text-amber-600">{entry.totalScore} 分</span>
+            </button>
+          ))}
+        </div>
+      </Card>
+
+      {viewedEntry && (
+        <Card className="p-5">
+          <div className="flex justify-between items-center mb-4">
+            <h3 className="font-bold text-gray-800 text-sm">{viewedEntry.member.name} 的賓果卡（{viewedEntry.totalScore}分，{viewedEntry.lineBonusCount}條連線）</h3>
+            <button onClick={() => setViewAgentId(null)} className="text-gray-400 hover:text-gray-600"><X size={18} /></button>
+          </div>
+          {renderGrid(viewedEntry.cellResults)}
+        </Card>
+      )}
+
+      <Card className="p-5">
+        <h3 className="font-bold text-gray-800 mb-1 text-sm">我的賓果卡</h3>
+        <p className="text-[10px] text-gray-400 mb-4">{myResult.totalScore} 分 · {myResult.lineBonusCount} 條連線 · 點下方任務加入九宮格（最多9個）</p>
+        {renderGrid(myResult.cellResults)}
+
+        <div className="mt-5 pt-5 border-t border-gray-100">
+          <p className="text-xs font-bold text-gray-500 mb-2">任務清單（點擊加入／移出九宮格）</p>
+          <div className="space-y-2">
+            {DEFAULT_BINGO_TASKS.map(task => {
+              const inGrid = (myCard?.selectedTaskIds || []).includes(task.id);
+              const cellResult = myResult.cellResults.find(c => c.taskId === task.id);
+              return (
+                <div key={task.id} className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${inGrid ? 'border-amber-300 bg-amber-50/50' : 'border-gray-100'}`}>
+                  <button onClick={() => toggleTaskInGrid(task.id)} disabled={saving} className="flex-1 text-left">
+                    <p className="text-sm font-bold text-gray-800">{task.label}</p>
+                    {task.desc && <p className="text-[10px] text-gray-400">{task.desc}</p>}
+                  </button>
+                  {inGrid && cellResult && (
+                    <span className="text-xs font-bold text-amber-600 shrink-0">{cellResult.multiplier >= 1 ? `完成 x${cellResult.multiplier}` : '未完成'}</span>
+                  )}
+                  {inGrid && task.type === 'manual_count' && (
+                    <input type="number" min="0" className="w-16 p-1.5 border border-gray-200 rounded text-xs shrink-0" placeholder={`共${task.unit}`} value={myCard?.manualCounts?.[task.id] || ''} onChange={e => updateManualCount(task.id, e.target.value)} />
+                  )}
+                  {inGrid && task.type === 'manual_check' && (
+                    <input type="checkbox" className="w-5 h-5 shrink-0" checked={!!myCard?.manualChecks?.[task.id]} onChange={() => toggleManualCheck(task.id)} />
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="mt-5 pt-5 border-t border-gray-100">
+          <p className="text-xs font-bold text-gray-500 mb-2">更新我的 IG 粉絲數（用來計算本月新增粉絲，也能看出長期趨勢）</p>
+          <div className="flex gap-2">
+            <input type="number" min="0" placeholder="目前粉絲數" className="flex-1 p-2 border border-gray-200 rounded-lg text-sm" value={newIgCount} onChange={e => setNewIgCount(e.target.value)} />
+            <button onClick={handleLogIgCount} disabled={!newIgCount} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold text-sm disabled:opacity-50">記錄</button>
+          </div>
+        </div>
+      </Card>
+    </div>
+  );
+};
+
 const WatchlistPage = ({ loggedInUser, customers }) => {
   const today = getTodayDate();
   const [busyId, setBusyId] = useState(null);
@@ -5588,6 +5879,33 @@ const GlobalSearchModal = ({ isOpen, onClose, customers, records, scheduleEvents
 
 
 // --- Loading Screen (顯示於系統連線資料庫期間) ---
+// --- 恭賀彈跳視窗：登入時如果有人(含自己)報件，跳出一張海報式的恭賀畫面 ---
+const CelebrationPosterModal = ({ isOpen, onClose, celebrations }) => {
+  if (!isOpen || celebrations.length === 0) return null;
+  return (
+    <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 backdrop-blur-sm p-4">
+      <div className="bg-gradient-to-br from-gray-900 via-gray-800 to-black rounded-2xl p-8 max-w-sm w-full text-center shadow-2xl border border-amber-400/30 animate-scale-up relative overflow-hidden">
+        <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(circle at 50% 0%, rgba(251,191,36,0.18), transparent 65%)' }}></div>
+        <button onClick={onClose} className="absolute top-3 right-3 text-gray-400 hover:text-white z-10"><X size={20} /></button>
+        <div className="relative">
+          <Trophy className="mx-auto text-amber-400 mb-2" size={40} />
+          <h3 className="text-amber-300 font-bold text-xl mb-1">恭喜達成！</h3>
+          <p className="text-gray-400 text-xs mb-5">又有夥伴完成保單囉</p>
+          <div className="space-y-2 mb-6 max-h-64 overflow-y-auto">
+            {celebrations.map((c, i) => (
+              <div key={i} className="bg-white/5 border border-amber-400/20 rounded-xl py-2.5 px-4">
+                <p className="text-white font-bold text-sm">🎉 {c.agentName}</p>
+                {c.product && <p className="text-amber-200/70 text-xs mt-0.5">{c.product}</p>}
+              </div>
+            ))}
+          </div>
+          <button onClick={onClose} className="bg-amber-400 hover:bg-amber-300 text-gray-900 font-bold px-6 py-2.5 rounded-lg text-sm transition">太棒了！</button>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const LoadingScreen = () => (
   <div className="min-h-screen bg-[#F5F7FA] flex flex-col items-center justify-center gap-4">
     <div className="w-14 h-14 bg-gradient-to-tr from-gray-900 to-gray-700 rounded-2xl flex items-center justify-center shadow-lg">
@@ -5709,6 +6027,8 @@ const App = () => {
   const [user, setUser] = useState(null);
   const [teamLoaded, setTeamLoaded] = useState(false);
   const [loggedInUser, setLoggedInUser] = useState(null);
+  const [showCelebration, setShowCelebration] = useState(false);
+  const [newCelebrations, setNewCelebrations] = useState([]);
   const [sessionChecked, setSessionChecked] = useState(false);
   const [rankTargets, setRankTargets] = useState({ H1: DEFAULT_RANK_TARGETS_H1, H2: DEFAULT_RANK_TARGETS_H2 });
   const [doubleAwardTargets, setDoubleAwardTargets] = useState(DEFAULT_DOUBLE_AWARD_H2);
@@ -5899,7 +6219,8 @@ const App = () => {
             isESG: data.is_esg,
             date: dateStr,
             status: data.status || '已發單',
-            issuedDate: data.issuedDate || ''
+            issuedDate: data.issuedDate || '',
+            createdAt: data.created_at || ''
          };
       });
       setRecords(adaptedRecords.sort((a,b) => b.date.localeCompare(a.date)));
@@ -5926,7 +6247,8 @@ const App = () => {
           promotionDates: data.promotionDates || { registered: '', supervisor: '', asstManager: '', distManager: '', agencyManager: '' },
           passwordHash: data.passwordHash || null,
           passwordSalt: data.passwordSalt || null,
-          rememberToken: data.rememberToken || null
+          rememberToken: data.rememberToken || null,
+          lastSeenCelebration: data.lastSeenCelebration || ''
         };
       });
       setTeam(adaptedTeam.sort((a,b)=>a.id.localeCompare(b.id)));
@@ -5967,12 +6289,34 @@ const App = () => {
     });
   }, [records, team]);
 
+  // 恭賀彈跳視窗：登入時檢查「上次看過之後」有沒有新的報件 (含自己)，有的話一次列出來
+  useEffect(() => {
+    if (!loggedInUser || enrichedRecords.length === 0) return;
+    const lastSeen = loggedInUser.lastSeenCelebration || '2000-01-01T00:00:00.000Z';
+    const newOnes = enrichedRecords.filter(r => r.createdAt && r.createdAt > lastSeen);
+    if (newOnes.length > 0) {
+      setNewCelebrations(newOnes.map(r => ({ agentName: r.agentName, product: r.product })));
+      setShowCelebration(true);
+    }
+    // eslint-disable-next-line
+  }, [loggedInUser?.id, enrichedRecords.length]);
+
+  const handleDismissCelebration = async () => {
+    setShowCelebration(false);
+    if (loggedInUser) {
+      const now = new Date().toISOString();
+      try { await updateDoc(doc(db, 'user', loggedInUser.id), { lastSeenCelebration: now }); } catch (e) { console.error(e); }
+      setLoggedInUser(prev => prev ? { ...prev, lastSeenCelebration: now } : prev);
+    }
+  };
+
   const todoCount = useMemo(() => computeDueTodayCount(loggedInUser, customers, scheduleEvents, recurringRules), [loggedInUser, customers, scheduleEvents, recurringRules]);
 
   const navItems = [
     { id: 'todo', label: '今日待辦', icon: CheckSquare, badge: todoCount },
     { id: 'customers', label: '客戶管理', icon: Phone },
     { id: 'watchlist', label: '關注名單', icon: Star },
+    { id: 'bingo', label: '區運作', icon: Trophy },
     { id: 'dashboard', label: '業績儀表板', icon: LayoutDashboard },
     { id: 'activity', label: 'MEA 活動量', icon: Activity },
     { id: 'entry', label: '業績回報', icon: Plus },
@@ -6053,11 +6397,13 @@ const App = () => {
       </nav>
 
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
+      <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
       <main className="max-w-7xl mx-auto px-6 pt-8">
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} records={enrichedRecords} activities={activities} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
+        {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} />}
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
         {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} />}
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} />}
