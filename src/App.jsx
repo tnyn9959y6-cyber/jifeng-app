@@ -978,6 +978,31 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
   const [formData, setFormData] = useState(emptyActivityForm);
   const [viewMode, setViewMode] = useState('sales');
 
+  // 月／週 檢視切換
+  const [periodMode, setPeriodMode] = useState('month');
+  const [selectedWeekStart, setSelectedWeekStart] = useState(() => {
+    const d = new Date();
+    const day = d.getDay();
+    const diffToMonday = day === 0 ? -6 : 1 - day;
+    d.setDate(d.getDate() + diffToMonday);
+    return dateToStr(d);
+  });
+  const shiftWeek = (delta) => {
+    const d = new Date(selectedWeekStart);
+    d.setDate(d.getDate() + delta * 7);
+    setSelectedWeekStart(dateToStr(d));
+  };
+  const periodRange = useMemo(() => {
+    if (periodMode === 'week') {
+      const start = new Date(selectedWeekStart);
+      const end = new Date(start); end.setDate(end.getDate() + 6);
+      return { start: selectedWeekStart, end: dateToStr(end) };
+    }
+    const [y, m] = selectedMonth.split('-').map(Number);
+    const lastDay = new Date(y, m, 0).getDate();
+    return { start: `${selectedMonth}-01`, end: `${selectedMonth}-${String(lastDay).padStart(2, '0')}` };
+  }, [periodMode, selectedMonth, selectedWeekStart]);
+
   useEffect(() => {
     const current = getCurrentMonth();
     const isCurrentInSeason = currentMonths.some(m => m.value === current);
@@ -1042,8 +1067,8 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
     const totals = { prospect: 0, appointment: 0, interview: 0, proposal: 0, application: 0, issue: 0 };
     const recruitTotals = Object.fromEntries(Object.keys(RECRUIT_ACTIVITY_WEIGHTS).map(k => [k, 0]));
     
-    // 1. 統計選定月份的活動量
-    const monthActivities = activities.filter(a => a.agentId === selectedAgentId && a.month === selectedMonth);
+    // 1. 統計選定區間 (月或週) 的活動量
+    const monthActivities = activities.filter(a => a.agentId === selectedAgentId && a.date >= periodRange.start && a.date <= periodRange.end);
     monthActivities.forEach(record => {
       Object.keys(totals).forEach(key => {
         const val = record[key] || 0;
@@ -1064,8 +1089,8 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
     // 獨立計算面談分數
     const interviewPoints = totals.interview * ACTIVITY_WEIGHTS.interview.score;
 
-    // 2. 統計選定月份的業績與商品線
-    const monthRecords = records.filter(r => r.agentId === selectedAgentId && r.date.startsWith(selectedMonth));
+    // 2. 統計選定區間 (月或週) 的業績與商品線
+    const monthRecords = records.filter(r => r.agentId === selectedAgentId && r.date >= periodRange.start && r.date <= periodRange.end);
     const totalPremium = monthRecords.reduce((sum, r) => sum + (r.premium || 0), 0);
     // FYC = 實收保費 × 佣金轉換率，代表實際收入估算，不是競賽用的加權保費
     const getCommission = (r) => (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0);
@@ -1106,7 +1131,7 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
     const premiumPerPoint = totalPoints > 0 ? (totalPremium / totalPoints) : 0;
 
     return { totals, recruitTotals, totalPoints, salesPoints, recruitPoints, recruitConversion, interviewPoints, totalPremium, totalFYC, P, C, I, valuePerPoint, premiumPerPoint, productLines };
-  }, [activities, records, selectedAgentId, selectedMonth]);
+  }, [activities, records, selectedAgentId, periodRange]);
 
   // 準備圖表資料 (漏斗圖變體 - 橫向長條圖)
   const chartData = Object.keys(ACTIVITY_WEIGHTS).map(key => ({
@@ -1146,13 +1171,26 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
                 {team.map(m => <option key={m.id} value={m.id} className="text-gray-900">{m.name}</option>)}
               </select>
               <div className="w-px h-6 bg-white/20"></div>
-              <select 
-                className="bg-transparent text-sm font-bold text-white outline-none cursor-pointer appearance-none px-3" 
-                value={selectedMonth} 
-                onChange={(e) => setSelectedMonth(e.target.value)}
-              >
-                {currentMonths.map(m => <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>)}
-              </select>
+              {periodMode === 'month' ? (
+                <select 
+                  className="bg-transparent text-sm font-bold text-white outline-none cursor-pointer appearance-none px-3" 
+                  value={selectedMonth} 
+                  onChange={(e) => setSelectedMonth(e.target.value)}
+                >
+                  {currentMonths.map(m => <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>)}
+                </select>
+              ) : (
+                <div className="flex items-center gap-2 px-2">
+                  <button type="button" onClick={() => shiftWeek(-1)} className="text-gray-300 hover:text-white"><ChevronLeft size={16} /></button>
+                  <span className="text-xs font-bold text-white whitespace-nowrap">{periodRange.start} ~ {periodRange.end}</span>
+                  <button type="button" onClick={() => shiftWeek(1)} className="text-gray-300 hover:text-white"><ChevronRight size={16} /></button>
+                </div>
+              )}
+              <div className="w-px h-6 bg-white/20"></div>
+              <div className="flex bg-white/10 rounded-lg p-0.5">
+                <button type="button" onClick={() => setPeriodMode('month')} className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition ${periodMode === 'month' ? 'bg-white text-gray-900' : 'text-gray-300'}`}>月</button>
+                <button type="button" onClick={() => setPeriodMode('week')} className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition ${periodMode === 'week' ? 'bg-white text-gray-900' : 'text-gray-300'}`}>週</button>
+              </div>
             </div>
             <div className="flex bg-white/5 rounded-xl p-1 border border-white/10 backdrop-blur-md">
               <button type="button" onClick={() => setViewMode('sales')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition ${viewMode === 'sales' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>業務</button>
@@ -1353,7 +1391,7 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
           <Card className="p-6 h-full flex flex-col">
             <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2">
               <Filter className={viewMode === 'sales' ? 'text-indigo-500' : 'text-teal-500'} size={20}/> 
-              {viewMode === 'sales' ? '銷售漏斗分析與轉換率' : '增員漏斗分析與轉換率'} ({selectedMonth})
+              {viewMode === 'sales' ? '銷售漏斗分析與轉換率' : '增員漏斗分析與轉換率'} ({periodMode === 'month' ? selectedMonth : `${periodRange.start} ~ ${periodRange.end}`})
             </h3>
             <div className="flex-1 min-h-[350px]">
               <ResponsiveContainer width="100%" height="100%">
@@ -1427,7 +1465,7 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
         <Card className="p-6 col-span-1 lg:col-span-3 border-t-4 border-t-emerald-500">
           <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2">
             <PieChartIcon className="text-emerald-500" size={20}/>
-            各商品線業績分析 ({selectedMonth})
+            各商品線業績分析 ({periodMode === 'month' ? selectedMonth : `${periodRange.start} ~ ${periodRange.end}`})
           </h3>
           <div className="overflow-x-auto">
              <table className="w-full text-left">
@@ -3106,7 +3144,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
 
   const filteredCustomers = useMemo(() => {
     return customers.filter(c => {
-      const matchSearch = !search || c.name.includes(search) || (c.phone || '').includes(search);
+      const matchSearch = !search || c.name.includes(search) || (c.phone || '').includes(search) || (c.igHandle || '').toLowerCase().includes(search.toLowerCase());
       const age = calcAge(c.birthday);
       const matchAgeMin = !filters.ageMin || (age !== null && age >= Number(filters.ageMin));
       const matchAgeMax = !filters.ageMax || (age !== null && age <= Number(filters.ageMax));
@@ -3280,7 +3318,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
           <div className="flex-1 relative">
             <input
               type="text"
-              placeholder="搜尋姓名或電話..."
+              placeholder="搜尋姓名、電話或IG帳號..."
               className="w-full p-3 pl-4 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none focus:border-indigo-500"
               value={search}
               onChange={e => setSearch(e.target.value)}
@@ -4033,11 +4071,25 @@ const computeBingoTaskMultiplier = (task, agentId, monthKey, ctx) => {
       return Math.floor(sum / task.unit);
     }
     case 'auto_temp_account': {
-      const count = recruits.filter(r => r.recruiterId === agentId && r.dates?.tempAccountDate && r.dates.tempAccountDate.startsWith(monthKey)).length;
+      const today = getTodayDate();
+      const count = recruits.filter(r => {
+        if (r.recruiterId !== agentId || r.isPromoted) return false;
+        const dates = r.dates || {};
+        if (dates.registeredDate && dates.registeredDate <= today) return false; // 已登錄的不算當月的臨時帳號
+        return dates.tempAccountDate && dates.tempAccountDate.startsWith(monthKey) && dates.tempAccountDate <= today; // 日期要落在這個月「而且」已經過了才算完成
+      }).length;
       return Math.floor(count / task.unit);
     }
     case 'auto_exam': {
-      const count = recruits.filter(r => r.recruiterId === agentId && ((r.dates?.internalExamDate && r.dates.internalExamDate.startsWith(monthKey)) || (r.dates?.externalExamDate && r.dates.externalExamDate.startsWith(monthKey)))).length;
+      const today = getTodayDate();
+      const count = recruits.filter(r => {
+        if (r.recruiterId !== agentId || r.isPromoted) return false;
+        const dates = r.dates || {};
+        if (dates.registeredDate && dates.registeredDate <= today) return false; // 已登錄的不算當月的內外考
+        const internalPassed = dates.internalExamDate && dates.internalExamDate.startsWith(monthKey) && dates.internalExamDate <= today;
+        const externalPassed = dates.externalExamDate && dates.externalExamDate.startsWith(monthKey) && dates.externalExamDate <= today;
+        return internalPassed || externalPassed; // 日期要落在這個月「而且」已經過了才算完成
+      }).length;
       return Math.floor(count / task.unit);
     }
     case 'auto_ig_growth': {
@@ -4057,11 +4109,14 @@ const computeBingoTaskMultiplier = (task, agentId, monthKey, ctx) => {
   }
 };
 
+const getGridArray = (ids) => Array.from({ length: 9 }, (_, i) => (ids && ids[i]) || null);
+
 const computeBingoCard = (card, tasks, agentId, monthKey, ctx) => {
-  const selectedIds = card?.selectedTaskIds || [];
-  const cellResults = selectedIds.map(taskId => {
+  const gridArr = getGridArray(card?.selectedTaskIds);
+  const cellResults = gridArr.map(taskId => {
+    if (!taskId) return null;
     const task = tasks.find(t => t.id === taskId);
-    if (!task) return { taskId, task: null, multiplier: 0, score: 0 };
+    if (!task) return null;
     const rawMultiplier = computeBingoTaskMultiplier(task, agentId, monthKey, { ...ctx, manualCounts: card?.manualCounts || {}, manualChecks: card?.manualChecks || {} });
     const multiplier = task.once ? Math.min(rawMultiplier, 1) : rawMultiplier;
     return { taskId, task, multiplier, score: multiplier * BINGO_CELL_SCORE };
@@ -4070,7 +4125,7 @@ const computeBingoCard = (card, tasks, agentId, monthKey, ctx) => {
   BINGO_LINES.forEach(line => {
     if (line.every(idx => cellResults[idx] && cellResults[idx].multiplier >= 1)) lineBonusCount++;
   });
-  const totalScore = cellResults.reduce((s, c) => s + c.score, 0) + lineBonusCount * BINGO_LINE_BONUS;
+  const totalScore = cellResults.reduce((s, c) => s + (c ? c.score : 0), 0) + lineBonusCount * BINGO_LINE_BONUS;
   return { cellResults, lineBonusCount, totalScore, qualifies: totalScore >= BINGO_QUALIFY_THRESHOLD };
 };
 
@@ -4128,11 +4183,38 @@ const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits,
     } catch (e) { console.error(e); } finally { setSaving(false); }
   };
 
+  const [selectedGridIndex, setSelectedGridIndex] = useState(null);
+  useEffect(() => { setSelectedGridIndex(null); }, [editTargetId]);
+
   const toggleTaskInGrid = async (taskId) => {
-    const current = editingCard.selectedTaskIds || [];
+    const gridArr = getGridArray(editingCard.selectedTaskIds);
     let next;
-    if (current.includes(taskId)) next = current.filter(id => id !== taskId);
-    else { if (current.length >= 9) return; next = [...current, taskId]; }
+    if (gridArr.includes(taskId)) {
+      next = gridArr.map(id => id === taskId ? null : id);
+    } else {
+      const emptyIndex = gridArr.findIndex(id => !id);
+      if (emptyIndex === -1) return;
+      next = [...gridArr];
+      next[emptyIndex] = taskId;
+    }
+    await saveCard({ selectedTaskIds: next, manualCounts: editingCard.manualCounts || {}, manualChecks: editingCard.manualChecks || {} });
+  };
+
+  // 選取移動：先點一個有任務的格子選取它，再點另一個格子(有任務或空格)互換位置，方便一開始排列調整
+  const handleGridCellClick = async (index) => {
+    if (!canEditTarget) return;
+    const gridArr = getGridArray(editingCard.selectedTaskIds);
+    if (selectedGridIndex === null) {
+      if (!gridArr[index]) return;
+      setSelectedGridIndex(index);
+      return;
+    }
+    if (selectedGridIndex === index) { setSelectedGridIndex(null); return; }
+    const next = [...gridArr];
+    const temp = next[selectedGridIndex];
+    next[selectedGridIndex] = next[index];
+    next[index] = temp;
+    setSelectedGridIndex(null);
     await saveCard({ selectedTaskIds: next, manualCounts: editingCard.manualCounts || {}, manualChecks: editingCard.manualChecks || {} });
   };
 
@@ -4155,17 +4237,36 @@ const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits,
     } catch (e) { console.error(e); }
   };
 
-  const renderGrid = (cellResults) => (
+  const renderGrid = (cellResults, interactive) => (
     <div className="grid grid-cols-3 gap-2">
       {Array.from({ length: 9 }).map((_, i) => {
         const cell = cellResults[i];
-        if (!cell) return <div key={i} className="aspect-square rounded-xl border-2 border-dashed border-gray-200 flex items-center justify-center text-gray-300 text-xs">空格</div>;
+        const isSelected = interactive && selectedGridIndex === i;
+        if (!cell) {
+          return (
+            <button
+              key={i}
+              type="button"
+              disabled={!interactive}
+              onClick={() => handleGridCellClick(i)}
+              className={`aspect-square rounded-xl border-2 border-dashed flex items-center justify-center text-xs transition ${isSelected ? 'border-indigo-400 bg-indigo-50 text-indigo-400' : 'border-gray-200 text-gray-300'} ${interactive ? 'hover:border-gray-300 cursor-pointer' : ''}`}
+            >
+              {isSelected ? '移到這' : '空格'}
+            </button>
+          );
+        }
         const done = cell.multiplier >= 1;
         return (
-          <div key={i} className={`aspect-square rounded-xl border-2 p-2 flex flex-col items-center justify-center text-center ${done ? 'bg-gradient-to-br from-amber-400 to-amber-500 border-amber-500' : 'bg-gray-50 border-gray-200'}`}>
+          <button
+            key={i}
+            type="button"
+            disabled={!interactive}
+            onClick={() => handleGridCellClick(i)}
+            className={`aspect-square rounded-xl border-2 p-2 flex flex-col items-center justify-center text-center transition ${isSelected ? 'ring-4 ring-indigo-300' : ''} ${done ? 'bg-gradient-to-br from-amber-400 to-amber-500 border-amber-500' : 'bg-gray-50 border-gray-200'} ${interactive ? 'cursor-pointer' : ''}`}
+          >
             <p className={`text-[10px] font-bold leading-tight ${done ? 'text-white' : 'text-gray-500'}`}>{cell.task?.label}</p>
             {cell.multiplier > 1 && <span className="text-[9px] font-bold text-white bg-black/20 rounded-full px-1.5 mt-1">x{cell.multiplier}</span>}
-          </div>
+          </button>
         );
       })}
     </div>
@@ -4207,8 +4308,8 @@ const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits,
             {editTargetId === loggedInUser?.id ? '我的賓果卡' : `${editTargetMember.name} 的賓果卡`}
             {!canEditTarget && <span className="text-[10px] text-gray-400 font-normal ml-2">（唯讀）</span>}
           </h3>
-          <p className="text-[10px] text-gray-400 mb-4">{editingResult.totalScore} 分 · {editingResult.lineBonusCount} 條連線{canEditTarget ? ' · 點下方任務加入九宮格（最多9個）' : ''}</p>
-          {renderGrid(editingResult.cellResults)}
+          <p className="text-[10px] text-gray-400 mb-4">{editingResult.totalScore} 分 · {editingResult.lineBonusCount} 條連線{canEditTarget ? ' · 點下方任務加入九宮格；點格子裡的任務可選取，再點另一格互換位置' : ''}</p>
+          {renderGrid(editingResult.cellResults, canEditTarget)}
 
           {canEditTarget && (
             <div className="mt-5 pt-5 border-t border-gray-100">
@@ -4216,7 +4317,7 @@ const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits,
               <div className="space-y-2">
                 {DEFAULT_BINGO_TASKS.map(task => {
                   const inGrid = (editingCard.selectedTaskIds || []).includes(task.id);
-                  const cellResult = editingResult.cellResults.find(c => c.taskId === task.id);
+                  const cellResult = editingResult.cellResults.find(c => c && c.taskId === task.id);
                   return (
                     <div key={task.id} className={`p-3 rounded-xl border flex items-center justify-between gap-3 ${inGrid ? 'border-amber-300 bg-amber-50/50' : 'border-gray-100'}`}>
                       <button onClick={() => toggleTaskInGrid(task.id)} disabled={saving} className="flex-1 text-left">
@@ -4506,6 +4607,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   const [reminderCategory, setReminderCategory] = useState('personal');
   const [reminderPriority, setReminderPriority] = useState('normal');
   const [reminderSaving, setReminderSaving] = useState(false);
+  const [reminderParticipantIds, setReminderParticipantIds] = useState(() => loggedInUser ? [loggedInUser.id] : []);
 
   const [editingEvent, setEditingEvent] = useState(null);
 
@@ -4897,32 +4999,38 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   };
 
   const handleAddReminder = async () => {
-    if (!loggedInUser || !reminderTitle || !reminderDate) return;
+    if (!loggedInUser || !reminderTitle || !reminderDate || reminderParticipantIds.length === 0) return;
     setReminderSaving(true);
     try {
-      await addDoc(collection(db, 'schedule_events'), {
-        ownerId: loggedInUser.id,
-        customerId: '',
-        customerName: '',
-        type: 'reminder',
-        isReminder: true,
-        title: reminderTitle,
-        category: reminderCategory,
-        priority: reminderPriority,
-        date: reminderDate,
-        endDate: reminderEndDate || '',
-        time: reminderTime,
-        note: '',
-        status: 'scheduled',
-        completedAt: null,
-        createdAt: new Date().toISOString()
+      const batch = writeBatch(db);
+      reminderParticipantIds.forEach(pid => {
+        const ref = doc(collection(db, 'schedule_events'));
+        batch.set(ref, {
+          ownerId: pid,
+          customerId: '',
+          customerName: '',
+          type: 'reminder',
+          isReminder: true,
+          title: reminderTitle,
+          category: reminderCategory,
+          priority: reminderPriority,
+          date: reminderDate,
+          endDate: reminderEndDate || '',
+          time: reminderTime,
+          note: '',
+          status: 'scheduled',
+          completedAt: null,
+          createdAt: new Date().toISOString()
+        });
       });
+      await batch.commit();
       setReminderTitle('');
       setReminderDate(getTodayDate());
       setReminderTime('');
       setReminderEndDate('');
       setReminderCategory('personal');
       setReminderPriority('normal');
+      setReminderParticipantIds(loggedInUser ? [loggedInUser.id] : []);
       setShowReminderForm(false);
     } catch (e) { console.error(e); } finally { setReminderSaving(false); }
   };
@@ -5342,7 +5450,22 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
                   {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                 </select>
               </div>
-              <button onClick={handleAddReminder} disabled={!reminderTitle || reminderSaving} className="w-full bg-gray-800 text-white py-3 rounded-lg font-bold hover:bg-gray-900 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">套用給哪些人（每個人各自獨立在自己的今日待辦中看到）</label>
+                <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto border border-gray-100 rounded-lg p-2">
+                  {(team || []).map(m => (
+                    <label key={m.id} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={reminderParticipantIds.includes(m.id)}
+                        onChange={() => setReminderParticipantIds(prev => prev.includes(m.id) ? prev.filter(id => id !== m.id) : [...prev, m.id])}
+                        className="w-3.5 h-3.5"
+                      /> {m.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <button onClick={handleAddReminder} disabled={!reminderTitle || reminderParticipantIds.length === 0 || reminderSaving} className="w-full bg-gray-800 text-white py-3 rounded-lg font-bold hover:bg-gray-900 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
                 {reminderSaving ? <Loader2 className="animate-spin" size={16} /> : '新增提醒'}
               </button>
             </div>
