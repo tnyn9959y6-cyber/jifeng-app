@@ -41,7 +41,8 @@ import {
   Trophy,
   ChevronLeft,
   ChevronRight,
-  ShieldCheck
+  ShieldCheck,
+  ClipboardCheck
 } from 'lucide-react';
 import { 
   BarChart,
@@ -1135,6 +1136,28 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
     return { totals, recruitTotals, totalPoints, salesPoints, recruitPoints, recruitConversion, interviewPoints, totalPremium, totalFYC, P, C, I, valuePerPoint, premiumPerPoint, productLines };
   }, [activities, records, selectedAgentId, periodRange]);
 
+  // 近6個月趨勢 (跟目前選的月/週檢視獨立，永遠抓最近6個月)
+  const monthlyTrend = useMemo(() => {
+    const months = [];
+    const now = new Date();
+    for (let i = 5; i >= 0; i--) {
+      const d = new Date(now.getFullYear(), now.getMonth() - i, 1);
+      months.push(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+    }
+    return months.map(m => {
+      const monthRecords = records.filter(r => r.agentId === selectedAgentId && r.date.startsWith(m));
+      const monthActivities = activities.filter(a => a.agentId === selectedAgentId && a.date && a.date.startsWith(m));
+      const weighted = monthRecords.reduce((s, r) => s + (r.weighted || 0), 0);
+      const fyc = monthRecords.reduce((s, r) => s + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0);
+      const points = monthActivities.reduce((s, a) => {
+        let dayScore = 0;
+        Object.keys(ALL_ACTIVITY_WEIGHTS).forEach(k => { if (a[k]) dayScore += (a[k] || 0) * ALL_ACTIVITY_WEIGHTS[k].score; });
+        return s + dayScore;
+      }, 0);
+      return { month: m.slice(5) + '月', weighted, fyc: Math.round(fyc), points };
+    });
+  }, [records, activities, selectedAgentId]);
+
   // 準備圖表資料 (漏斗圖變體 - 橫向長條圖)
   const chartData = Object.keys(ACTIVITY_WEIGHTS).map(key => ({
     name: ACTIVITY_WEIGHTS[key].label,
@@ -1508,6 +1531,26 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
           </div>
         </Card>
         )}
+
+        {/* 歷史趨勢圖 (近6個月) */}
+        <Card className="p-6 col-span-1 lg:col-span-3 border-t-4 border-t-indigo-500">
+          <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2">
+            <TrendingUp className="text-indigo-500" size={20} />
+            近6個月趨勢
+          </h3>
+          <ResponsiveContainer width="100%" height={240}>
+            <LineChart data={monthlyTrend}>
+              <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
+              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
+              <YAxis tick={{ fontSize: 11 }} />
+              <Tooltip />
+              <Legend wrapperStyle={{ fontSize: 12 }} />
+              <Line type="monotone" dataKey="weighted" name="加權保費" stroke="#4F46E5" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="fyc" name="FYC(佣金)" stroke="#F59E0B" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="points" name="活動分數" stroke="#10B981" strokeWidth={2} dot={{ r: 3 }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </Card>
       </div>
     </div>
   );
@@ -2454,11 +2497,157 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
 };
 
 // --- Knowledge Base ---
-const KnowledgeBase = () => (
-  <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6 max-w-6xl mx-auto">
-    {INITIAL_DOCS.map(doc => <Card key={doc.id} className="p-6 hover:shadow-lg transition-all"><span className={`px-2 py-1 rounded text-xs font-bold ${doc.color}`}>{doc.tag}</span><h3 className="text-lg font-bold mt-4">{doc.title}</h3></Card>)}
-  </div>
-);
+const KB_CATEGORIES = ['新人入門', '商品知識', '銷售技巧', '增員知識', '競賽與獎勵', '行政與工具', '法規合規', '主管專區'];
+
+const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
+  const [articles, setArticles] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [search, setSearch] = useState('');
+  const [filterCategory, setFilterCategory] = useState('');
+  const [viewingArticle, setViewingArticle] = useState(null);
+  const [editingArticle, setEditingArticle] = useState(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const emptyForm = { title: '', category: KB_CATEGORIES[0], content: '', managerOnly: false };
+  const [form, setForm] = useState(emptyForm);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'knowledge_articles'), (snap) => {
+      setArticles(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setLoaded(true);
+    });
+    return () => unsub();
+  }, []);
+
+  const isManager = isManagerViewer || (loggedInUser && MANAGER_RANKS.includes(loggedInUser.role));
+
+  const visibleArticles = useMemo(() => {
+    return articles.filter(a => {
+      if (a.managerOnly && !isManager) return false;
+      const matchSearch = !search || a.title.includes(search) || (a.content || '').includes(search);
+      const matchCategory = !filterCategory || a.category === filterCategory;
+      return matchSearch && matchCategory;
+    }).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
+  }, [articles, search, filterCategory, isManager]);
+
+  const openAdd = () => { setForm(emptyForm); setIsAdding(true); };
+  const openEdit = (a) => { setEditingArticle(a); setForm({ title: a.title, category: a.category, content: a.content, managerOnly: !!a.managerOnly }); setViewingArticle(null); };
+
+  const handleSave = async () => {
+    if (!form.title.trim() || !loggedInUser) return;
+    setSaving(true);
+    try {
+      if (editingArticle) {
+        await updateDoc(doc(db, 'knowledge_articles', editingArticle.id), { ...form, updatedAt: new Date().toISOString() });
+        setEditingArticle(null);
+      } else {
+        await addDoc(collection(db, 'knowledge_articles'), { ...form, authorId: loggedInUser.id, authorName: loggedInUser.name, createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        setIsAdding(false);
+      }
+      setForm(emptyForm);
+    } catch (e) { console.error(e); } finally { setSaving(false); }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    try { await deleteDoc(doc(db, 'knowledge_articles', deleteTarget)); setDeleteTarget(null); setViewingArticle(null); } catch (e) { console.error(e); }
+  };
+
+  return (
+    <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
+      <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除文章" message="確定要刪除這篇知識庫文章嗎？" />
+
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+        <div>
+          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">知識庫</h2>
+          <p className="text-xs sm:text-sm text-gray-400 mt-1">共 {articles.length} 篇文章</p>
+        </div>
+        <button onClick={openAdd} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 新增文章</button>
+      </div>
+
+      <Card className="p-4">
+        <div className="flex flex-col sm:flex-row gap-3">
+          <input type="text" placeholder="搜尋標題或內容..." className="flex-1 p-3 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none focus:border-indigo-500" value={search} onChange={e => setSearch(e.target.value)} />
+        </div>
+        <div className="flex flex-wrap gap-1.5 mt-3">
+          <button onClick={() => setFilterCategory('')} className={`px-3 py-1.5 rounded-full text-xs font-bold transition ${!filterCategory ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>全部</button>
+          {KB_CATEGORIES.map(cat => (
+            <button key={cat} onClick={() => setFilterCategory(cat)} className={`px-3 py-1.5 rounded-full text-xs font-bold transition ${filterCategory === cat ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'}`}>{cat}</button>
+          ))}
+        </div>
+      </Card>
+
+      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+        {visibleArticles.map(a => (
+          <Card key={a.id} onClick={() => setViewingArticle(a)} className="p-5 cursor-pointer hover:shadow-lg transition-all">
+            <div className="flex items-center gap-1.5 mb-3">
+              <span className="px-2 py-1 rounded text-[10px] font-bold bg-indigo-50 text-indigo-600">{a.category}</span>
+              {a.managerOnly && <span className="px-2 py-1 rounded text-[10px] font-bold bg-amber-50 text-amber-600">主管專區</span>}
+            </div>
+            <h3 className="text-base font-bold text-gray-900 line-clamp-2">{a.title}</h3>
+            <p className="text-xs text-gray-400 mt-2 line-clamp-2">{(a.content || '').slice(0, 60)}</p>
+            <p className="text-[10px] text-gray-300 mt-3">{a.authorName} · {(a.updatedAt || '').slice(0, 10)}</p>
+          </Card>
+        ))}
+        {loaded && visibleArticles.length === 0 && (
+          <div className="col-span-full text-center py-16 text-gray-400">
+            {articles.length === 0 ? '還沒有任何文章，點右上角「新增文章」開始建立' : '沒有符合條件的文章'}
+          </div>
+        )}
+      </div>
+
+      {viewingArticle && (
+        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl animate-scale-up max-h-[85vh] overflow-y-auto">
+            <div className="p-6 border-b border-gray-100 flex justify-between items-start">
+              <div>
+                <span className="px-2 py-1 rounded text-[10px] font-bold bg-indigo-50 text-indigo-600">{viewingArticle.category}</span>
+                <h3 className="text-xl font-bold text-gray-900 mt-2">{viewingArticle.title}</h3>
+                <p className="text-[10px] text-gray-400 mt-1">{viewingArticle.authorName} · {(viewingArticle.updatedAt || '').slice(0, 10)}</p>
+              </div>
+              <button onClick={() => setViewingArticle(null)} className="p-1 hover:bg-gray-100 rounded-full shrink-0"><X size={20} /></button>
+            </div>
+            <div className="p-6">
+              <p className="text-sm text-gray-700 whitespace-pre-wrap leading-relaxed">{viewingArticle.content}</p>
+            </div>
+            <div className="p-6 pt-0 flex gap-2">
+              <button onClick={() => openEdit(viewingArticle)} className="flex items-center gap-1.5 text-indigo-600 hover:text-indigo-700 text-sm font-bold"><Edit3 size={14} /> 編輯</button>
+              <button onClick={() => setDeleteTarget(viewingArticle.id)} className="flex items-center gap-1.5 text-red-500 hover:text-red-600 text-sm font-bold"><Trash2 size={14} /> 刪除</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {(isAdding || editingArticle) && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">{editingArticle ? '編輯文章' : '新增文章'}</h3>
+              <button onClick={() => { setIsAdding(false); setEditingArticle(null); }} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="space-y-3">
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">標題</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} /></div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.category} onChange={e => setForm({ ...form, category: e.target.value })}>
+                  {KB_CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                </select>
+              </div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">內容</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-48 resize-none" value={form.content} onChange={e => setForm({ ...form, content: e.target.value })} /></div>
+              <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                <input type="checkbox" checked={form.managerOnly} onChange={e => setForm({ ...form, managerOnly: e.target.checked })} className="w-4 h-4" /> 僅主管可見
+              </label>
+              <button onClick={handleSave} disabled={!form.title.trim() || saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {saving ? <Loader2 className="animate-spin" size={16} /> : '儲存'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // --- IG 名單匯入 Modal ---
 const IGImportModal = ({ isOpen, onClose, loggedInUser, existingNames, onImported }) => {
@@ -4166,6 +4355,10 @@ const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits,
   const [newIgCount, setNewIgCount] = useState('');
   const [newIgDate, setNewIgDate] = useState(getTodayDate());
   const [newIgAgentId, setNewIgAgentId] = useState(loggedInUser?.id || '');
+  const [trendAgentId, setTrendAgentId] = useState(loggedInUser?.id || '');
+  const trendData = useMemo(() => {
+    return igLogs.filter(l => l.agentId === trendAgentId).sort((a, b) => a.date.localeCompare(b.date)).map(l => ({ date: l.date.slice(5), count: l.count }));
+  }, [igLogs, trendAgentId]);
 
   const shiftMonth = (delta) => {
     const [y, m] = selectedMonth.split('-').map(Number);
@@ -4382,7 +4575,140 @@ const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits,
           <input type="number" min="0" placeholder="粉絲數" className="flex-1 min-w-[100px] p-2 border border-gray-200 rounded-lg text-sm" value={newIgCount} onChange={e => setNewIgCount(e.target.value)} />
           <button onClick={handleLogIgCount} disabled={!newIgCount || (isManagerViewer && !newIgAgentId)} className="bg-indigo-600 text-white px-4 py-2 rounded-lg font-bold text-sm disabled:opacity-50">記錄</button>
         </div>
+
+        <div className="mt-5 pt-5 border-t border-gray-100">
+          <div className="flex items-center justify-between mb-3">
+            <p className="text-xs font-bold text-gray-500">粉絲數趨勢</p>
+            <select className="p-1.5 border border-gray-200 rounded-lg text-xs" value={trendAgentId} onChange={e => setTrendAgentId(e.target.value)}>
+              {team.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+          </div>
+          {trendData.length >= 2 ? (
+            <ResponsiveContainer width="100%" height={200}>
+              <LineChart data={trendData}>
+                <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
+                <XAxis dataKey="date" tick={{ fontSize: 10 }} />
+                <YAxis tick={{ fontSize: 10 }} />
+                <Tooltip />
+                <Line type="monotone" dataKey="count" stroke="#4F46E5" strokeWidth={2} dot={{ r: 3 }} />
+              </LineChart>
+            </ResponsiveContainer>
+          ) : (
+            <p className="text-center text-gray-400 text-xs py-8">至少要有2筆記錄才能畫出趨勢圖</p>
+          )}
+        </div>
       </Card>
+    </div>
+
+  );
+};
+
+// --- 新人培訓進度追蹤 ---
+const TRAINING_SECTIONS = [
+  { title: '第一週：基礎認識', items: [
+    { id: 'company_intro', label: '公司／組織介紹' },
+    { id: 'system_training', label: '系統操作教學（App怎麼用）' },
+    { id: 'compliance', label: '基本合規／法遵教育' }
+  ]},
+  { title: '第一個月：商品與技巧', items: [
+    { id: 'product_test', label: '商品知識測驗（各險種）' },
+    { id: 'pitch_practice', label: '話術演練（開發／約訪／面談）' },
+    { id: 'accompany_visit', label: '陪同拜訪（累積3次）' }
+  ]},
+  { title: '內外勤考核', items: [
+    { id: 'internal_test', label: '內部測驗通過' },
+    { id: 'registration_exam', label: '業務員登錄考試通過' }
+  ]},
+  { title: '第一季：實戰達標', items: [
+    { id: 'first_case', label: '首件保單完成' },
+    { id: 'premium_target', label: '累積保費達標' },
+    { id: 'activity_target', label: 'MEA活動量達基本門檻' }
+  ]},
+  { title: '持續發展', items: [
+    { id: 'recruit_training', label: '增員訓練' },
+    { id: 'advanced_training', label: '進階商品／法規教育' }
+  ]}
+];
+const TRAINING_ALL_ITEMS = TRAINING_SECTIONS.flatMap(s => s.items);
+
+const TrainingChecklistPage = ({ team }) => {
+  const [checklists, setChecklists] = useState({});
+  const [selectedMemberId, setSelectedMemberId] = useState(team[0]?.id || null);
+
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'training_checklists'), (snap) => {
+      const map = {};
+      snap.docs.forEach(d => { map[d.id] = d.data(); });
+      setChecklists(map);
+    });
+    return () => unsub();
+  }, []);
+
+  const progress = (memberId) => {
+    const items = checklists[memberId]?.items || {};
+    const doneCount = TRAINING_ALL_ITEMS.filter(i => items[i.id]).length;
+    return Math.round((doneCount / TRAINING_ALL_ITEMS.length) * 100);
+  };
+
+  const toggleItem = async (memberId, itemId) => {
+    const current = checklists[memberId]?.items || {};
+    const next = { ...current, [itemId]: !current[itemId] };
+    try { await setDoc(doc(db, 'training_checklists', memberId), { items: next, updatedAt: new Date().toISOString() }, { merge: true }); } catch (e) { console.error(e); }
+  };
+
+  const selectedMember = team.find(m => m.id === selectedMemberId);
+  const selectedItems = checklists[selectedMemberId]?.items || {};
+
+  return (
+    <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
+      <div>
+        <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">新人培訓進度</h2>
+        <p className="text-xs sm:text-sm text-gray-400 mt-1">追蹤每位同仁的訓練檢核表</p>
+      </div>
+
+      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+        <Card className="p-4 lg:col-span-1">
+          <p className="text-xs font-bold text-gray-400 uppercase mb-3">選擇同仁</p>
+          <div className="space-y-1.5 max-h-[600px] overflow-y-auto">
+            {team.map(m => {
+              const pct = progress(m.id);
+              return (
+                <button key={m.id} onClick={() => setSelectedMemberId(m.id)} className={`w-full flex items-center justify-between gap-2 p-2.5 rounded-lg text-left transition ${selectedMemberId === m.id ? 'bg-indigo-50 border border-indigo-200' : 'hover:bg-gray-50'}`}>
+                  <span className="text-sm font-bold text-gray-800">{m.name}</span>
+                  <span className={`text-xs font-bold ${pct === 100 ? 'text-emerald-500' : 'text-gray-400'}`}>{pct}%</span>
+                </button>
+              );
+            })}
+          </div>
+        </Card>
+
+        {selectedMember && (
+          <Card className="p-5 lg:col-span-2">
+            <div className="flex items-center justify-between mb-1">
+              <h3 className="font-bold text-gray-800">{selectedMember.name} 的訓練進度</h3>
+              <span className="text-lg font-bold text-indigo-600">{progress(selectedMemberId)}%</span>
+            </div>
+            <div className="h-2 w-full bg-gray-100 rounded-full overflow-hidden mb-6">
+              <div className="h-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500" style={{ width: `${progress(selectedMemberId)}%` }}></div>
+            </div>
+            <div className="space-y-5">
+              {TRAINING_SECTIONS.map(section => (
+                <div key={section.title}>
+                  <p className="text-xs font-bold text-gray-400 uppercase mb-2">{section.title}</p>
+                  <div className="space-y-1.5">
+                    {section.items.map(item => (
+                      <label key={item.id} className="flex items-center gap-2.5 p-2 rounded-lg hover:bg-gray-50 cursor-pointer">
+                        <input type="checkbox" checked={!!selectedItems[item.id]} onChange={() => toggleItem(selectedMemberId, item.id)} className="w-4 h-4" />
+                        <span className={`text-sm ${selectedItems[item.id] ? 'text-gray-400 line-through' : 'text-gray-700'}`}>{item.label}</span>
+                      </label>
+                    ))}
+                  </div>
+                </div>
+              ))}
+            </div>
+          </Card>
+        )}
+      </div>
     </div>
   );
 };
@@ -5367,21 +5693,15 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         <div>
           <h3 className="text-sm font-bold text-gray-500 mb-3 flex items-center gap-1.5"><Users size={14} /> 團隊行程總覽（未來14天）</h3>
           <div className="space-y-3">
-            {teamGroupedByDate.map(([date, events]) => (
-              <Card key={date} className="p-4">
-                <h4 className="text-xs font-bold text-gray-500 mb-2">{date}（{getWeekdayLabel(date)}）</h4>
-                <div className="space-y-1.5">
-                  {events.sort((a, b) => (a.time || '').localeCompare(b.time || '')).map(e => (
-                    <div key={e.id} className="flex items-center gap-2 text-xs">
-                      <span className={`w-1.5 h-1.5 rounded-full shrink-0 ${getEventColor(e)}`}></span>
-                      <span className="font-bold text-gray-700 shrink-0">{e.ownerName}</span>
-                      <span className="text-gray-400">{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</span>
-                      {e.time && <span className="text-gray-400 ml-auto shrink-0">{e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}
-                    </div>
-                  ))}
-                </div>
-              </Card>
-            ))}
+            {teamGroupedByDate.map(([date, events]) => {
+              const displayEvents = events.map(e => ({ ...e, customerName: e.customerName ? `${e.ownerName} · ${e.customerName}` : e.ownerName }));
+              return (
+                <Card key={date} className="p-4">
+                  <h4 className="text-xs font-bold text-gray-500 mb-3">{date}（{getWeekdayLabel(date)}）</h4>
+                  <DayTimelineView events={displayEvents} isToday={date === today} onEventClick={() => {}} getEventLabel={getEventLabel} getEventPriority={getEventPriority} />
+                </Card>
+              );
+            })}
           </div>
         </div>
       )}
@@ -6482,6 +6802,7 @@ const App = () => {
     { id: 'team', label: '組織架構', icon: Users },
     { id: 'recruitment', label: '增員儀表板', icon: UserPlus },
     { id: 'wiki', label: '知識庫', icon: BookOpen },
+    { id: 'training', label: '新人培訓', icon: ClipboardCheck },
     ...(loggedInUser && MANAGER_RANKS.includes(loggedInUser.role) ? [{ id: 'settings', label: '競賽設定', icon: Settings }] : [])
   ];
 
@@ -6568,7 +6889,8 @@ const App = () => {
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} />}
         {activeTab === 'team' && <OrgChart team={team} recruits={recruits} />}
         {activeTab === 'recruitment' && <RecruitmentDashboard recruits={recruits} team={team} user={user} />}
-        {activeTab === 'wiki' && <KnowledgeBase />}
+        {activeTab === 'wiki' && <KnowledgeBase loggedInUser={loggedInUser} isManagerViewer={isTeamScheduleViewer} />}
+        {activeTab === 'training' && <TrainingChecklistPage team={team} />}
         {activeTab === 'settings' && loggedInUser && MANAGER_RANKS.includes(loggedInUser.role) && <SettingsPage rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
       </main>
     </div>
