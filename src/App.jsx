@@ -40,7 +40,8 @@ import {
   MapPin,
   Trophy,
   ChevronLeft,
-  ChevronRight
+  ChevronRight,
+  ShieldCheck
 } from 'lucide-react';
 import { 
   BarChart,
@@ -780,7 +781,8 @@ const DEFAULT_BINGO_TASKS = [
   { id: 'exam', label: '完成1位內考/外考', desc: '增員儀表板達「內考」或「外考」階段', type: 'auto_exam', unit: 1, once: false },
   { id: 'weekly_activity', label: '每週銷售活動量100分', desc: '本月內達成100分的週數', type: 'auto_weekly_activity', unit: 1, once: false },
   { id: 'read_book', label: '看完一本書', desc: '自行勾選，限完成一次', type: 'manual_check', once: true },
-  { id: 'exercise', label: '每月運動4次', desc: '自行勾選，限完成一次', type: 'manual_check', once: true }
+  { id: 'exercise', label: '每月運動4次', desc: '自行勾選，限完成一次', type: 'manual_check', once: true },
+  { id: 'emergency_contact', label: '保單安心聯絡人', desc: '每5張計分，無上限，自行填寫張數', type: 'manual_count', unit: 5, once: false }
 ];
 const BINGO_CELL_SCORE = 5;
 const BINGO_LINE_BONUS = 10;
@@ -3112,7 +3114,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isIGOpen, setIsIGOpen] = useState(false);
   const [isNotionOpen, setIsNotionOpen] = useState(false);
-  const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', tags: ['準客戶'], notes: '', nextFollowUpDate: '', address: '' };
+  const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', tags: ['準客戶'], notes: '', nextFollowUpDate: '', address: '', emergencyContactId: '', emergencyContactName: '' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const loaded = customersLoaded;
@@ -3168,7 +3170,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   const openAdd = () => { setForm(emptyForm); setIsAdding(true); };
   const openEdit = (c) => {
     setEditCustomer(c);
-    setForm({ name: c.name, phone: c.phone || '', lineId: c.lineId || '', igHandle: c.igHandle || '', birthday: c.birthday || '', gender: c.gender || '', region: c.region || '', incomeRange: c.incomeRange || '', tags: (c.tags && c.tags.length) ? c.tags : ['準客戶'], notes: c.notes || '', nextFollowUpDate: c.nextFollowUpDate || '', address: c.address || '' });
+    setForm({ name: c.name, phone: c.phone || '', lineId: c.lineId || '', igHandle: c.igHandle || '', birthday: c.birthday || '', gender: c.gender || '', region: c.region || '', incomeRange: c.incomeRange || '', tags: (c.tags && c.tags.length) ? c.tags : ['準客戶'], notes: c.notes || '', nextFollowUpDate: c.nextFollowUpDate || '', address: c.address || '', emergencyContactId: c.emergencyContactId || '', emergencyContactName: c.emergencyContactName || '' });
   };
 
   const handleSave = async () => {
@@ -3459,6 +3461,17 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                     <a href={getAppleMapsUrl(c.address)} target="_blank" rel="noopener noreferrer" className="shrink-0 text-[9px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-bold hover:bg-gray-200">Apple</a>
                   </div>
                 )}
+                {c.emergencyContactName && (
+                  <div className="flex items-center gap-1.5">
+                    <ShieldCheck size={12} className="shrink-0 text-teal-500" />
+                    <span className="text-gray-500">安心聯絡人：</span>
+                    {c.emergencyContactId && customers.some(x => x.id === c.emergencyContactId) ? (
+                      <button onClick={() => openEdit(customers.find(x => x.id === c.emergencyContactId))} className="text-teal-600 font-bold hover:underline">{c.emergencyContactName}</button>
+                    ) : (
+                      <span>{c.emergencyContactName}</span>
+                    )}
+                  </div>
+                )}
               </div>
               {c.notes && <p className="text-xs text-gray-600 bg-gray-50 rounded-lg p-2 mt-3 flex gap-1.5"><MessageSquare size={12} className="shrink-0 mt-0.5" /> {c.notes}</p>}
               {isFollowUpDue(c) && <p className="text-[10px] font-bold text-amber-600 mt-2">⚠ 追蹤日期已到：{c.nextFollowUpDate}</p>}
@@ -3546,6 +3559,20 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                   </select>
                 </div>
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">地址（選填，可開啟地圖）</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} /></div>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">保單安心聯絡人（選填）</label>
+                <input type="text" className="w-full p-2 border border-gray-200 rounded-lg mb-1.5" placeholder="姓名" value={form.emergencyContactName} onChange={e => setForm({ ...form, emergencyContactName: e.target.value })} />
+                <CustomerPicker
+                  customers={customers.filter(c => c.id !== editCustomer?.id)}
+                  value={form.emergencyContactId}
+                  onChange={(id) => {
+                    const picked = customers.find(c => c.id === id);
+                    setForm({ ...form, emergencyContactId: id, emergencyContactName: picked ? picked.name : form.emergencyContactName });
+                  }}
+                  onCreateNew={async () => { window.alert('若這個人不在客戶名單裡，直接在上方姓名欄填寫文字即可，不需要建立新客戶卡'); return null; }}
+                />
+                <p className="text-[10px] text-gray-400 mt-1">若對方是系統裡的客戶，用下面的搜尋框連結，之後可以直接點過去看他的資料</p>
               </div>
               <div>
                 <label className="text-xs font-bold text-gray-500 block mb-2">標籤（可複選）</label>
