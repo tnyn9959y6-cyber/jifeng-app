@@ -83,7 +83,8 @@ import {
   getDoc,
   where,
   increment,
-  arrayUnion
+  arrayUnion,
+  arrayRemove
 } from 'firebase/firestore';
 
 // --- Firebase Initialization (User Provided) ---
@@ -878,6 +879,28 @@ const completeScheduleEvent = async (event, ownerId) => {
   if (event.customerId) {
     await updateDoc(doc(db, 'customers', event.customerId), {
       visitLog: arrayUnion({ date: event.date, type: ALL_ACTIVITY_WEIGHTS[event.type]?.label || event.type, note: event.note || '' })
+    });
+  }
+};
+
+// 取消完成：把行程復原回「未完成」，並且把當初計入的 MEA 分數與拜訪軌跡一併還原
+const undoCompleteScheduleEvent = async (event, ownerId) => {
+  await updateDoc(doc(db, 'schedule_events', event.id), { status: 'scheduled', completedAt: null });
+  if (event.isReminder) return;
+  const docId = `${ownerId}_${event.date}`;
+  const cascadeKeys = getCascadeKeys(event.type);
+  const decrementPayload = {};
+  cascadeKeys.forEach(k => { decrementPayload[k] = increment(-1); });
+  await setDoc(doc(db, 'activity_record', docId), {
+    agentId: ownerId,
+    date: event.date,
+    month: event.date.substring(0, 7),
+    ...decrementPayload,
+    updatedAt: new Date().toISOString()
+  }, { merge: true });
+  if (event.customerId) {
+    await updateDoc(doc(db, 'customers', event.customerId), {
+      visitLog: arrayRemove({ date: event.date, type: ALL_ACTIVITY_WEIGHTS[event.type]?.label || event.type, note: event.note || '' })
     });
   }
 };
@@ -5241,37 +5264,35 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
   // --- 完成行程 ---
   const handleCompleteEvent = async (event) => {
     if (!loggedInUser) return;
-    if (event.isVirtual) {
-      setBusyId(event.id);
-      try {
-        await addDoc(collection(db, 'schedule_events'), {
-          ownerId: loggedInUser.id, ruleId: event.ruleId, customerId: '', customerName: '',
-          isReminder: true, type: 'reminder', title: event.title, category: event.category, priority: event.priority,
-          date: event.date, time: event.time, note: event.note,
-          status: 'completed', completedAt: new Date().toISOString(), createdAt: new Date().toISOString()
-        });
-      } catch (e) { console.error(e); } finally { setBusyId(null); }
-      return;
-    }
-    if (event.customerId) {
-      setCompletingEvent(event);
-      setFollowUpInput('');
-      return;
-    }
-    setBusyId(event.id);
-    try { await completeScheduleEvent(event, loggedInUser.id); } catch (e) { console.error(e); } finally { setBusyId(null); }
+    setCompletingEvent(event);
+    setFollowUpInput('');
   };
 
   const handleConfirmCompleteEvent = async () => {
     if (!completingEvent || !loggedInUser) return;
     setBusyId(completingEvent.id);
     try {
-      await completeScheduleEvent(completingEvent, loggedInUser.id);
-      if (followUpInput && completingEvent.customerId) {
-        await updateDoc(doc(db, 'customers', completingEvent.customerId), { nextFollowUpDate: followUpInput });
+      if (completingEvent.isVirtual) {
+        await addDoc(collection(db, 'schedule_events'), {
+          ownerId: loggedInUser.id, ruleId: completingEvent.ruleId, customerId: '', customerName: '',
+          isReminder: true, type: 'reminder', title: completingEvent.title, category: completingEvent.category, priority: completingEvent.priority,
+          date: completingEvent.date, time: completingEvent.time, note: completingEvent.note,
+          status: 'completed', completedAt: new Date().toISOString(), createdAt: new Date().toISOString()
+        });
+      } else {
+        await completeScheduleEvent(completingEvent, loggedInUser.id);
+        if (followUpInput && completingEvent.customerId) {
+          await updateDoc(doc(db, 'customers', completingEvent.customerId), { nextFollowUpDate: followUpInput });
+        }
       }
       setCompletingEvent(null);
     } catch (e) { console.error(e); } finally { setBusyId(null); }
+  };
+
+  const handleUndoComplete = async (event) => {
+    if (!loggedInUser) return;
+    setBusyId(event.id);
+    try { await undoCompleteScheduleEvent(event, loggedInUser.id); } catch (e) { console.error(e); } finally { setBusyId(null); }
   };
 
   // --- 標記聯繫客戶 (該追蹤 + 自動推薦皆共用) ---
@@ -5711,9 +5732,14 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
           <h3 className="text-sm font-bold text-gray-400 mb-3">最近完成</h3>
           <div className="space-y-2">
             {completedRecent.map(e => (
-              <div key={e.id} className="text-xs text-gray-400 flex justify-between px-2">
-                <span>{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</span>
-                <span>{e.date}</span>
+              <div key={e.id} className="text-xs text-gray-400 flex items-center justify-between px-2 py-1 group">
+                <span className="truncate">{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</span>
+                <div className="flex items-center gap-2 shrink-0">
+                  <span>{e.date}{e.time ? ` ${e.time}${e.endTime ? `-${e.endTime}` : ''}` : ''}</span>
+                  <button onClick={() => handleUndoComplete(e)} disabled={busyId === e.id} className="opacity-0 group-hover:opacity-100 text-[10px] font-bold text-indigo-500 hover:text-indigo-600 transition disabled:opacity-50">
+                    {busyId === e.id ? <Loader2 size={11} className="animate-spin" /> : '取消完成'}
+                  </button>
+                </div>
               </div>
             ))}
           </div>
@@ -5888,10 +5914,12 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
             </div>
             <p className="text-sm text-gray-600 mb-4">{getEventLabel(completingEvent)}{completingEvent.customerName && ` · ${completingEvent.customerName}`}</p>
             <div className="space-y-3">
-              <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">需要設定下次追蹤日期嗎？（選填）</label>
-                <input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={followUpInput} onChange={e => setFollowUpInput(e.target.value)} />
-              </div>
+              {completingEvent.customerId && (
+                <div>
+                  <label className="text-xs font-bold text-gray-500 block mb-1">需要設定下次追蹤日期嗎？（選填）</label>
+                  <input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={followUpInput} onChange={e => setFollowUpInput(e.target.value)} />
+                </div>
+              )}
               <button onClick={handleConfirmCompleteEvent} disabled={busyId === completingEvent.id} className="w-full bg-emerald-500 text-white py-3 rounded-lg font-bold hover:bg-emerald-600 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
                 {busyId === completingEvent.id ? <Loader2 className="animate-spin" size={16} /> : '確認完成'}
               </button>
