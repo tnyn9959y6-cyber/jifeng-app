@@ -44,7 +44,10 @@ import {
   ShieldCheck,
   ClipboardCheck,
   ClipboardList,
-  Award
+  Award,
+  CalendarPlus,
+  Bell,
+  Repeat
 } from 'lucide-react';
 import { 
   BarChart,
@@ -5354,30 +5357,31 @@ const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick,
         <span className="font-bold text-gray-800 text-base">{calendarMonth}</span>
         <button onClick={() => shiftMonth(1)} className="text-gray-400 hover:text-gray-700 p-1"><ChevronRight size={20} /></button>
       </div>
-      <div className="grid grid-cols-7 gap-1.5 sm:gap-2 text-center text-xs font-bold text-gray-400 mb-2">
+      <div className="grid grid-cols-7 gap-1 sm:gap-1.5 text-center text-xs font-bold text-gray-400 mb-1.5">
         {['日', '一', '二', '三', '四', '五', '六'].map(w => <div key={w}>{w}</div>)}
       </div>
-      <div className="grid grid-cols-7 gap-1.5 sm:gap-2">
+      <div className="grid grid-cols-7 gap-1 sm:gap-1.5">
         {gridDays.map((dateStr, i) => {
           if (!dateStr) return <div key={i}></div>;
           const dayEvents = eventsByDate[dateStr] || [];
           const isToday = dateStr === today;
           const isSelected = dateStr === selectedDay;
           const holiday = TAIWAN_HOLIDAYS_2026[dateStr];
+          const maxRows = holiday ? 3 : 4;
           return (
             <button
               key={dateStr}
               onClick={() => setSelectedDay(dateStr)}
-              style={{ minHeight: '56px' }}
-              className={`sm:min-h-[76px] rounded-xl py-1.5 flex flex-col items-center gap-1.5 transition border ${isSelected ? 'border-indigo-300 bg-indigo-50/70' : isToday ? 'border-indigo-200' : 'border-gray-100 hover:bg-gray-50'}`}
+              style={{ minHeight: '92px' }}
+              className={`sm:min-h-[112px] rounded-lg pt-1 pb-1 flex flex-col items-stretch gap-0.5 transition border overflow-hidden ${isSelected ? 'border-indigo-300 bg-indigo-50/40' : 'border-transparent hover:bg-gray-50'} ${isToday ? 'bg-gray-50' : ''}`}
             >
-              <span className={`text-sm w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white font-bold' : holiday ? 'text-red-500 font-bold' : 'text-gray-700'}`}>{Number(dateStr.slice(8))}</span>
-              <div className="flex items-center gap-1 flex-wrap justify-center px-0.5">
-                {holiday && <span className="w-1.5 h-1.5 rounded-full bg-red-400"></span>}
-                {dayEvents.slice(0, 4).map((e, idx) => (
-                  <span key={idx} className={`w-1.5 h-1.5 rounded-full ${getEventColor(e)} ${e.status === 'completed' ? 'opacity-30' : ''}`}></span>
+              <span className={`text-xs w-5 h-5 mx-auto flex items-center justify-center rounded-full shrink-0 ${isToday ? 'bg-gray-900 text-white font-bold' : holiday ? 'text-red-500 font-bold' : 'text-gray-500'}`}>{Number(dateStr.slice(8))}</span>
+              <div className="flex flex-col gap-px px-0.5 mt-0.5 min-w-0">
+                {holiday && <span className="text-[9px] leading-tight font-bold rounded-sm px-1 py-0.5 truncate bg-red-500 text-white text-left">{holiday}</span>}
+                {dayEvents.slice(0, maxRows).map((e, idx) => (
+                  <span key={idx} className={`text-[9px] leading-tight font-bold rounded-sm px-1 py-0.5 truncate text-left text-white ${getEventColor(e)} ${e.status === 'completed' ? 'opacity-35' : ''}`}>{getEventLabel(e)}</span>
                 ))}
-                {dayEvents.length > 4 && <span className="text-[9px] text-gray-400 font-bold">+{dayEvents.length - 4}</span>}
+                {dayEvents.length > maxRows && <span className="text-[9px] text-gray-400 font-bold text-left px-1">+{dayEvents.length - maxRows}</span>}
               </div>
             </button>
           );
@@ -5726,6 +5730,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   };
   const [filterPriority, setFilterPriority] = useState('');
   const [showTeamView, setShowTeamView] = useState(false);
+  const [showAddMenu, setShowAddMenu] = useState(false);
   const getEventCategory = (e) => {
     if (e.isReminder) return e.category || 'other';
     return ACTIVITY_WEIGHTS[e.type] ? 'sales' : 'recruit';
@@ -6076,17 +6081,42 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
           <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">行事曆</h2>
           <p className="text-sm text-gray-400 mt-1">{today} · {getWeekdayLabel(today)}</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex items-center gap-2">
           {isTeamScheduleViewer && (
             <div className="flex gap-1 bg-gray-100 p-0.5 rounded-lg">
               <button onClick={() => setShowTeamView(false)} className={`px-3 py-2 rounded-md text-sm font-bold transition ${!showTeamView ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>我的</button>
               <button onClick={() => setShowTeamView(true)} className={`px-3 py-2 rounded-md text-sm font-bold transition ${showTeamView ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>團隊</button>
             </div>
           )}
-          <button onClick={() => setShowRecurringManage(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2.5 rounded-lg font-bold text-sm transition"><Calendar size={16} /> 固定行程</button>
-          <button onClick={() => setShowBatchSchedule(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2.5 rounded-lg font-bold text-sm transition"><ListPlus size={16} /> 批次新增</button>
-          <button onClick={() => setShowReminderForm(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2.5 rounded-lg font-bold text-sm transition"><Plus size={16} /> 純提醒</button>
-          <button onClick={() => setShowForm(true)} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2.5 rounded-lg font-bold text-sm transition"><Plus size={16} /> 新增行程</button>
+          <div className="relative">
+            <button onClick={() => setShowAddMenu(v => !v)} className={`w-11 h-11 rounded-full flex items-center justify-center transition shadow-sm ${showAddMenu ? 'bg-gray-900 text-white rotate-45' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}>
+              <Plus size={22} />
+            </button>
+            {showAddMenu && (
+              <>
+                <div className="fixed inset-0 z-40" onClick={() => setShowAddMenu(false)}></div>
+                <div className="absolute right-0 mt-2 w-52 bg-white rounded-2xl shadow-2xl border border-gray-100 py-2 z-50 animate-scale-up origin-top-right">
+                  <button onClick={() => { setShowForm(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
+                    <span className="w-8 h-8 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0"><CalendarPlus size={16} /></span>
+                    <span className="text-sm font-bold text-gray-700">新增行程</span>
+                  </button>
+                  <button onClick={() => { setShowReminderForm(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
+                    <span className="w-8 h-8 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center shrink-0"><Bell size={16} /></span>
+                    <span className="text-sm font-bold text-gray-700">純提醒</span>
+                  </button>
+                  <button onClick={() => { setShowBatchSchedule(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
+                    <span className="w-8 h-8 rounded-full bg-teal-50 text-teal-600 flex items-center justify-center shrink-0"><ListPlus size={16} /></span>
+                    <span className="text-sm font-bold text-gray-700">批次新增</span>
+                  </button>
+                  <div className="my-1 border-t border-gray-100"></div>
+                  <button onClick={() => { setShowRecurringManage(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
+                    <span className="w-8 h-8 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center shrink-0"><Repeat size={16} /></span>
+                    <span className="text-sm font-bold text-gray-700">固定行程管理</span>
+                  </button>
+                </div>
+              </>
+            )}
+          </div>
         </div>
       </div>
 
