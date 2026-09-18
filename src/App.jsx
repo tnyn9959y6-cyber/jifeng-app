@@ -855,6 +855,33 @@ const REMINDER_CATEGORIES = {
   other: { label: '其他', color: 'bg-gray-400' }
 };
 
+// 2026年（民國115年）中華民國政府行政機關辦公日曆表，依人事行政總處公告 (2026年起只補假不補班)
+// 這份資料是手動維護的，之後年度更新需要重新查詢官方公告並修改這裡
+const TAIWAN_HOLIDAYS_2026 = {
+  '2026-01-01': '元旦',
+  '2026-02-15': '小年夜',
+  '2026-02-16': '除夕',
+  '2026-02-17': '春節',
+  '2026-02-18': '春節',
+  '2026-02-19': '春節',
+  '2026-02-20': '春節補假',
+  '2026-02-27': '和平紀念日補假',
+  '2026-02-28': '和平紀念日',
+  '2026-04-03': '兒童節補假',
+  '2026-04-04': '兒童節',
+  '2026-04-05': '清明節',
+  '2026-04-06': '清明節補假',
+  '2026-05-01': '勞動節',
+  '2026-06-19': '端午節',
+  '2026-09-25': '中秋節',
+  '2026-09-28': '教師節',
+  '2026-10-09': '國慶日補假',
+  '2026-10-10': '國慶日',
+  '2026-10-25': '台灣光復節',
+  '2026-10-26': '台灣光復節補假',
+  '2026-12-25': '行憲紀念日'
+};
+
 const getEventColor = (e) => {
   if (e.isReminder) return (REMINDER_CATEGORIES[e.category] || REMINDER_CATEGORIES.other).color;
   return ALL_ACTIVITY_WEIGHTS[e.type]?.color || 'bg-gray-400';
@@ -5033,7 +5060,7 @@ const PersonalTodoList = ({ loggedInUser }) => {
           className="flex-1 p-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-teal-500"
           value={text}
           onChange={e => setText(e.target.value)}
-          onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
+          onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) handleAdd(); }}
         />
         <button onClick={handleAdd} disabled={!text.trim() || saving} className="bg-teal-600 hover:bg-teal-700 text-white px-3 rounded-lg disabled:opacity-50">
           {saving ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
@@ -5112,6 +5139,7 @@ const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick,
           const dayEvents = eventsByDate[dateStr] || [];
           const isToday = dateStr === today;
           const isSelected = dateStr === selectedDay;
+          const holiday = TAIWAN_HOLIDAYS_2026[dateStr];
           return (
             <button
               key={dateStr}
@@ -5119,12 +5147,13 @@ const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick,
               style={{ minHeight: '68px' }}
               className={`rounded-xl p-1 flex flex-col items-center gap-0.5 transition border ${isSelected ? 'border-indigo-300 bg-indigo-50/70' : isToday ? 'border-indigo-200' : 'border-gray-100 hover:bg-gray-50'}`}
             >
-              <span className={`text-[11px] w-5 h-5 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white font-bold' : 'text-gray-600'}`}>{Number(dateStr.slice(8))}</span>
+              <span className={`text-[11px] w-5 h-5 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white font-bold' : holiday ? 'text-red-500 font-bold' : 'text-gray-600'}`}>{Number(dateStr.slice(8))}</span>
               <div className="w-full flex flex-col gap-0.5">
-                {dayEvents.slice(0, 2).map((e, idx) => (
+                {holiday && <span className="text-[8px] leading-tight font-bold rounded px-1 py-0.5 truncate bg-red-50 text-red-600">{holiday}</span>}
+                {dayEvents.slice(0, holiday ? 1 : 2).map((e, idx) => (
                   <span key={idx} className={`text-[8px] leading-tight font-bold rounded px-1 py-0.5 truncate ${getEventPillClass(e)}`}>{getEventLabel(e)}</span>
                 ))}
-                {dayEvents.length > 2 && <span className="text-[8px] text-gray-400 font-bold">+{dayEvents.length - 2}</span>}
+                {dayEvents.length > (holiday ? 1 : 2) && <span className="text-[8px] text-gray-400 font-bold">+{dayEvents.length - (holiday ? 1 : 2)}</span>}
               </div>
             </button>
           );
@@ -5132,7 +5161,7 @@ const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick,
       </div>
 
       <div className="mt-5 pt-5 border-t border-gray-100">
-        <p className="text-xs font-bold text-gray-500 mb-2">{selectedDay} 的行程</p>
+        <p className="text-xs font-bold text-gray-500 mb-2">{selectedDay} 的行程{TAIWAN_HOLIDAYS_2026[selectedDay] && <span className="text-red-500"> · {TAIWAN_HOLIDAYS_2026[selectedDay]}</span>}</p>
         {selectedDayEvents.length === 0 && <p className="text-center text-gray-400 text-xs py-4">這天沒有安排</p>}
         <div className="space-y-1.5">
           {selectedDayEvents.map(e => (
@@ -5186,7 +5215,13 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
 
   // 分類/優先度篩選
   const [filterCategory, setFilterCategory] = useState('');
-  const [viewMode, setViewMode] = useState('timeline');
+  const [viewMode, setViewMode] = useState(loggedInUser?.defaultScheduleView || 'timeline');
+  const [savingDefaultView, setSavingDefaultView] = useState(false);
+  const handleSetDefaultView = async () => {
+    if (!loggedInUser) return;
+    setSavingDefaultView(true);
+    try { await updateDoc(doc(db, 'user', loggedInUser.id), { defaultScheduleView: viewMode }); } catch (e) { console.error(e); } finally { setSavingDefaultView(false); }
+  };
   const [filterPriority, setFilterPriority] = useState('');
   const getEventCategory = (e) => {
     if (e.isReminder) return e.category || 'other';
@@ -5719,10 +5754,17 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         {(filterCategory || filterPriority) && (
           <button onClick={() => { setFilterCategory(''); setFilterPriority(''); }} className="text-xs font-bold text-gray-400 hover:text-gray-600 px-2">清除篩選</button>
         )}
-        <div className="ml-auto flex gap-1 bg-gray-100 p-0.5 rounded-lg">
-          <button onClick={() => setViewMode('timeline')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${viewMode === 'timeline' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>時間軸</button>
-          <button onClick={() => setViewMode('calendar')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${viewMode === 'calendar' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>月曆</button>
-          <button onClick={() => setViewMode('list')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${viewMode === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>清單</button>
+        <div className="ml-auto flex items-center gap-2">
+          <div className="flex gap-1 bg-gray-100 p-0.5 rounded-lg">
+            <button onClick={() => setViewMode('timeline')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${viewMode === 'timeline' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>時間軸</button>
+            <button onClick={() => setViewMode('calendar')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${viewMode === 'calendar' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>月曆</button>
+            <button onClick={() => setViewMode('list')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${viewMode === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>清單</button>
+          </div>
+          {loggedInUser?.defaultScheduleView !== viewMode && (
+            <button onClick={handleSetDefaultView} disabled={savingDefaultView} className="text-[10px] font-bold text-indigo-500 hover:text-indigo-600 whitespace-nowrap disabled:opacity-50">
+              {savingDefaultView ? '儲存中...' : '設為預設'}
+            </button>
+          )}
         </div>
       </Card>
 
@@ -6956,7 +6998,8 @@ const App = () => {
           passwordHash: data.passwordHash || null,
           passwordSalt: data.passwordSalt || null,
           rememberToken: data.rememberToken || null,
-          lastSeenCelebration: data.lastSeenCelebration || ''
+          lastSeenCelebration: data.lastSeenCelebration || '',
+          defaultScheduleView: data.defaultScheduleView || ''
         };
       });
       setTeam(adaptedTeam.sort((a,b)=>a.id.localeCompare(b.id)));
