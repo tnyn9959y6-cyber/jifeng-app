@@ -758,21 +758,21 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
 
 // --- MEA Activity Dashboard (New Module based on Excel) ---
 const ACTIVITY_WEIGHTS = {
-  prospect: { label: '新增準客戶', score: 1, color: 'bg-blue-500' },
-  appointment: { label: '約訪', score: 1, color: 'bg-indigo-500' },
-  interview: { label: '面談', score: 2, color: 'bg-violet-500' },
-  proposal: { label: '送建議書', score: 3, color: 'bg-fuchsia-500' },
-  application: { label: '要保受理', score: 4, color: 'bg-pink-500' },
-  issue: { label: '核保發單', score: 5, color: 'bg-rose-500' }
+  prospect: { label: '新增準客戶', score: 1, color: 'bg-blue-400' },
+  appointment: { label: '約訪', score: 1, color: 'bg-blue-500' },
+  interview: { label: '面談', score: 2, color: 'bg-blue-600' },
+  proposal: { label: '送建議書', score: 3, color: 'bg-blue-700' },
+  application: { label: '要保受理', score: 4, color: 'bg-blue-800' },
+  issue: { label: '核保發單', score: 5, color: 'bg-blue-900' }
 };
 
 // 增員相關活動 (與業務活動並列計分，用於 MEA 總分)。分數曲線比照業務六階段 (1-1-2-3-4-5) 的邏輯設計
 const RECRUIT_ACTIVITY_WEIGHTS = {
-  newRecruitProspect: { label: '新增準增員', score: 1, color: 'bg-teal-500' },
-  recruitContact: { label: '增員約訪', score: 1, color: 'bg-cyan-500' },
-  recruitInterview: { label: '增員面談', score: 2, color: 'bg-cyan-600' },
-  recruitExam: { label: '內/外考', score: 4, color: 'bg-blue-600' },
-  recruitRegistered: { label: '登錄', score: 5, color: 'bg-blue-800' }
+  newRecruitProspect: { label: '新增準增員', score: 1, color: 'bg-red-400' },
+  recruitContact: { label: '增員約訪', score: 1, color: 'bg-red-500' },
+  recruitInterview: { label: '增員面談', score: 2, color: 'bg-red-600' },
+  recruitExam: { label: '內/外考', score: 4, color: 'bg-red-700' },
+  recruitRegistered: { label: '登錄', score: 5, color: 'bg-red-800' }
 };
 
 const ALL_ACTIVITY_WEIGHTS = { ...ACTIVITY_WEIGHTS, ...RECRUIT_ACTIVITY_WEIGHTS };
@@ -853,10 +853,10 @@ const PRIORITY_LEVELS = {
 
 // 純提醒/固定行程的分類 (業務/增員類行程沿用各自 ALL_ACTIVITY_WEIGHTS 顏色，不需要另外分類)
 const REMINDER_CATEGORIES = {
-  personal: { label: '私事', color: 'bg-emerald-500' },
-  meeting: { label: '課程會議', color: 'bg-gray-800' },
-  claim: { label: '理賠', color: 'bg-rose-500' },
-  paperwork: { label: '文書', color: 'bg-sky-500' },
+  personal: { label: '私事', color: 'bg-green-500' },
+  meeting: { label: '課程會議', color: 'bg-black' },
+  claim: { label: '理賠', color: 'bg-orange-500' },
+  paperwork: { label: '文書', color: 'bg-black' },
   other: { label: '其他', color: 'bg-gray-400' }
 };
 
@@ -895,6 +895,9 @@ const getEventColor = (e) => {
 // 月曆用的繽紛淺色小標籤 (跟 getEventColor 同一組色系，只是換成淺底深字的版本)
 const PILL_COLOR_MAP = {
   blue: 'bg-blue-100 text-blue-700',
+  red: 'bg-red-100 text-red-700',
+  green: 'bg-green-100 text-green-700',
+  orange: 'bg-orange-100 text-orange-700',
   indigo: 'bg-indigo-100 text-indigo-700',
   violet: 'bg-violet-100 text-violet-700',
   fuchsia: 'bg-fuchsia-100 text-fuchsia-700',
@@ -905,10 +908,12 @@ const PILL_COLOR_MAP = {
   emerald: 'bg-emerald-100 text-emerald-700',
   amber: 'bg-amber-100 text-amber-700',
   sky: 'bg-sky-100 text-sky-700',
-  gray: 'bg-gray-200 text-gray-700'
+  gray: 'bg-gray-200 text-gray-700',
+  black: 'bg-gray-200 text-gray-800'
 };
 const getEventPillClass = (e) => {
   const solidClass = getEventColor(e);
+  if (solidClass === 'bg-black') return PILL_COLOR_MAP.black;
   const match = solidClass.match(/bg-([a-z]+)-\d+/);
   const family = match ? match[1] : 'gray';
   return PILL_COLOR_MAP[family] || PILL_COLOR_MAP.gray;
@@ -5372,14 +5377,13 @@ const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick,
             <button
               key={dateStr}
               onClick={() => setSelectedDay(dateStr)}
-              style={{ minHeight: '92px' }}
-              className={`sm:min-h-[112px] rounded-lg pt-1 pb-1 flex flex-col items-stretch gap-0.5 transition border overflow-hidden ${isSelected ? 'border-indigo-300 bg-indigo-50/40' : 'border-transparent hover:bg-gray-50'} ${isToday ? 'bg-gray-50' : ''}`}
+              className={`h-[92px] sm:h-[112px] rounded-lg pt-1 pb-1 flex flex-col items-stretch gap-0.5 transition overflow-hidden ${isSelected ? 'bg-indigo-50' : isToday ? 'bg-gray-50' : 'hover:bg-gray-50'}`}
             >
               <span className={`text-xs w-5 h-5 mx-auto flex items-center justify-center rounded-full shrink-0 ${isToday ? 'bg-gray-900 text-white font-bold' : holiday ? 'text-red-500 font-bold' : 'text-gray-500'}`}>{Number(dateStr.slice(8))}</span>
               <div className="flex flex-col gap-px px-0.5 mt-0.5 min-w-0">
                 {holiday && <span className="text-[9px] leading-tight font-bold rounded-sm px-1 py-0.5 truncate bg-red-500 text-white text-left">{holiday}</span>}
                 {dayEvents.slice(0, maxRows).map((e, idx) => (
-                  <span key={idx} className={`text-[9px] leading-tight font-bold rounded-sm px-1 py-0.5 truncate text-left text-white ${getEventColor(e)} ${e.status === 'completed' ? 'opacity-35' : ''}`}>{getEventLabel(e)}</span>
+                  <span key={idx} className={`text-[9px] leading-tight font-bold rounded-sm px-1 py-0.5 truncate text-left text-white ${getEventColor(e)}`}>{e.status === 'completed' ? '✓ ' : ''}{getEventLabel(e)}</span>
                 ))}
                 {dayEvents.length > maxRows && <span className="text-[9px] text-gray-400 font-bold text-left px-1">+{dayEvents.length - maxRows}</span>}
               </div>
@@ -5396,15 +5400,16 @@ const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick,
             const isDone = e.status === 'completed';
             return (
               <button key={e.id} onClick={() => onEventClick(e)} className={`w-full flex items-center gap-2.5 p-3 rounded-lg text-left transition ${isDone ? 'bg-gray-50' : 'hover:bg-gray-50'}`}>
-                {isDone ? <CheckCircle2 size={16} className="text-emerald-400 shrink-0" /> : <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${getEventColor(e)}`}></span>}
-                <span className={`text-sm font-bold truncate ${isDone ? 'text-gray-400 line-through' : 'text-gray-800'}`}>{getEventLabel(e)}</span>
-                <span className={`text-sm truncate ${isDone ? 'text-gray-300' : 'text-gray-500'}`}>{e.customerName}</span>
-                {e.time && <span className={`text-xs ml-auto shrink-0 ${isDone ? 'text-gray-300' : 'text-gray-400'}`}>{e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}
+                {isDone ? <CheckCircle2 size={16} className="text-emerald-500 shrink-0" /> : <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${getEventColor(e)}`}></span>}
+                <span className="text-sm font-bold truncate text-gray-800">{getEventLabel(e)}</span>
+                <span className="text-sm truncate text-gray-500">{e.customerName}</span>
+                {e.time && <span className="text-xs ml-auto shrink-0 text-gray-400">{e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}
               </button>
             );
           })}
         </div>
       </div>
+
     </div>
   );
 };
@@ -6138,29 +6143,31 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
         )
       ) : (
       <>
-      <Card className="p-4 flex flex-wrap items-center gap-2">
-        <SlidersHorizontal size={18} className="text-gray-400 shrink-0" />
-        <select className="p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-gray-600 outline-none" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
-          <option value="">全部分類</option>
-          {EVENT_CATEGORY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-        </select>
-        <select className="p-2.5 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-gray-600 outline-none" value={filterPriority} onChange={e => setFilterPriority(e.target.value)}>
-          <option value="">全部優先度</option>
-          {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-        </select>
-        {(filterCategory || filterPriority) && (
-          <button onClick={() => { setFilterCategory(''); setFilterPriority(''); }} className="text-sm font-bold text-gray-400 hover:text-gray-600 px-2">清除篩選</button>
-        )}
-        <div className="ml-auto flex items-center gap-2">
-          <div className="flex gap-1 bg-gray-100 p-0.5 rounded-lg">
-            <button onClick={() => setViewMode('timeline')} className={`px-3 py-2 rounded-md text-sm font-bold transition ${viewMode === 'timeline' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>時間軸</button>
-            <button onClick={() => setViewMode('calendar')} className={`px-3 py-2 rounded-md text-sm font-bold transition ${viewMode === 'calendar' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>月曆</button>
-            <button onClick={() => setViewMode('list')} className={`px-3 py-2 rounded-md text-sm font-bold transition ${viewMode === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>清單</button>
+      <Card className="p-4 space-y-3">
+        <div className="flex items-center gap-2">
+          <div className="flex-1 flex gap-1 bg-gray-100 p-0.5 rounded-lg">
+            <button onClick={() => setViewMode('timeline')} className={`flex-1 py-2 rounded-md text-sm font-bold transition ${viewMode === 'timeline' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>時間軸</button>
+            <button onClick={() => setViewMode('calendar')} className={`flex-1 py-2 rounded-md text-sm font-bold transition ${viewMode === 'calendar' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>月曆</button>
+            <button onClick={() => setViewMode('list')} className={`flex-1 py-2 rounded-md text-sm font-bold transition ${viewMode === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>清單</button>
           </div>
           {loggedInUser?.defaultScheduleView !== viewMode && (
-            <button onClick={handleSetDefaultView} disabled={savingDefaultView} className="text-xs font-bold text-indigo-500 hover:text-indigo-600 whitespace-nowrap disabled:opacity-50">
-              {savingDefaultView ? '儲存中...' : '設為預設'}
+            <button onClick={handleSetDefaultView} disabled={savingDefaultView} className="text-xs font-bold text-indigo-500 hover:text-indigo-600 whitespace-nowrap shrink-0 disabled:opacity-50">
+              {savingDefaultView ? '儲存中' : '設為預設'}
             </button>
+          )}
+        </div>
+        <div className="flex items-center gap-2 flex-wrap">
+          <SlidersHorizontal size={16} className="text-gray-300 shrink-0" />
+          <select className="flex-1 min-w-[110px] p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-gray-600 outline-none" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
+            <option value="">全部分類</option>
+            {EVENT_CATEGORY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+          <select className="flex-1 min-w-[110px] p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-gray-600 outline-none" value={filterPriority} onChange={e => setFilterPriority(e.target.value)}>
+            <option value="">全部優先度</option>
+            {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+          </select>
+          {(filterCategory || filterPriority) && (
+            <button onClick={() => { setFilterCategory(''); setFilterPriority(''); }} className="text-xs font-bold text-gray-400 hover:text-gray-600 shrink-0">清除</button>
           )}
         </div>
       </Card>
