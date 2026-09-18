@@ -860,6 +860,28 @@ const getEventColor = (e) => {
   return ALL_ACTIVITY_WEIGHTS[e.type]?.color || 'bg-gray-400';
 };
 
+// 月曆用的繽紛淺色小標籤 (跟 getEventColor 同一組色系，只是換成淺底深字的版本)
+const PILL_COLOR_MAP = {
+  blue: 'bg-blue-100 text-blue-700',
+  indigo: 'bg-indigo-100 text-indigo-700',
+  violet: 'bg-violet-100 text-violet-700',
+  fuchsia: 'bg-fuchsia-100 text-fuchsia-700',
+  pink: 'bg-pink-100 text-pink-700',
+  rose: 'bg-rose-100 text-rose-700',
+  teal: 'bg-teal-100 text-teal-700',
+  cyan: 'bg-cyan-100 text-cyan-700',
+  emerald: 'bg-emerald-100 text-emerald-700',
+  amber: 'bg-amber-100 text-amber-700',
+  sky: 'bg-sky-100 text-sky-700',
+  gray: 'bg-gray-200 text-gray-700'
+};
+const getEventPillClass = (e) => {
+  const solidClass = getEventColor(e);
+  const match = solidClass.match(/bg-([a-z]+)-\d+/);
+  const family = match ? match[1] : 'gray';
+  return PILL_COLOR_MAP[family] || PILL_COLOR_MAP.gray;
+};
+
 // 行程標記完成時共用的邏輯：更新行程狀態、計入當日 MEA 活動量、寫入客戶拜訪軌跡
 // 純提醒 (isReminder) 不計分、不寫入客戶軌跡，純粹打勾完成
 const completeScheduleEvent = async (event, ownerId) => {
@@ -4964,6 +4986,168 @@ const DayTimelineView = ({ events, isToday, onEventClick, getEventLabel, getEven
   );
 };
 
+// --- 整月月曆檢視 ---
+// --- 個人待辦清單 (輕量小事項，不記日期、不計MEA，純自己用) ---
+const PersonalTodoList = ({ loggedInUser }) => {
+  const [items, setItems] = useState([]);
+  const [text, setText] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!loggedInUser) return;
+    const unsub = onSnapshot(query(collection(db, 'personal_todos'), where('ownerId', '==', loggedInUser.id)), (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      list.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+      setItems(list);
+    });
+    return () => unsub();
+  }, [loggedInUser]);
+
+  const handleAdd = async () => {
+    if (!text.trim() || !loggedInUser) return;
+    setSaving(true);
+    try {
+      await addDoc(collection(db, 'personal_todos'), { ownerId: loggedInUser.id, text: text.trim(), done: false, createdAt: new Date().toISOString() });
+      setText('');
+    } catch (e) { console.error(e); } finally { setSaving(false); }
+  };
+
+  const toggleDone = async (item) => {
+    try { await updateDoc(doc(db, 'personal_todos', item.id), { done: !item.done }); } catch (e) { console.error(e); }
+  };
+
+  const handleDelete = async (id) => {
+    try { await deleteDoc(doc(db, 'personal_todos', id)); } catch (e) { console.error(e); }
+  };
+
+  const pending = items.filter(i => !i.done);
+  const done = items.filter(i => i.done);
+
+  return (
+    <Card className="p-5">
+      <h3 className="font-bold text-gray-800 mb-3 text-sm flex items-center gap-2"><CheckSquare size={16} className="text-teal-500" /> 我的待辦小事</h3>
+      <div className="flex gap-2 mb-3">
+        <input
+          type="text"
+          placeholder="隨手記一件小事..."
+          className="flex-1 p-2 border border-gray-200 rounded-lg text-sm outline-none focus:border-teal-500"
+          value={text}
+          onChange={e => setText(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') handleAdd(); }}
+        />
+        <button onClick={handleAdd} disabled={!text.trim() || saving} className="bg-teal-600 hover:bg-teal-700 text-white px-3 rounded-lg disabled:opacity-50">
+          {saving ? <Loader2 size={16} className="animate-spin" /> : <Plus size={16} />}
+        </button>
+      </div>
+      <div className="space-y-1">
+        {pending.map(item => (
+          <div key={item.id} className="flex items-center gap-2 group px-1 py-1">
+            <input type="checkbox" checked={false} onChange={() => toggleDone(item)} className="w-4 h-4 shrink-0" />
+            <span className="text-sm text-gray-700 flex-1">{item.text}</span>
+            <button onClick={() => handleDelete(item.id)} className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition"><X size={14} /></button>
+          </div>
+        ))}
+        {done.length > 0 && (
+          <div className="pt-2 mt-2 border-t border-gray-100 space-y-1">
+            {done.map(item => (
+              <div key={item.id} className="flex items-center gap-2 group px-1 py-1">
+                <input type="checkbox" checked={true} onChange={() => toggleDone(item)} className="w-4 h-4 shrink-0" />
+                <span className="text-sm text-gray-400 line-through flex-1">{item.text}</span>
+                <button onClick={() => handleDelete(item.id)} className="opacity-0 group-hover:opacity-100 text-gray-300 hover:text-red-500 transition"><X size={14} /></button>
+              </div>
+            ))}
+          </div>
+        )}
+        {items.length === 0 && <p className="text-center text-gray-400 text-xs py-3">還沒有記任何小事</p>}
+      </div>
+    </Card>
+  );
+};
+
+const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick, today }) => {
+  const [calendarMonth, setCalendarMonth] = useState(() => today.slice(0, 7));
+  const [selectedDay, setSelectedDay] = useState(today);
+
+  const shiftMonth = (delta) => {
+    const [y, m] = calendarMonth.split('-').map(Number);
+    const d = new Date(y, m - 1 + delta, 1);
+    setCalendarMonth(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`);
+  };
+
+  const eventsByDate = useMemo(() => {
+    const map = {};
+    events.forEach(e => {
+      if (!map[e.date]) map[e.date] = [];
+      map[e.date].push(e);
+    });
+    return map;
+  }, [events]);
+
+  const gridDays = useMemo(() => {
+    const [y, m] = calendarMonth.split('-').map(Number);
+    const firstDay = new Date(y, m - 1, 1);
+    const startOffset = firstDay.getDay();
+    const daysInMonth = new Date(y, m, 0).getDate();
+    const days = [];
+    for (let i = 0; i < startOffset; i++) days.push(null);
+    for (let d = 1; d <= daysInMonth; d++) days.push(`${calendarMonth}-${String(d).padStart(2, '0')}`);
+    return days;
+  }, [calendarMonth]);
+
+  const selectedDayEvents = (eventsByDate[selectedDay] || []).sort((a, b) => (a.time || '').localeCompare(b.time || ''));
+
+  return (
+    <div>
+      <div className="flex items-center justify-center gap-4 mb-4">
+        <button onClick={() => shiftMonth(-1)} className="text-gray-400 hover:text-gray-700"><ChevronLeft size={18} /></button>
+        <span className="font-bold text-gray-800 text-sm">{calendarMonth}</span>
+        <button onClick={() => shiftMonth(1)} className="text-gray-400 hover:text-gray-700"><ChevronRight size={18} /></button>
+      </div>
+      <div className="grid grid-cols-7 gap-1.5 text-center text-[10px] font-bold text-gray-400 mb-1.5">
+        {['日', '一', '二', '三', '四', '五', '六'].map(w => <div key={w}>{w}</div>)}
+      </div>
+      <div className="grid grid-cols-7 gap-1.5">
+        {gridDays.map((dateStr, i) => {
+          if (!dateStr) return <div key={i}></div>;
+          const dayEvents = eventsByDate[dateStr] || [];
+          const isToday = dateStr === today;
+          const isSelected = dateStr === selectedDay;
+          return (
+            <button
+              key={dateStr}
+              onClick={() => setSelectedDay(dateStr)}
+              style={{ minHeight: '68px' }}
+              className={`rounded-xl p-1 flex flex-col items-center gap-0.5 transition border ${isSelected ? 'border-indigo-300 bg-indigo-50/70' : isToday ? 'border-indigo-200' : 'border-gray-100 hover:bg-gray-50'}`}
+            >
+              <span className={`text-[11px] w-5 h-5 flex items-center justify-center rounded-full ${isToday ? 'bg-indigo-600 text-white font-bold' : 'text-gray-600'}`}>{Number(dateStr.slice(8))}</span>
+              <div className="w-full flex flex-col gap-0.5">
+                {dayEvents.slice(0, 2).map((e, idx) => (
+                  <span key={idx} className={`text-[8px] leading-tight font-bold rounded px-1 py-0.5 truncate ${getEventPillClass(e)}`}>{getEventLabel(e)}</span>
+                ))}
+                {dayEvents.length > 2 && <span className="text-[8px] text-gray-400 font-bold">+{dayEvents.length - 2}</span>}
+              </div>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="mt-5 pt-5 border-t border-gray-100">
+        <p className="text-xs font-bold text-gray-500 mb-2">{selectedDay} 的行程</p>
+        {selectedDayEvents.length === 0 && <p className="text-center text-gray-400 text-xs py-4">這天沒有安排</p>}
+        <div className="space-y-1.5">
+          {selectedDayEvents.map(e => (
+            <button key={e.id} onClick={() => onEventClick(e)} className="w-full flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 text-left">
+              <span className={`text-[10px] font-bold rounded px-1.5 py-0.5 shrink-0 ${getEventPillClass(e)}`}>{getEventLabel(e)}</span>
+              <span className="text-xs text-gray-500 truncate">{e.customerName}</span>
+              {e.time && <span className="text-[10px] text-gray-400 ml-auto shrink-0">{e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recurringRules, records, activities, teamScheduleEvents, isTeamScheduleViewer }) => {
   const today = getTodayDate();
   const [busyId, setBusyId] = useState(null);
@@ -5507,6 +5691,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
 
       <PersonalGoalsCard loggedInUser={loggedInUser} records={records} activities={activities} />
 
+      <PersonalTodoList loggedInUser={loggedInUser} />
+
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">今日待辦</h2>
@@ -5535,10 +5721,23 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
         )}
         <div className="ml-auto flex gap-1 bg-gray-100 p-0.5 rounded-lg">
           <button onClick={() => setViewMode('timeline')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${viewMode === 'timeline' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>時間軸</button>
+          <button onClick={() => setViewMode('calendar')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${viewMode === 'calendar' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>月曆</button>
           <button onClick={() => setViewMode('list')} className={`px-3 py-1.5 rounded-md text-xs font-bold transition ${viewMode === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>清單</button>
         </div>
       </Card>
 
+      {viewMode === 'calendar' ? (
+        <Card className="p-5">
+          <MonthCalendarView
+            events={allItems.filter(e => e.status === 'scheduled')}
+            getEventLabel={getEventLabel}
+            getEventColor={getEventColor}
+            onEventClick={handleCompleteEvent}
+            today={today}
+          />
+        </Card>
+      ) : (
+      <>
       {/* 今日焦點 */}
       <div>
         <h3 className="text-sm font-bold text-gray-500 mb-3">今日焦點</h3>
@@ -5708,6 +5907,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, team, recur
           </div>
           )}
         </div>
+      )}
+      </>
       )}
 
       {isTeamScheduleViewer && teamGroupedByDate.length > 0 && (
