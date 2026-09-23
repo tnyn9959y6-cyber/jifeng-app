@@ -48,7 +48,8 @@ import {
   CalendarPlus,
   Bell,
   Repeat,
-  List as ListIcon
+  List as ListIcon,
+  LayoutGrid
 } from 'lucide-react';
 import { 
   BarChart,
@@ -6449,7 +6450,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
       )}
 
       {/* 浮動底部切換列：時間軸／月曆／清單／篩選，圖示化收合 */}
-      <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-white shadow-lg border border-gray-100 rounded-full p-1.5">
+      <div className="fixed bottom-24 md:bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-white shadow-lg border border-gray-100 rounded-full p-1.5">
         <button onClick={() => setViewMode('timeline')} title="時間軸" className={`w-10 h-10 rounded-full flex items-center justify-center transition ${viewMode === 'timeline' ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-600'}`}><Clock size={18} /></button>
         <button onClick={() => setViewMode('calendar')} title="月曆" className={`w-10 h-10 rounded-full flex items-center justify-center transition ${viewMode === 'calendar' ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-600'}`}><Calendar size={18} /></button>
         <button onClick={() => setViewMode('list')} title="清單" className={`w-10 h-10 rounded-full flex items-center justify-center transition ${viewMode === 'list' ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-600'}`}><ListIcon size={18} /></button>
@@ -7245,6 +7246,7 @@ const LoginScreen = ({ team, onLogin }) => {
 const App = () => {
   const [activeTab, setActiveTab] = useState('todo');
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
+  const [showMoreSheet, setShowMoreSheet] = useState(false);
   const [season, setSeason] = useState('H2'); 
   const [team, setTeam] = useState([]);
   const [records, setRecords] = useState([]);
@@ -7556,6 +7558,12 @@ const App = () => {
     { id: 'training', label: '新人培訓', icon: ClipboardCheck },
     ...(loggedInUser && MANAGER_RANKS.includes(loggedInUser.role) ? [{ id: 'settings', label: '競賽設定', icon: Settings }] : [])
   ];
+  // 手機版底部導覽列：只放最常用的4個 + 「更多」，其餘收進更多選單裡，才不會塞成一長排
+  const PRIMARY_TAB_IDS = ['todo', 'calendar', 'customers', 'warroom'];
+  const primaryNavItems = navItems.filter(item => PRIMARY_TAB_IDS.includes(item.id));
+  const moreNavItems = navItems.filter(item => !PRIMARY_TAB_IDS.includes(item.id));
+  const isMoreActive = moreNavItems.some(item => item.id === activeTab);
+  const currentNavItem = navItems.find(item => item.id === activeTab);
 
   // 資料尚未連線完成前，顯示載入畫面
   if (!teamLoaded || !sessionChecked) {
@@ -7568,15 +7576,16 @@ const App = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-20">
-      <nav className="sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-white/20 shadow-sm overflow-x-auto">
+    <div className="min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8">
+      {/* 桌機版：完整頂部導覽（Logo、置中分頁選單、使用者資訊） */}
+      <nav className="hidden md:block sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-white/20 shadow-sm overflow-x-auto">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between min-w-max gap-8">
           <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-gradient-to-tr from-gray-900 to-gray-700 rounded-xl flex items-center justify-center shadow-lg"><span className="text-amber-400 font-serif font-bold text-lg">JF</span></div>
             <div><h1 className="text-lg font-bold tracking-tight text-gray-900">極豐通訊處</h1><p className="text-[10px] text-gray-400 uppercase tracking-[0.2em]">Ji Feng Agency</p></div>
           </div>
           <div className="flex items-center gap-4">
-            <div className="hidden md:flex bg-gray-100/60 p-1.5 rounded-full backdrop-blur-sm">
+            <div className="flex bg-gray-100/60 p-1.5 rounded-full backdrop-blur-sm">
               {navItems.map(item => {
                 const ItemIcon = item.icon;
                 return (
@@ -7594,15 +7603,6 @@ const App = () => {
                 );
               })}
             </div>
-            <div className="md:hidden">
-              <select
-                value={activeTab}
-                onChange={(e) => setActiveTab(e.target.value)}
-                className="bg-gray-100 rounded-lg p-2 font-bold text-sm outline-none"
-              >
-                {navItems.map(item => <option key={item.id} value={item.id}>{item.label}{item.badge ? ` (${item.badge})` : ''}</option>)}
-              </select>
-            </div>
             <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
               <button
                 onClick={() => setShowGlobalSearch(true)}
@@ -7611,7 +7611,7 @@ const App = () => {
               >
                 <Search size={18} />
               </button>
-              <div className="hidden sm:block text-right">
+              <div className="text-right">
                 <p className="text-xs font-bold text-gray-900">{loggedInUser.name}</p>
                 <p className="text-[10px] text-gray-400">{loggedInUser.role}</p>
               </div>
@@ -7627,10 +7627,21 @@ const App = () => {
         </div>
       </nav>
 
+      {/* 手機版：極簡頂部列，只有目前頁面標題＋搜尋＋登出，其餘導覽交給底部列 */}
+      <div className="md:hidden sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100">
+        <div className="h-14 px-4 flex items-center justify-between">
+          <h1 className="text-base font-bold text-gray-900">{currentNavItem?.label || '極豐通訊處'}</h1>
+          <div className="flex items-center gap-1">
+            <button onClick={() => setShowGlobalSearch(true)} className="w-9 h-9 rounded-full flex items-center justify-center text-gray-400 active:bg-gray-100 transition"><Search size={18} /></button>
+            <button onClick={handleLogout} className="w-9 h-9 rounded-full flex items-center justify-center text-gray-400 active:bg-red-50 transition"><LogOut size={18} /></button>
+          </div>
+        </div>
+      </div>
+
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
-      <main className="max-w-7xl mx-auto px-6 pt-8">
+      <main className="max-w-7xl mx-auto px-4 md:px-6 pt-4 md:pt-8">
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} />}
         {activeTab === 'calendar' && <CalendarPage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
@@ -7646,6 +7657,69 @@ const App = () => {
         {activeTab === 'training' && <TrainingChecklistPage team={team} />}
         {activeTab === 'settings' && loggedInUser && MANAGER_RANKS.includes(loggedInUser.role) && <SettingsPage rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
       </main>
+
+      {/* 手機版底部導覽列：4個常用分頁＋更多，App感的核心 */}
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-100" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+        <div className="flex items-stretch">
+          {primaryNavItems.map(item => {
+            const ItemIcon = item.icon;
+            const active = activeTab === item.id;
+            return (
+              <button
+                key={item.id}
+                onClick={() => setActiveTab(item.id)}
+                className="relative flex-1 flex flex-col items-center justify-center gap-0.5 py-2"
+              >
+                <ItemIcon size={22} className={active ? 'text-gray-900' : 'text-gray-300'} />
+                <span className={`text-[10px] ${active ? 'font-bold text-gray-900' : 'text-gray-400'}`}>{item.label}</span>
+                {!!item.badge && (
+                  <span className="absolute top-1 right-1/4 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1">{item.badge > 99 ? '99+' : item.badge}</span>
+                )}
+              </button>
+            );
+          })}
+          <button onClick={() => setShowMoreSheet(true)} className="relative flex-1 flex flex-col items-center justify-center gap-0.5 py-2">
+            <LayoutGrid size={22} className={isMoreActive ? 'text-gray-900' : 'text-gray-300'} />
+            <span className={`text-[10px] ${isMoreActive ? 'font-bold text-gray-900' : 'text-gray-400'}`}>更多</span>
+          </button>
+        </div>
+      </nav>
+
+      {/* 更多選單（手機版底部彈出） */}
+      {showMoreSheet && (
+        <div className="md:hidden fixed inset-0 z-[60] flex items-end">
+          <div className="absolute inset-0 bg-black/40" onClick={() => setShowMoreSheet(false)}></div>
+          <div className="relative w-full bg-white rounded-t-3xl p-5 pb-8 animate-scale-up" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 2rem)' }}>
+            <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4"></div>
+            <div className="flex items-center justify-between mb-4">
+              <p className="font-bold text-gray-900">更多功能</p>
+              <div className="text-right">
+                <p className="text-xs font-bold text-gray-900">{loggedInUser.name}</p>
+                <p className="text-[10px] text-gray-400">{loggedInUser.role}</p>
+              </div>
+            </div>
+            <div className="grid grid-cols-4 gap-3">
+              {moreNavItems.map(item => {
+                const ItemIcon = item.icon;
+                const active = activeTab === item.id;
+                return (
+                  <button
+                    key={item.id}
+                    onClick={() => { setActiveTab(item.id); setShowMoreSheet(false); }}
+                    className="relative flex flex-col items-center gap-1.5 p-2"
+                  >
+                    <span className={`w-12 h-12 rounded-2xl flex items-center justify-center ${active ? 'bg-gray-900 text-white' : 'bg-gray-50 text-gray-500'}`}><ItemIcon size={20} /></span>
+                    <span className="text-[11px] font-bold text-gray-600 text-center leading-tight">{item.label}</span>
+                    {!!item.badge && (
+                      <span className="absolute top-0 right-1 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1">{item.badge > 99 ? '99+' : item.badge}</span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
