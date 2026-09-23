@@ -47,7 +47,8 @@ import {
   Award,
   CalendarPlus,
   Bell,
-  Repeat
+  Repeat,
+  List as ListIcon
 } from 'lucide-react';
 import { 
   BarChart,
@@ -2597,33 +2598,83 @@ const getVisibleTeamIds = (loggedInUser, team) => {
   return ids;
 };
 
+const PIPELINE_STAGES = ['洽談中', '已送建議書', '待簽約'];
+
 const SalesWarRoomPage = ({ loggedInUser, team, customers, records }) => {
   const today = getTodayDate();
   const [selectedId, setSelectedId] = useState(null);
+  const [deals, setDeals] = useState([]);
+  const [isAddingDeal, setIsAddingDeal] = useState(false);
+  const [editingDeal, setEditingDeal] = useState(null);
+  const [dealDeleteTarget, setDealDeleteTarget] = useState(null);
+  const emptyDealForm = { customerName: '', product: '', estimatedPremium: '', expectedCloseDate: '', stage: PIPELINE_STAGES[0], note: '' };
+  const [dealForm, setDealForm] = useState(emptyDealForm);
+  const [dealSaving, setDealSaving] = useState(false);
+  const [managerNoteDrafts, setManagerNoteDrafts] = useState({});
 
   const visibleIds = useMemo(() => getVisibleTeamIds(loggedInUser, team), [loggedInUser, team]);
   const visibleMembers = useMemo(() => team.filter(m => visibleIds.has(m.id)), [team, visibleIds]);
 
   const isContactedToday = (c) => (c.visitLog || []).some(v => v.date === today);
 
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db, 'pipeline_deals'), (snap) => {
+      setDeals(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsub();
+  }, []);
+
   const summary = useMemo(() => {
     return visibleMembers.map(member => {
       const pendingCases = records.filter(r => r.agentId === member.id && r.status === '受理中');
       const stuckCustomers = customers.filter(c => c.ownerId === member.id && c.nextFollowUpDate && c.nextFollowUpDate <= today && !isContactedToday(c));
+      const memberDeals = deals.filter(d => d.ownerId === member.id).sort((a, b) => (b.updatedAt || '').localeCompare(a.updatedAt || ''));
       const pendingTotal = pendingCases.reduce((s, r) => s + (r.premium || 0), 0);
-      return { member, pendingCases, stuckCustomers, pendingTotal };
+      return { member, pendingCases, stuckCustomers, pendingTotal, memberDeals };
     }).sort((a, b) => b.pendingCases.length - a.pendingCases.length);
-  }, [visibleMembers, records, customers, today]);
+  }, [visibleMembers, records, customers, deals, today]);
 
   const selectedEntry = selectedId ? summary.find(s => s.member.id === selectedId) : null;
+  const isOwnEntry = selectedEntry && loggedInUser && selectedEntry.member.id === loggedInUser.id;
+
+  const openAddDeal = () => { setDealForm(emptyDealForm); setIsAddingDeal(true); };
+  const openEditDeal = (deal) => { setEditingDeal(deal); setDealForm({ customerName: deal.customerName, product: deal.product, estimatedPremium: deal.estimatedPremium, expectedCloseDate: deal.expectedCloseDate, stage: deal.stage, note: deal.note || '' }); };
+
+  const handleSaveDeal = async () => {
+    if (!loggedInUser || !dealForm.customerName.trim()) return;
+    setDealSaving(true);
+    try {
+      if (editingDeal) {
+        await updateDoc(doc(db, 'pipeline_deals', editingDeal.id), { ...dealForm, estimatedPremium: Number(dealForm.estimatedPremium) || 0, updatedAt: new Date().toISOString() });
+        setEditingDeal(null);
+      } else {
+        await addDoc(collection(db, 'pipeline_deals'), { ...dealForm, estimatedPremium: Number(dealForm.estimatedPremium) || 0, ownerId: loggedInUser.id, managerNote: '', createdAt: new Date().toISOString(), updatedAt: new Date().toISOString() });
+        setIsAddingDeal(false);
+      }
+      setDealForm(emptyDealForm);
+    } catch (e) { console.error(e); } finally { setDealSaving(false); }
+  };
+
+  const handleDeleteDealConfirm = async () => {
+    if (!dealDeleteTarget) return;
+    try { await deleteDoc(doc(db, 'pipeline_deals', dealDeleteTarget)); setDealDeleteTarget(null); } catch (e) { console.error(e); }
+  };
+
+  const handleSaveManagerNote = async (dealId) => {
+    const text = managerNoteDrafts[dealId];
+    if (text === undefined) return;
+    try { await updateDoc(doc(db, 'pipeline_deals', dealId), { managerNote: text }); } catch (e) { console.error(e); }
+  };
 
   if (visibleMembers.length === 0) return null;
 
   return (
-    <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
+    <div className="max-w-5xl lg:max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+      <ConfirmModal isOpen={!!dealDeleteTarget} onClose={() => setDealDeleteTarget(null)} onConfirm={handleDeleteDealConfirm} title="刪除商機" message="確定要刪除這筆商機紀錄嗎？" />
+
       <div>
         <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">業務戰情室</h2>
-        <p className="text-sm text-gray-400 mt-1">團隊受理中案件與客戶追蹤狀況總覽</p>
+        <p className="text-sm text-gray-400 mt-1">團隊受理中案件、客戶追蹤狀況與進行中商機總覽</p>
       </div>
 
       <Card className="p-5">
@@ -2636,15 +2687,17 @@ const SalesWarRoomPage = ({ loggedInUser, team, customers, records }) => {
                 <th className="py-2 pr-4 text-right">受理中案件</th>
                 <th className="py-2 pr-4 text-right">受理中保費</th>
                 <th className="py-2 pr-4 text-right">卡關客戶</th>
+                <th className="py-2 pr-4 text-right">進行中商機</th>
               </tr>
             </thead>
             <tbody>
-              {summary.map(({ member, pendingCases, stuckCustomers, pendingTotal }) => (
+              {summary.map(({ member, pendingCases, stuckCustomers, pendingTotal, memberDeals }) => (
                 <tr key={member.id} onClick={() => setSelectedId(member.id)} className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
                   <td className="py-3 pr-4 font-bold text-gray-800">{member.name}</td>
                   <td className="py-3 pr-4 text-right">{pendingCases.length}</td>
                   <td className="py-3 pr-4 text-right text-gray-500">{formatMoney(pendingTotal)}</td>
                   <td className="py-3 pr-4 text-right">{stuckCustomers.length > 0 ? <span className="text-amber-600 font-bold">{stuckCustomers.length}</span> : stuckCustomers.length}</td>
+                  <td className="py-3 pr-4 text-right">{memberDeals.length}</td>
                 </tr>
               ))}
             </tbody>
@@ -2686,7 +2739,7 @@ const SalesWarRoomPage = ({ loggedInUser, team, customers, records }) => {
           {selectedEntry.stuckCustomers.length === 0 ? (
             <p className="text-sm text-gray-400 py-3">沒有該追蹤卻還沒處理的客戶</p>
           ) : (
-            <div className="space-y-2">
+            <div className="space-y-2 mb-5">
               {selectedEntry.stuckCustomers.map(c => {
                 const daysOverdue = Math.floor((new Date(today) - new Date(c.nextFollowUpDate)) / 86400000);
                 return (
@@ -2698,7 +2751,77 @@ const SalesWarRoomPage = ({ loggedInUser, team, customers, records }) => {
               })}
             </div>
           )}
+
+          <div className="flex items-center justify-between mb-2">
+            <p className="text-xs font-bold text-gray-500 uppercase">{isOwnEntry ? '我的進行中商機' : '進行中商機'} ({selectedEntry.memberDeals.length})</p>
+            {isOwnEntry && <button onClick={openAddDeal} className="flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-700"><Plus size={13} /> 新增商機</button>}
+          </div>
+          {selectedEntry.memberDeals.length === 0 ? (
+            <p className="text-sm text-gray-400 py-3">目前沒有登記中的商機</p>
+          ) : (
+            <div className="space-y-2">
+              {selectedEntry.memberDeals.map(deal => (
+                <div key={deal.id} className="rounded-lg p-3 bg-teal-50 border border-teal-100">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-bold text-gray-800 text-sm truncate">{deal.customerName} <span className="font-normal text-gray-500">· {deal.product}</span></p>
+                      <p className="text-xs text-gray-500 mt-1">預估 {formatMoney(deal.estimatedPremium)}{deal.expectedCloseDate ? ` · 預計 ${deal.expectedCloseDate} 成交` : ''}</p>
+                      {deal.note && <p className="text-xs text-gray-400 mt-1">{deal.note}</p>}
+                    </div>
+                    <div className="flex items-center gap-2 shrink-0">
+                      <span className="text-[10px] font-bold bg-white text-teal-700 px-2 py-1 rounded-full">{deal.stage}</span>
+                      {isOwnEntry && (
+                        <>
+                          <button onClick={() => openEditDeal(deal)} className="text-teal-600 hover:text-teal-700"><Edit3 size={14} /></button>
+                          <button onClick={() => setDealDeleteTarget(deal.id)} className="text-teal-600 hover:text-red-500"><Trash2 size={14} /></button>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  {!isOwnEntry && (
+                    <div className="mt-2 pt-2 border-t border-teal-100">
+                      <textarea
+                        placeholder="輔導備註（只有主管看得到）"
+                        className="w-full p-2 text-xs border border-teal-200 rounded-lg resize-none bg-white"
+                        rows={2}
+                        value={managerNoteDrafts[deal.id] !== undefined ? managerNoteDrafts[deal.id] : (deal.managerNote || '')}
+                        onChange={e => setManagerNoteDrafts(prev => ({ ...prev, [deal.id]: e.target.value }))}
+                        onBlur={() => handleSaveManagerNote(deal.id)}
+                      />
+                    </div>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </Card>
+      )}
+
+      {(isAddingDeal || editingDeal) && (
+        <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-scale-up">
+            <div className="flex justify-between items-center mb-4">
+              <h3 className="text-lg font-bold text-gray-900">{editingDeal ? '編輯商機' : '新增商機'}</h3>
+              <button onClick={() => { setIsAddingDeal(false); setEditingDeal(null); }} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
+            </div>
+            <div className="space-y-3">
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">客戶</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={dealForm.customerName} onChange={e => setDealForm({ ...dealForm, customerName: e.target.value })} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">商品</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={dealForm.product} onChange={e => setDealForm({ ...dealForm, product: e.target.value })} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">預估保費</label><input type="number" min="0" className="w-full p-2 border border-gray-200 rounded-lg" value={dealForm.estimatedPremium} onChange={e => setDealForm({ ...dealForm, estimatedPremium: e.target.value })} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">預計成交日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={dealForm.expectedCloseDate} onChange={e => setDealForm({ ...dealForm, expectedCloseDate: e.target.value })} /></div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">目前階段</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={dealForm.stage} onChange={e => setDealForm({ ...dealForm, stage: e.target.value })}>
+                  {PIPELINE_STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+                </select>
+              </div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">備註（選填）</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-16 resize-none" value={dealForm.note} onChange={e => setDealForm({ ...dealForm, note: e.target.value })} /></div>
+              <button onClick={handleSaveDeal} disabled={!dealForm.customerName.trim() || dealSaving} className="w-full bg-teal-600 text-white py-3 rounded-lg font-bold hover:bg-teal-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+                {dealSaving ? <Loader2 className="animate-spin" size={16} /> : '儲存'}
+              </button>
+            </div>
+          </div>
+        </div>
       )}
     </div>
   );
@@ -3508,6 +3631,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isIGOpen, setIsIGOpen] = useState(false);
   const [isNotionOpen, setIsNotionOpen] = useState(false);
+  const [showAddMenu, setShowAddMenu] = useState(false);
   const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', tags: ['準客戶'], notes: '', nextFollowUpDate: '', address: '', emergencyContactId: '', emergencyContactName: '' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
@@ -3702,10 +3826,29 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
           <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">客戶管理</h2>
           <p className="text-xs sm:text-sm text-gray-400 mt-1">僅顯示你自己的客戶資料，共 {customers.length} 筆</p>
         </div>
-        <div className="flex flex-wrap gap-2">
-          <button onClick={() => setIsNotionOpen(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Upload size={14} /> Notion 匯入</button>
-          <button onClick={() => setIsIGOpen(true)} className="flex items-center gap-1.5 bg-white border border-gray-200 hover:bg-gray-50 text-gray-600 px-3 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Upload size={14} /> IG 匯入</button>
-          <button onClick={openAdd} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 新增客戶</button>
+        <div className="relative self-end sm:self-auto">
+          <button onClick={() => setShowAddMenu(v => !v)} className={`w-11 h-11 rounded-full flex items-center justify-center transition shadow-sm ${showAddMenu ? 'bg-gray-900 text-white rotate-45' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}>
+            <Plus size={22} />
+          </button>
+          {showAddMenu && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setShowAddMenu(false)}></div>
+              <div className="absolute right-0 mt-2 w-52 bg-white rounded-2xl shadow-2xl border border-gray-100 py-2 z-50 animate-scale-up origin-top-right">
+                <button onClick={() => { openAdd(); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
+                  <span className="w-8 h-8 rounded-full bg-indigo-50 text-indigo-600 flex items-center justify-center shrink-0"><UserPlus size={16} /></span>
+                  <span className="text-sm font-bold text-gray-700">新增客戶</span>
+                </button>
+                <button onClick={() => { setIsIGOpen(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
+                  <span className="w-8 h-8 rounded-full bg-pink-50 text-pink-600 flex items-center justify-center shrink-0"><Upload size={16} /></span>
+                  <span className="text-sm font-bold text-gray-700">IG 匯入</span>
+                </button>
+                <button onClick={() => { setIsNotionOpen(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
+                  <span className="w-8 h-8 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center shrink-0"><Upload size={16} /></span>
+                  <span className="text-sm font-bold text-gray-700">Notion 匯入</span>
+                </button>
+              </div>
+            </>
+          )}
         </div>
       </div>
 
@@ -4797,7 +4940,7 @@ const BingoChallengePage = ({ loggedInUser, team, records, activities, recruits,
   );
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-fade-in pb-12">
+    <div className="max-w-4xl lg:max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
       <div className="bg-gradient-to-br from-gray-900 via-gray-800 to-black rounded-2xl p-6 text-center relative overflow-hidden">
         <div className="absolute inset-0 pointer-events-none" style={{ background: 'radial-gradient(circle at 50% 0%, rgba(251,191,36,0.15), transparent 65%)' }}></div>
         <Trophy className="mx-auto text-amber-400 mb-2 relative" size={32} />
@@ -5586,7 +5729,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
   const isTodayEmpty = dueCustomers.length === 0 && birthdayCustomers.length === 0 && autoSuggested.length === 0;
 
   return (
-    <div className="max-w-4xl mx-auto space-y-6 animate-fade-in pb-12">
+    <div className="max-w-4xl lg:max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
       <PersonalGoalsCard loggedInUser={loggedInUser} records={records} activities={activities} />
 
       <PersonalTodoList loggedInUser={loggedInUser} />
@@ -5709,6 +5852,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   const [reminderDate, setReminderDate] = useState(getTodayDate());
   const [reminderTime, setReminderTime] = useState('');
   const [reminderEndDate, setReminderEndDate] = useState('');
+  const [reminderEndTime, setReminderEndTime] = useState('');
   const [reminderCategory, setReminderCategory] = useState('personal');
   const [reminderPriority, setReminderPriority] = useState('normal');
   const [reminderSaving, setReminderSaving] = useState(false);
@@ -5736,6 +5880,19 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   const [filterPriority, setFilterPriority] = useState('');
   const [showTeamView, setShowTeamView] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [showFilterPanel, setShowFilterPanel] = useState(false);
+  const VIEW_MODE_ORDER = ['timeline', 'calendar', 'list'];
+  const touchStartX = useRef(null);
+  const handleTouchStart = (e) => { touchStartX.current = e.touches[0].clientX; };
+  const handleTouchEnd = (e) => {
+    if (touchStartX.current === null) return;
+    const deltaX = e.changedTouches[0].clientX - touchStartX.current;
+    touchStartX.current = null;
+    if (Math.abs(deltaX) < 60) return;
+    const idx = VIEW_MODE_ORDER.indexOf(viewMode);
+    if (deltaX < 0 && idx < VIEW_MODE_ORDER.length - 1) setViewMode(VIEW_MODE_ORDER[idx + 1]);
+    if (deltaX > 0 && idx > 0) setViewMode(VIEW_MODE_ORDER[idx - 1]);
+  };
   const getEventCategory = (e) => {
     if (e.isReminder) return e.category || 'other';
     return ACTIVITY_WEIGHTS[e.type] ? 'sales' : 'recruit';
@@ -5966,6 +6123,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
           priority: reminderPriority,
           date: reminderDate,
           endDate: reminderEndDate || '',
+          endTime: reminderEndTime || '',
           time: reminderTime,
           note: '',
           status: 'scheduled',
@@ -5977,7 +6135,9 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
       setReminderTitle('');
       setReminderDate(getTodayDate());
       setReminderTime('');
+      setReminderEndTime('');
       setReminderEndDate('');
+      setReminderEndTime('');
       setReminderCategory('personal');
       setReminderPriority('normal');
       setReminderParticipantIds(loggedInUser ? [loggedInUser.id] : []);
@@ -5993,7 +6153,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
     try {
       let payload;
       if (editingEvent.isReminder) {
-        payload = { title: editingEvent.title, date: editingEvent.date, endDate: editingEvent.endDate || '', time: editingEvent.time || '', category: editingEvent.category, priority: editingEvent.priority };
+        payload = { title: editingEvent.title, date: editingEvent.date, endDate: editingEvent.endDate || '', endTime: editingEvent.endTime || '', time: editingEvent.time || '', category: editingEvent.category, priority: editingEvent.priority };
       } else {
         const customer = customers.find(c => c.id === editingEvent.customerId);
         payload = { type: editingEvent.type, customerId: editingEvent.customerId || '', customerName: customer ? customer.name : '', date: editingEvent.date, time: editingEvent.time, endTime: editingEvent.endTime || '', note: editingEvent.note, priority: editingEvent.priority, address: editingEvent.address || '' };
@@ -6143,34 +6303,12 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
         )
       ) : (
       <>
-      <Card className="p-4 space-y-3">
-        <div className="flex items-center gap-2">
-          <div className="flex-1 flex gap-1 bg-gray-100 p-0.5 rounded-lg">
-            <button onClick={() => setViewMode('timeline')} className={`flex-1 py-2 rounded-md text-sm font-bold transition ${viewMode === 'timeline' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>時間軸</button>
-            <button onClick={() => setViewMode('calendar')} className={`flex-1 py-2 rounded-md text-sm font-bold transition ${viewMode === 'calendar' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>月曆</button>
-            <button onClick={() => setViewMode('list')} className={`flex-1 py-2 rounded-md text-sm font-bold transition ${viewMode === 'list' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>清單</button>
-          </div>
-          {loggedInUser?.defaultScheduleView !== viewMode && (
-            <button onClick={handleSetDefaultView} disabled={savingDefaultView} className="text-xs font-bold text-indigo-500 hover:text-indigo-600 whitespace-nowrap shrink-0 disabled:opacity-50">
-              {savingDefaultView ? '儲存中' : '設為預設'}
-            </button>
-          )}
-        </div>
-        <div className="flex items-center gap-2 flex-wrap">
-          <SlidersHorizontal size={16} className="text-gray-300 shrink-0" />
-          <select className="flex-1 min-w-[110px] p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-gray-600 outline-none" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
-            <option value="">全部分類</option>
-            {EVENT_CATEGORY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
-          </select>
-          <select className="flex-1 min-w-[110px] p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-gray-600 outline-none" value={filterPriority} onChange={e => setFilterPriority(e.target.value)}>
-            <option value="">全部優先度</option>
-            {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-          </select>
-          {(filterCategory || filterPriority) && (
-            <button onClick={() => { setFilterCategory(''); setFilterPriority(''); }} className="text-xs font-bold text-gray-400 hover:text-gray-600 shrink-0">清除</button>
-          )}
-        </div>
-      </Card>
+      <div className="relative" onTouchStart={handleTouchStart} onTouchEnd={handleTouchEnd}>
+      {loggedInUser?.defaultScheduleView !== viewMode && (
+        <button onClick={handleSetDefaultView} disabled={savingDefaultView} className="text-xs font-bold text-indigo-500 hover:text-indigo-600 mb-3 block disabled:opacity-50">
+          {savingDefaultView ? '儲存中' : '將目前檢視方式設為預設'}
+        </button>
+      )}
 
       {viewMode === 'calendar' ? (
         <Card className="p-5 lg:p-8">
@@ -6207,7 +6345,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                         <p className="font-bold text-gray-900 truncate">{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</p>
                         {e.priority && e.priority !== 'normal' && <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${getEventPriority(e).color} text-white`}>{getEventPriority(e).label}</span>}
                       </div>
-                      <p className="text-sm text-gray-400">{e.date}{e.isReminder && e.endDate ? ` ~ ${e.endDate}` : ''}{e.time && <span className="font-bold text-gray-600"> · {e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}{isOverdue ? '（已過期）' : ''}</p>
+                      <p className="text-sm text-gray-400">{e.date}{e.isReminder && e.endDate ? ` ~ ${e.endDate}${e.isReminder && e.endTime ? ` ${e.endTime}` : ''}` : ''}{e.time && <span className="font-bold text-gray-600"> · {e.time}{!e.isReminder && e.endTime ? `-${e.endTime}` : ''}</span>}{isOverdue ? '（已過期）' : ''}</p>
                       {e.address && (
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <MapPin size={11} className="text-gray-400 shrink-0" />
@@ -6309,6 +6447,37 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
       )}
       </>
       )}
+
+      {/* 浮動底部切換列：時間軸／月曆／清單／篩選，圖示化收合 */}
+      <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-30 flex items-center gap-1 bg-white shadow-lg border border-gray-100 rounded-full p-1.5">
+        <button onClick={() => setViewMode('timeline')} title="時間軸" className={`w-10 h-10 rounded-full flex items-center justify-center transition ${viewMode === 'timeline' ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-600'}`}><Clock size={18} /></button>
+        <button onClick={() => setViewMode('calendar')} title="月曆" className={`w-10 h-10 rounded-full flex items-center justify-center transition ${viewMode === 'calendar' ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-600'}`}><Calendar size={18} /></button>
+        <button onClick={() => setViewMode('list')} title="清單" className={`w-10 h-10 rounded-full flex items-center justify-center transition ${viewMode === 'list' ? 'bg-gray-900 text-white' : 'text-gray-400 hover:text-gray-600'}`}><ListIcon size={18} /></button>
+        <div className="w-px h-6 bg-gray-100 mx-0.5"></div>
+        <div className="relative">
+          <button onClick={() => setShowFilterPanel(v => !v)} title="篩選" className={`w-10 h-10 rounded-full flex items-center justify-center transition ${(filterCategory || filterPriority) ? 'bg-indigo-50 text-indigo-600' : showFilterPanel ? 'bg-gray-100 text-gray-700' : 'text-gray-400 hover:text-gray-600'}`}><SlidersHorizontal size={17} /></button>
+          {showFilterPanel && (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setShowFilterPanel(false)}></div>
+              <div className="absolute bottom-14 right-0 w-64 bg-white rounded-2xl shadow-2xl border border-gray-100 p-3 z-40 animate-scale-up origin-bottom-right space-y-2">
+                <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-gray-600 outline-none" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
+                  <option value="">全部分類</option>
+                  {EVENT_CATEGORY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+                </select>
+                <select className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm font-bold text-gray-600 outline-none" value={filterPriority} onChange={e => setFilterPriority(e.target.value)}>
+                  <option value="">全部優先度</option>
+                  {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+                {(filterCategory || filterPriority) && (
+                  <button onClick={() => { setFilterCategory(''); setFilterPriority(''); }} className="text-xs font-bold text-gray-400 hover:text-gray-600">清除篩選</button>
+                )}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+      <div className="h-16"></div>
+      </div>
       </>
       )}
 
@@ -6376,7 +6545,13 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
               <div><label className="text-xs font-bold text-gray-500 block mb-1">提醒內容</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" placeholder="例如：交報表給總公司" value={reminderTitle} onChange={e => setReminderTitle(e.target.value)} /></div>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderDate} onChange={e => setReminderDate(e.target.value)} /></div>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">時間（選填）</label><TimeSelect value={reminderTime} onChange={setReminderTime} /></div>
-              <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填，多天的事情例如出差可以填，會整段期間都提醒）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderEndDate} onChange={e => setReminderEndDate(e.target.value)} /></div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填，多天的事情例如出差可以填，會整段期間都提醒）</label>
+                <div className="grid grid-cols-2 gap-2">
+                  <input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderEndDate} onChange={e => setReminderEndDate(e.target.value)} />
+                  <TimeSelect value={reminderEndTime} onChange={setReminderEndTime} />
+                </div>
+              </div>
               <div>
                 <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
                 <select className="w-full p-2 border border-gray-200 rounded-lg" value={reminderCategory} onChange={e => setReminderCategory(e.target.value)}>
@@ -6426,7 +6601,13 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                   <div><label className="text-xs font-bold text-gray-500 block mb-1">提醒內容</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.title} onChange={e => setEditingEvent({ ...editingEvent, title: e.target.value })} /></div>
                   <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.date} onChange={e => setEditingEvent({ ...editingEvent, date: e.target.value })} /></div>
                   <div><label className="text-xs font-bold text-gray-500 block mb-1">時間（選填）</label><TimeSelect value={editingEvent.time || ''} onChange={(t) => setEditingEvent({ ...editingEvent, time: t })} /></div>
-                  <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填，多天的事情可以填）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.endDate || ''} onChange={e => setEditingEvent({ ...editingEvent, endDate: e.target.value })} /></div>
+                  <div>
+                    <label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填，多天的事情可以填）</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.endDate || ''} onChange={e => setEditingEvent({ ...editingEvent, endDate: e.target.value })} />
+                      <TimeSelect value={editingEvent.endTime || ''} onChange={(t) => setEditingEvent({ ...editingEvent, endTime: t })} />
+                    </div>
+                  </div>
                   <div>
                     <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
                     <select className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.category} onChange={e => setEditingEvent({ ...editingEvent, category: e.target.value })}>
