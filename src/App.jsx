@@ -49,7 +49,8 @@ import {
   Bell,
   Repeat,
   List as ListIcon,
-  LayoutGrid
+  LayoutGrid,
+  MoreVertical
 } from 'lucide-react';
 import { 
   BarChart,
@@ -2674,8 +2675,8 @@ const SalesWarRoomPage = ({ loggedInUser, team, customers, records }) => {
       <ConfirmModal isOpen={!!dealDeleteTarget} onClose={() => setDealDeleteTarget(null)} onConfirm={handleDeleteDealConfirm} title="刪除商機" message="確定要刪除這筆商機紀錄嗎？" />
 
       <div>
-        <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">業務戰情室</h2>
-        <p className="text-sm text-gray-400 mt-1">團隊受理中案件、客戶追蹤狀況與進行中商機總覽</p>
+        <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">業務戰情室</h2>
+        <p className="text-sm text-gray-400 md:mt-1">團隊受理中案件、客戶追蹤狀況與進行中商機總覽</p>
       </div>
 
       <Card className="p-5">
@@ -2889,8 +2890,8 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
 
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">知識庫</h2>
-          <p className="text-xs sm:text-sm text-gray-400 mt-1">共 {articles.length} 篇文章</p>
+          <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">知識庫</h2>
+          <p className="text-xs sm:text-sm text-gray-400 md:mt-1">共 {articles.length} 篇文章</p>
         </div>
         <button onClick={openAdd} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 新增文章</button>
       </div>
@@ -3645,6 +3646,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   // 客戶合併狀態
   const [mergeSourceId, setMergeSourceId] = useState(null); // 發起合併的那張卡片
   const [networkFocusId, setNetworkFocusId] = useState(null);
+  const [cardMenuOpenId, setCardMenuOpenId] = useState(null);
 
   const referralLeaderboard = useMemo(() => {
     const counts = {};
@@ -3822,10 +3824,10 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
       <RelationshipNetworkModal isOpen={!!networkFocusId} onClose={() => setNetworkFocusId(null)} focusId={networkFocusId} setFocusId={setNetworkFocusId} customers={customers} relationships={relationships || []} loggedInUser={loggedInUser} />
       <NotionImportModal isOpen={isNotionOpen} onClose={() => setIsNotionOpen(false)} loggedInUser={loggedInUser} onImported={() => {}} />
 
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4">
+      <div className="flex items-center justify-between gap-4">
         <div>
-          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">客戶管理</h2>
-          <p className="text-xs sm:text-sm text-gray-400 mt-1">僅顯示你自己的客戶資料，共 {customers.length} 筆</p>
+          <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">客戶管理</h2>
+          <p className="text-xs sm:text-sm text-gray-400 md:mt-1">僅顯示你自己的客戶資料，共 {customers.length} 筆</p>
         </div>
         <div className="relative self-end sm:self-auto">
           <button onClick={() => setShowAddMenu(v => !v)} className={`w-11 h-11 rounded-full flex items-center justify-center transition shadow-sm ${showAddMenu ? 'bg-gray-900 text-white rotate-45' : 'bg-indigo-600 hover:bg-indigo-700 text-white'}`}>
@@ -3970,11 +3972,19 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                     </div>
                   </div>
                 </div>
-                <div className="flex gap-1 opacity-0 group-hover:opacity-100 transition mr-12">
-                  <button onClick={() => setNetworkFocusId(c.id)} title="關聯網" className="p-1.5 text-gray-400 hover:text-purple-500"><GitBranch size={15} /></button>
-                  <button onClick={() => openMerge(c.id)} title="合併客戶" className="p-1.5 text-gray-400 hover:text-teal-500"><Users size={15} /></button>
-                  <button onClick={() => openEdit(c)} className="p-1.5 text-gray-400 hover:text-indigo-500"><Edit3 size={15} /></button>
-                  <button onClick={() => setDeleteTarget(c.id)} className="p-1.5 text-gray-400 hover:text-red-500"><Trash2 size={15} /></button>
+                <div className="relative shrink-0 mr-10">
+                  <button onClick={() => setCardMenuOpenId(cardMenuOpenId === c.id ? null : c.id)} className="p-2 text-gray-300 hover:text-gray-600 -mr-2"><MoreVertical size={18} /></button>
+                  {cardMenuOpenId === c.id && (
+                    <>
+                      <div className="fixed inset-0 z-40" onClick={() => setCardMenuOpenId(null)}></div>
+                      <div className="absolute right-0 mt-1 w-40 bg-white rounded-xl shadow-2xl border border-gray-100 py-1.5 z-50 animate-scale-up origin-top-right">
+                        <button onClick={() => { setNetworkFocusId(c.id); setCardMenuOpenId(null); }} className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 text-left text-sm text-gray-700"><GitBranch size={14} className="text-purple-500" /> 關聯網</button>
+                        <button onClick={() => { openMerge(c.id); setCardMenuOpenId(null); }} className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 text-left text-sm text-gray-700"><Users size={14} className="text-teal-500" /> 合併客戶</button>
+                        <button onClick={() => { openEdit(c); setCardMenuOpenId(null); }} className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 text-left text-sm text-gray-700"><Edit3 size={14} className="text-indigo-500" /> 編輯</button>
+                        <button onClick={() => { setDeleteTarget(c.id); setCardMenuOpenId(null); }} className="w-full flex items-center gap-2.5 px-3 py-2 hover:bg-gray-50 text-left text-sm text-red-500"><Trash2 size={14} /> 刪除</button>
+                      </div>
+                    </>
+                  )}
                 </div>
               </div>
               <div className="space-y-1 text-xs text-gray-500">
@@ -5110,8 +5120,8 @@ const TrainingChecklistPage = ({ team }) => {
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
       <div>
-        <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">新人培訓進度</h2>
-        <p className="text-xs sm:text-sm text-gray-400 mt-1">追蹤每位同仁的訓練檢核表</p>
+        <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">新人培訓進度</h2>
+        <p className="text-xs sm:text-sm text-gray-400 md:mt-1">追蹤每位同仁的訓練檢核表</p>
       </div>
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
@@ -5230,8 +5240,8 @@ const WatchlistPage = ({ loggedInUser, customers }) => {
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
       <div>
-        <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">關注名單</h2>
-        <p className="text-xs sm:text-sm text-gray-400 mt-1">在「客戶管理」點客戶卡片上的星星標記，會一直提醒直到你自己取消</p>
+        <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">關注名單</h2>
+        <p className="text-xs sm:text-sm text-gray-400 md:mt-1">在「客戶管理」點客戶卡片上的星星標記，會一直提醒直到你自己取消</p>
       </div>
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         <Card className="p-5 border-t-4 border-t-amber-400">
@@ -5736,8 +5746,8 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
       <PersonalTodoList loggedInUser={loggedInUser} />
 
       <div>
-        <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">今日待辦</h2>
-        <p className="text-sm text-gray-400 mt-1">{today} · 今天該聯繫、該留意的事</p>
+        <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">今日待辦</h2>
+        <p className="text-sm text-gray-400 md:mt-1">{today} · 今天該聯繫、該留意的事</p>
       </div>
 
       {isTodayEmpty && <Card className="p-8 text-center text-gray-400">今天沒有待辦事項，太棒了 🎉</Card>}
@@ -6244,8 +6254,8 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
 
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
-          <h2 className="text-2xl sm:text-3xl font-bold text-gray-900">行事曆</h2>
-          <p className="text-sm text-gray-400 mt-1">{today} · {getWeekdayLabel(today)}</p>
+          <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">行事曆</h2>
+          <p className="text-sm text-gray-400 md:mt-1">{today} · {getWeekdayLabel(today)}</p>
         </div>
         <div className="flex items-center gap-2">
           {isTeamScheduleViewer && (
@@ -7659,7 +7669,7 @@ const App = () => {
       </main>
 
       {/* 手機版底部導覽列：4個常用分頁＋更多，App感的核心 */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-100" style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}>
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-100" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
         <div className="flex items-stretch">
           {primaryNavItems.map(item => {
             const ItemIcon = item.icon;
@@ -7668,7 +7678,7 @@ const App = () => {
               <button
                 key={item.id}
                 onClick={() => setActiveTab(item.id)}
-                className="relative flex-1 flex flex-col items-center justify-center gap-0.5 py-2"
+                className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1"
               >
                 <ItemIcon size={22} className={active ? 'text-gray-900' : 'text-gray-300'} />
                 <span className={`text-[10px] ${active ? 'font-bold text-gray-900' : 'text-gray-400'}`}>{item.label}</span>
@@ -7678,7 +7688,7 @@ const App = () => {
               </button>
             );
           })}
-          <button onClick={() => setShowMoreSheet(true)} className="relative flex-1 flex flex-col items-center justify-center gap-0.5 py-2">
+          <button onClick={() => setShowMoreSheet(true)} className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1">
             <LayoutGrid size={22} className={isMoreActive ? 'text-gray-900' : 'text-gray-300'} />
             <span className={`text-[10px] ${isMoreActive ? 'font-bold text-gray-900' : 'text-gray-400'}`}>更多</span>
           </button>
