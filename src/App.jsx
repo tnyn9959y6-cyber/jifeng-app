@@ -425,6 +425,7 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
     }
 
     let unitTotalWeighted = 0; 
+    let unitTotalPremium = 0;
     let grandTotalWeighted = 0; 
     let grandTotalWeightedMonth = 0; 
     let grandTotalCases = 0; 
@@ -497,6 +498,7 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
 
         if (unitMemberIds.has(memberStats[idx].id)) {
           unitTotalWeighted += weighted;
+          unitTotalPremium += premium;
         }
       }
     });
@@ -508,13 +510,25 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
     const unitTarget = activeTargets[unitRole] || activeTargets['業務襄理'];
     const unitPeakProgress = Math.min(100, (unitTotalWeighted / unitTarget.peak.total) * 100);
     const unitSummitProgress = Math.min(100, (unitTotalWeighted / unitTarget.summit.total) * 100);
+    // 實收標的達成率：用「實收保費目標」(targets.peak.actualPremium / targets.summit.actualPremium) 當分母，
+    // 這是跟每位成員列表裡「實收」那一行同一套既有欄位、同一套算法，不是另外發明的參考數字。
+    // 這個欄位只有115下半年(H2)才會設定，H1或沒設定實收目標時就不顯示。
+    const unitHasActualPeak = season === 'H2' && unitTarget.peak.actualPremium > 0;
+    const unitHasActualSummit = season === 'H2' && unitTarget.summit.actualPremium > 0;
+    const unitPeakPremiumProgress = unitHasActualPeak ? Math.min(100, (unitTotalPremium / unitTarget.peak.actualPremium) * 100) : 0;
+    const unitSummitPremiumProgress = unitHasActualSummit ? Math.min(100, (unitTotalPremium / unitTarget.summit.actualPremium) * 100) : 0;
 
     return {
       memberStats: memberStats.sort((a, b) => b.totalWeighted - a.totalWeighted),
       unitTotalWeighted,
+      unitTotalPremium,
       unitTarget,
       unitPeakProgress,
       unitSummitProgress,
+      unitHasActualPeak,
+      unitHasActualSummit,
+      unitPeakPremiumProgress,
+      unitSummitPremiumProgress,
       grandTotalWeighted,
       grandTotalWeightedMonth,
       grandTotalCases,
@@ -559,7 +573,7 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-gradient-to-br from-indigo-600 to-blue-700 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden group">
           <div className="flex justify-between items-start relative z-10">
-            <div><p className="text-blue-200 font-bold text-xs uppercase tracking-wider mb-1">Unit FYP (組績)</p><h2 className="text-3xl font-bold tracking-tight">{formatMoney(stats.unitTotalWeighted)}</h2></div>
+            <div><p className="text-blue-200 font-bold text-xs uppercase tracking-wider mb-1">Unit FYP (組績)</p><h2 className="text-3xl font-bold tracking-tight">{formatMoney(stats.unitTotalWeighted)}</h2><p className="text-xs text-blue-200 mt-1">總實收保費 {formatMoney(stats.unitTotalPremium)}</p></div>
             <div className="bg-white/10 backdrop-blur-md rounded-lg p-1">
               <select className="bg-transparent text-xs font-bold text-white outline-none cursor-pointer appearance-none pr-4" value={selectedManagerId} onChange={(e) => setSelectedManagerId(e.target.value)}>
                 {managers.map(m => <option key={m.id} value={m.id} className="text-gray-900">{m.name} 組</option>)}
@@ -570,7 +584,16 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
           <div className="absolute -bottom-4 -right-4 text-white/10 transform rotate-12"><Target size={100} /></div>
         </div>
         <div className="bg-white rounded-2xl p-4 shadow-sm border border-gray-100 flex items-center justify-between relative overflow-hidden">
-           <div className="z-10"><p className="text-gray-400 font-bold text-xs uppercase tracking-wider mb-2">組達成率</p><div className="flex flex-col gap-2"><div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500"></span><span className="text-sm font-bold text-gray-700">高峰 {Math.round(stats.unitPeakProgress)}%</span></div><div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-amber-500"></span><span className="text-sm font-bold text-gray-700">極峰 {Math.round(stats.unitSummitProgress)}%</span></div></div></div>
+           <div className="z-10">
+             <p className="text-gray-400 font-bold text-xs uppercase tracking-wider mb-2">組達成率</p>
+             <div className="flex flex-col gap-2">
+               <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-blue-500"></span><span className="text-sm font-bold text-gray-700">高峰 {Math.round(stats.unitPeakProgress)}%</span></div>
+               <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-amber-500"></span><span className="text-sm font-bold text-gray-700">極峰 {Math.round(stats.unitSummitProgress)}%</span></div>
+               {(stats.unitHasActualPeak || stats.unitHasActualSummit) && <div className="h-px bg-gray-100 my-0.5"></div>}
+               {stats.unitHasActualPeak && <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-cyan-400"></span><span className="text-sm font-bold text-gray-700">實收高峰 {Math.round(stats.unitPeakPremiumProgress)}%</span></div>}
+               {stats.unitHasActualSummit && <div className="flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-yellow-300"></span><span className="text-sm font-bold text-gray-700">實收極峰 {Math.round(stats.unitSummitPremiumProgress)}%</span></div>}
+             </div>
+           </div>
            <div className="scale-75 origin-right"><DoubleRadialProgress peakPercent={stats.unitPeakProgress} summitPercent={stats.unitSummitProgress} /></div>
         </div>
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col justify-between">
