@@ -2261,6 +2261,28 @@ const RecruitmentDashboard = ({ recruits, team, user }) => {
     updateRecruit(recruit.id, { docs: newDocs });
   };
 
+  const [confirmPromoteTarget, setConfirmPromoteTarget] = useState(null);
+  const handleManualCreateAccount = async (recruit) => {
+    setLoadingId(recruit.id);
+    try {
+      const batch = writeBatch(db);
+      const newUserRef = doc(collection(db, 'user'));
+      batch.set(newUserRef, {
+        name: recruit.name,
+        position: '業務代表',
+        parentId: recruit.recruiterId || '',
+        role: 'member',
+        account_id: recruit.name,
+        password: '1234',
+        created_at: new Date().toISOString()
+      });
+      batch.update(doc(db, 'temp_user', recruit.id), { isPromoted: true });
+      await batch.commit();
+      setConfirmPromoteTarget(null);
+    } catch (e) { console.error(e); } finally { setLoadingId(null); }
+  };
+
+
   const getStatusColor = (status) => {
     switch(status) {
       case '登錄': return 'bg-emerald-500';
@@ -2338,6 +2360,13 @@ const RecruitmentDashboard = ({ recruits, team, user }) => {
                           <div className="mt-4"><label className="text-xs font-bold text-gray-400 uppercase block mb-1">進度備註</label><input type="text" disabled={recruit.isPromoted} className="w-full bg-gray-50 border-b border-gray-200 text-xs py-1 px-2 outline-none focus:border-blue-500 text-gray-600 placeholder-gray-300 disabled:opacity-50" placeholder="例如: 進度正常、需補件..." value={recruit.note || ''} onChange={(e) => updateRecruit(recruit.id, { note: e.target.value })}/></div>
                        </div>
                     </div>
+                    {!recruit.isPromoted && (
+                      <div className="mt-5 pt-4 border-t border-gray-50 flex justify-end">
+                        <button onClick={() => setConfirmPromoteTarget(recruit)} disabled={loadingId === recruit.id} className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50">
+                          {loadingId === recruit.id ? <Loader2 size={14} className="animate-spin" /> : <UserPlus size={14} />} 手動建立帳號
+                        </button>
+                      </div>
+                    )}
                   </div>
                 );
               })}
@@ -2345,6 +2374,14 @@ const RecruitmentDashboard = ({ recruits, team, user }) => {
           </div>
         );
       })}
+
+      <ConfirmModal
+        isOpen={!!confirmPromoteTarget}
+        onClose={() => setConfirmPromoteTarget(null)}
+        onConfirm={() => handleManualCreateAccount(confirmPromoteTarget)}
+        title="手動建立帳號"
+        message={confirmPromoteTarget ? `確定要提前幫「${confirmPromoteTarget.name}」建立正式使用者帳號嗎？建立後她就能直接登入系統，之後就算走到預計登錄日期，系統也不會再重複建立第二個帳號。` : ''}
+      />
     </div>
   );
 };
@@ -2623,7 +2660,7 @@ const getVisibleTeamIds = (loggedInUser, team) => {
   return ids;
 };
 
-const PIPELINE_STAGES = ['洽談中', '已送建議書', '待簽約'];
+const PIPELINE_STAGES = ['待約訪', '洽談中', '已送建議書', '待簽約'];
 
 const SalesWarRoomPage = ({ loggedInUser, team, customers, records }) => {
   const today = getTodayDate();
