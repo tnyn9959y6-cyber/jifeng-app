@@ -6120,7 +6120,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   const [showRecurringManage, setShowRecurringManage] = useState(false);
   const [showBatchSchedule, setShowBatchSchedule] = useState(false);
   const [showBatchActivity, setShowBatchActivity] = useState(false);
-  const emptyForm = { customerId: '', type: 'appointment', date: getTodayDate(), time: '', endTime: '', note: '', priority: 'normal', address: '', participantIds: loggedInUser ? [loggedInUser.id] : [] };
+  const emptyForm = { customerId: '', customerIds: [], type: 'appointment', date: getTodayDate(), time: '', endTime: '', note: '', priority: 'normal', address: '', participantIds: loggedInUser ? [loggedInUser.id] : [] };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [reminderTitle, setReminderTitle] = useState('');
@@ -6357,26 +6357,30 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
     if (!loggedInUser || !form.date || (form.participantIds || []).length === 0) return;
     setSaving(true);
     try {
-      const customer = customers.find(c => c.id === form.customerId);
+      // 沒勾選任何客戶的話，就跟以前一樣建一筆「不關聯客戶」的行程；有勾選的話，每位客戶各自算一筆(都算進自己的活動量)
+      const customerIds = form.customerIds.length > 0 ? form.customerIds : [''];
       const batch = writeBatch(db);
       (form.participantIds || [loggedInUser.id]).forEach(pid => {
-        const ref = doc(collection(db, 'schedule_events'));
-        batch.set(ref, {
-          ownerId: pid,
-          customerId: form.customerId || '',
-          customerName: customer ? customer.name : '',
-          type: form.type,
-          isReminder: false,
-          title: '',
-          priority: form.priority,
-          date: form.date,
-          time: form.time,
-          endTime: form.endTime,
-          note: form.note,
-          address: form.address,
-          status: 'scheduled',
-          completedAt: null,
-          createdAt: new Date().toISOString()
+        customerIds.forEach(cid => {
+          const customer = customers.find(c => c.id === cid);
+          const ref = doc(collection(db, 'schedule_events'));
+          batch.set(ref, {
+            ownerId: pid,
+            customerId: cid || '',
+            customerName: customer ? customer.name : '',
+            type: form.type,
+            isReminder: false,
+            title: '',
+            priority: form.priority,
+            date: form.date,
+            time: form.time,
+            endTime: form.endTime,
+            note: form.note,
+            address: form.address,
+            status: 'scheduled',
+            completedAt: null,
+            createdAt: new Date().toISOString()
+          });
         });
       });
       await batch.commit();
@@ -6812,8 +6816,27 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                 </select>
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">關聯客戶（選填）</label>
-                <CustomerPicker customers={customers} value={form.customerId} onChange={(id) => setForm({ ...form, customerId: id })} onCreateNew={handleCreateCustomerInline} />
+                <label className="text-xs font-bold text-gray-500 block mb-1">關聯客戶（選填，一次會面見多人可以複選，每人各自算一筆）</label>
+                <CustomerPicker
+                  key={form.customerIds.length}
+                  customers={customers.filter(c => !form.customerIds.includes(c.id))}
+                  value=""
+                  onChange={(id) => { if (id) setForm(prev => ({ ...prev, customerIds: [...prev.customerIds, id] })); }}
+                  onCreateNew={async (name) => { const id = await handleCreateCustomerInline(name); if (id) setForm(prev => ({ ...prev, customerIds: [...prev.customerIds, id] })); return id; }}
+                />
+                {form.customerIds.length > 0 && (
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {form.customerIds.map(cid => {
+                      const c = customers.find(x => x.id === cid);
+                      return (
+                        <span key={cid} className="flex items-center gap-1 bg-indigo-50 text-indigo-700 text-xs font-bold pl-2.5 pr-1.5 py-1 rounded-full">
+                          {c ? c.name : '未知客戶'}
+                          <button type="button" onClick={() => setForm(prev => ({ ...prev, customerIds: prev.customerIds.filter(id => id !== cid) }))} className="hover:bg-indigo-100 rounded-full p-0.5"><X size={12} /></button>
+                        </span>
+                      );
+                    })}
+                  </div>
+                )}
               </div>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
               <div className="grid grid-cols-2 gap-3">
@@ -6829,7 +6852,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
               <div>
                 <label className="text-xs font-bold text-gray-500 block mb-1">地點（選填，可開啟地圖）</label>
                 <input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
-                {(() => { const c = customers.find(x => x.id === form.customerId); return c && c.address && form.address !== c.address ? (
+                {(() => { const c = customers.find(x => x.id === form.customerIds[0]); return c && c.address && form.address !== c.address ? (
                   <button type="button" onClick={() => setForm({ ...form, address: c.address })} className="text-[10px] text-indigo-600 hover:underline mt-1">帶入 {c.name} 的地址</button>
                 ) : null; })()}
               </div>
