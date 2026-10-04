@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
-import * as XLSX from 'xlsx';
 import { 
   LayoutDashboard, 
   Users, 
@@ -3070,198 +3069,6 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
 };
 
 // --- IG 名單匯入 Modal ---
-const ExcelImportModal = ({ isOpen, onClose, loggedInUser, onImported }) => {
-  const [step, setStep] = useState(1);
-  const [fileName, setFileName] = useState('');
-  const [headers, setHeaders] = useState([]);
-  const [rows, setRows] = useState([]);
-  const [mapping, setMapping] = useState({ name: '', phone: '', birthday: '', notes: '', tag: '' });
-  const [error, setError] = useState('');
-  const [isSubmitting, setIsSubmitting] = useState(false);
-
-  useEffect(() => {
-    if (isOpen) {
-      setStep(1); setFileName(''); setHeaders([]); setRows([]);
-      setMapping({ name: '', phone: '', birthday: '', notes: '', tag: '' });
-      setError(''); setIsSubmitting(false);
-    }
-  }, [isOpen]);
-
-  const handleFile = (e) => {
-    const file = e.target.files?.[0];
-    if (!file) return;
-    setFileName(file.name);
-    setError('');
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const data = new Uint8Array(ev.target.result);
-        const workbook = XLSX.read(data, { type: 'array' });
-        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
-        const parsed = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '', raw: false });
-        const nonEmpty = parsed.filter(r => r.some(cell => String(cell || '').trim() !== ''));
-        if (nonEmpty.length < 2) {
-          setError('無法解析出資料，請確認Excel第一列是標題列、下面有資料');
-          return;
-        }
-        const headerRow = nonEmpty[0].map(h => String(h || '').trim());
-        setHeaders(headerRow);
-        setRows(nonEmpty.slice(1));
-        const guess = (keywords) => headerRow.findIndex(h => keywords.some(k => h.includes(k)));
-        const nameIdx = guess(['姓名', 'Name', '名稱']);
-        const phoneIdx = guess(['電話', 'Phone', '手機']);
-        const birthdayIdx = guess(['生日', 'Birthday']);
-        const notesIdx = guess(['備註', 'Note', '需求']);
-        const tagIdx = guess(['標籤', 'Tag', '狀態']);
-        setMapping({
-          name: nameIdx >= 0 ? headerRow[nameIdx] : '',
-          phone: phoneIdx >= 0 ? headerRow[phoneIdx] : '',
-          birthday: birthdayIdx >= 0 ? headerRow[birthdayIdx] : '',
-          notes: notesIdx >= 0 ? headerRow[notesIdx] : '',
-          tag: tagIdx >= 0 ? headerRow[tagIdx] : ''
-        });
-        setStep(2);
-      } catch (err) {
-        console.error(err);
-        setError('讀取Excel檔案失敗，請確認檔案格式是否正確（.xlsx 或 .xls）');
-      }
-    };
-    reader.readAsArrayBuffer(file);
-  };
-
-  const getColIndex = (headerName) => headers.indexOf(headerName);
-
-  const previewRows = useMemo(() => {
-    const nameIdx = getColIndex(mapping.name);
-    const phoneIdx = getColIndex(mapping.phone);
-    const birthdayIdx = getColIndex(mapping.birthday);
-    const notesIdx = getColIndex(mapping.notes);
-    const tagIdx = getColIndex(mapping.tag);
-    return rows.map(r => ({
-      name: nameIdx >= 0 ? String(r[nameIdx] || '').trim() : '',
-      phone: phoneIdx >= 0 ? String(r[phoneIdx] || '').trim() : '',
-      birthday: birthdayIdx >= 0 ? String(r[birthdayIdx] || '').trim() : '',
-      notes: notesIdx >= 0 ? String(r[notesIdx] || '').trim() : '',
-      tag: tagIdx >= 0 ? String(r[tagIdx] || '').trim() : ''
-    })).filter(r => r.name);
-  }, [rows, mapping, headers]);
-
-  const handleImport = async () => {
-    if (previewRows.length === 0 || !loggedInUser) return;
-    setIsSubmitting(true);
-    try {
-      const batch = writeBatch(db);
-      previewRows.forEach(r => {
-        const ref = doc(collection(db, 'customers'));
-        batch.set(ref, {
-          name: r.name,
-          phone: r.phone || '',
-          birthday: r.birthday || '',
-          gender: '', region: '', incomeRange: '', address: '', lineId: '', igHandle: '',
-          tags: [CUSTOMER_TAGS.includes(r.tag) ? r.tag : '既有客戶'],
-          notes: r.notes || '',
-          nextFollowUpDate: '',
-          source: 'Excel匯入',
-          ownerId: loggedInUser.id,
-          visitLog: [],
-          createdAt: new Date().toISOString()
-        });
-      });
-      await batch.commit();
-      onImported();
-      onClose();
-    } catch (e) {
-      console.error(e);
-      setError('匯入失敗，請再試一次');
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  if (!isOpen) return null;
-
-  return (
-    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
-      <div className="bg-white rounded-2xl w-full max-w-3xl shadow-2xl border border-gray-100 flex flex-col max-h-[90vh]">
-        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
-          <h3 className="text-lg font-bold text-gray-900">Excel 客戶資料匯入</h3>
-          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X size={20} /></button>
-        </div>
-        <div className="p-6 overflow-y-auto space-y-4 flex-1">
-          {step === 1 ? (
-            <>
-              <div className="bg-blue-50 p-4 rounded-lg text-xs text-blue-700 leading-relaxed border border-blue-100">
-                上傳 .xlsx 或 .xls 檔案，第一列要是標題列（例如「姓名」「電話」），下面每一列是一筆客戶資料。
-              </div>
-              <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-xl p-6 cursor-pointer hover:border-indigo-400 transition">
-                <Upload size={24} className="text-gray-400 mb-2" />
-                <span className="text-sm font-bold text-gray-600">{fileName || '點擊選擇 .xlsx / .xls 檔案'}</span>
-                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFile} />
-              </label>
-              {error && <p className="text-xs text-red-500 font-bold">{error}</p>}
-            </>
-          ) : (
-            <>
-              <p className="text-sm font-bold text-gray-700">欄位對應（請確認每個欄位對到 Excel 中正確的欄位）</p>
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-                {[
-                  { key: 'name', label: '姓名 (必填)' },
-                  { key: 'phone', label: '電話' },
-                  { key: 'birthday', label: '生日' },
-                  { key: 'tag', label: '標籤' },
-                  { key: 'notes', label: '備註' },
-                ].map(f => (
-                  <div key={f.key}>
-                    <label className="text-xs font-bold text-gray-500 block mb-1">{f.label}</label>
-                    <select
-                      className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none focus:border-indigo-500"
-                      value={mapping[f.key]}
-                      onChange={e => setMapping(prev => ({ ...prev, [f.key]: e.target.value }))}
-                    >
-                      <option value="">(不匯入)</option>
-                      {headers.map(h => <option key={h} value={h}>{h}</option>)}
-                    </select>
-                  </div>
-                ))}
-              </div>
-              <div className="overflow-x-auto border border-gray-100 rounded-xl mt-2">
-                <table className="w-full text-left text-xs whitespace-nowrap">
-                  <thead className="bg-gray-50 text-gray-500 font-bold uppercase">
-                    <tr><th className="px-3 py-2">姓名</th><th className="px-3 py-2">電話</th><th className="px-3 py-2">生日</th><th className="px-3 py-2">標籤</th><th className="px-3 py-2">備註</th></tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {previewRows.slice(0, 8).map((r, i) => (
-                      <tr key={i}>
-                        <td className="px-3 py-2 font-bold">{r.name}</td>
-                        <td className="px-3 py-2">{r.phone}</td>
-                        <td className="px-3 py-2">{r.birthday}</td>
-                        <td className="px-3 py-2">{r.tag}</td>
-                        <td className="px-3 py-2 truncate max-w-[150px]">{r.notes}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-              <p className="text-xs text-gray-400">共辨識出 {previewRows.length} 筆有效資料（僅預覽前8筆）</p>
-              {error && <p className="text-xs text-red-500 font-bold">{error}</p>}
-            </>
-          )}
-        </div>
-        <div className="p-6 border-t border-gray-100 flex justify-between bg-gray-50 rounded-b-2xl">
-          {step === 2 ? (
-            <>
-              <button onClick={() => setStep(1)} className="text-sm font-bold text-gray-500 hover:text-gray-700">上一步</button>
-              <button onClick={handleImport} disabled={previewRows.length === 0 || !mapping.name || isSubmitting} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-bold text-sm transition disabled:opacity-50 flex items-center gap-2">
-                {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : `匯入 ${previewRows.length} 筆客戶`}
-              </button>
-            </>
-          ) : <div></div>}
-        </div>
-      </div>
-    </div>
-  );
-};
-
 // --- IG 名單匯入 Modal ---
 const IGImportModal = ({ isOpen, onClose, loggedInUser, existingNames, onImported }) => {
   const [rawUsernames, setRawUsernames] = useState([]);
@@ -3488,14 +3295,14 @@ const NotionImportModal = ({ isOpen, onClose, loggedInUser, onImported }) => {
     <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
       <div className="bg-white rounded-2xl w-full max-w-3xl shadow-2xl border border-gray-100 flex flex-col max-h-[90vh]">
         <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
-          <h3 className="text-lg font-bold text-gray-900">Notion 客戶資料匯入</h3>
+          <h3 className="text-lg font-bold text-gray-900">CSV 客戶資料上傳</h3>
           <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X size={20} /></button>
         </div>
         <div className="p-6 overflow-y-auto space-y-4 flex-1">
           {step === 1 ? (
             <>
               <div className="bg-blue-50 p-4 rounded-lg text-xs text-blue-700 leading-relaxed border border-blue-100">
-                先到 Notion 把客戶資料庫「Export → CSV」匯出，再把 CSV 檔上傳，或直接把內容貼在下面的欄位裡。
+                上傳 CSV 檔案，或直接把內容貼在下面的欄位裡。如果資料是在Notion，先「Export → CSV」匯出；如果資料是Excel檔案，先用「另存新檔」存成CSV格式，再上傳。
               </div>
               <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-xl p-6 cursor-pointer hover:border-indigo-400 transition">
                 <Upload size={24} className="text-gray-400 mb-2" />
@@ -3916,7 +3723,6 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isIGOpen, setIsIGOpen] = useState(false);
   const [isNotionOpen, setIsNotionOpen] = useState(false);
-  const [isExcelOpen, setIsExcelOpen] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', tags: ['準客戶'], notes: '', nextFollowUpDate: '', address: '', emergencyContactId: '', emergencyContactName: '' };
   const [form, setForm] = useState(emptyForm);
@@ -4107,7 +3913,6 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
       <IGImportModal isOpen={isIGOpen} onClose={() => setIsIGOpen(false)} loggedInUser={loggedInUser} existingNames={existingNames} onImported={() => {}} />
       <RelationshipNetworkModal isOpen={!!networkFocusId} onClose={() => setNetworkFocusId(null)} focusId={networkFocusId} setFocusId={setNetworkFocusId} customers={customers} relationships={relationships || []} loggedInUser={loggedInUser} />
       <NotionImportModal isOpen={isNotionOpen} onClose={() => setIsNotionOpen(false)} loggedInUser={loggedInUser} onImported={() => {}} />
-      <ExcelImportModal isOpen={isExcelOpen} onClose={() => setIsExcelOpen(false)} loggedInUser={loggedInUser} onImported={() => {}} />
 
       <div className="flex items-center justify-between gap-4">
         <div>
@@ -4132,11 +3937,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                 </button>
                 <button onClick={() => { setIsNotionOpen(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
                   <span className="w-8 h-8 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center shrink-0"><Upload size={16} /></span>
-                  <span className="text-sm font-bold text-gray-700">Notion 匯入</span>
-                </button>
-                <button onClick={() => { setIsExcelOpen(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
-                  <span className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0"><Upload size={16} /></span>
-                  <span className="text-sm font-bold text-gray-700">Excel 匯入</span>
+                  <span className="text-sm font-bold text-gray-700">CSV 上傳</span>
                 </button>
               </div>
             </>
