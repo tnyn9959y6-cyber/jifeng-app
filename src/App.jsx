@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import * as XLSX from 'xlsx';
 import { 
   LayoutDashboard, 
   Users, 
@@ -50,7 +51,9 @@ import {
   Repeat,
   List as ListIcon,
   LayoutGrid,
-  MoreVertical
+  MoreVertical,
+  Copy,
+  GripVertical
 } from 'lucide-react';
 import { 
   BarChart,
@@ -281,6 +284,33 @@ const parseBatchScheduleText = (text, defaultYear) => {
       rest = rest.slice(timeMatch[0].length).trim();
     }
     return { id: Date.now() + i, date, time, title: rest };
+  });
+};
+
+// 批次新增「客戶行程」用的解析器：每行 日期 類型 姓名 備註(選填)，空白或Tab分隔
+// 規則：沒填的欄位給空白/預設值；備註可填可不填；姓名沒對應到既有客戶的話，匯入時會自動新增客戶
+const parseActivityBatchText = (text, defaultYear) => {
+  const typeByLabel = {};
+  Object.entries(ACTIVITY_WEIGHTS).forEach(([key, v]) => { typeByLabel[v.label] = key; });
+  Object.entries(RECRUIT_ACTIVITY_WEIGHTS).forEach(([key, v]) => { typeByLabel[v.label] = key; });
+  return text.split('\n').map(l => l.trim()).filter(Boolean).map((line, i) => {
+    const parts = line.split(/\s+/).filter(Boolean);
+    let idx = 0;
+    let date = '';
+    const isoMatch = parts[idx]?.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+    const slashMatch = parts[idx]?.match(/^(\d{1,2})\/(\d{1,2})$/);
+    if (isoMatch) { date = `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`; idx++; }
+    else if (slashMatch) { date = `${defaultYear}-${slashMatch[1].padStart(2, '0')}-${slashMatch[2].padStart(2, '0')}`; idx++; }
+
+    let type = 'appointment'; // 沒填類型時的預設值：約訪
+    let typeLabel = ALL_ACTIVITY_WEIGHTS['appointment'].label;
+    if (parts[idx] && typeByLabel[parts[idx]]) { type = typeByLabel[parts[idx]]; typeLabel = parts[idx]; idx++; }
+
+    const name = parts[idx] || '';
+    if (name) idx++;
+    const note = parts.slice(idx).join(' ');
+
+    return { id: Date.now() + i + Math.random(), date, type, typeLabel, name, note };
   });
 };
 
@@ -3040,6 +3070,199 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
 };
 
 // --- IG 名單匯入 Modal ---
+const ExcelImportModal = ({ isOpen, onClose, loggedInUser, onImported }) => {
+  const [step, setStep] = useState(1);
+  const [fileName, setFileName] = useState('');
+  const [headers, setHeaders] = useState([]);
+  const [rows, setRows] = useState([]);
+  const [mapping, setMapping] = useState({ name: '', phone: '', birthday: '', notes: '', tag: '' });
+  const [error, setError] = useState('');
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) {
+      setStep(1); setFileName(''); setHeaders([]); setRows([]);
+      setMapping({ name: '', phone: '', birthday: '', notes: '', tag: '' });
+      setError(''); setIsSubmitting(false);
+    }
+  }, [isOpen]);
+
+  const handleFile = (e) => {
+    const file = e.target.files?.[0];
+    if (!file) return;
+    setFileName(file.name);
+    setError('');
+    const reader = new FileReader();
+    reader.onload = (ev) => {
+      try {
+        const data = new Uint8Array(ev.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        const firstSheet = workbook.Sheets[workbook.SheetNames[0]];
+        const parsed = XLSX.utils.sheet_to_json(firstSheet, { header: 1, defval: '', raw: false });
+        const nonEmpty = parsed.filter(r => r.some(cell => String(cell || '').trim() !== ''));
+        if (nonEmpty.length < 2) {
+          setError('無法解析出資料，請確認Excel第一列是標題列、下面有資料');
+          return;
+        }
+        const headerRow = nonEmpty[0].map(h => String(h || '').trim());
+        setHeaders(headerRow);
+        setRows(nonEmpty.slice(1));
+        const guess = (keywords) => headerRow.findIndex(h => keywords.some(k => h.includes(k)));
+        const nameIdx = guess(['姓名', 'Name', '名稱']);
+        const phoneIdx = guess(['電話', 'Phone', '手機']);
+        const birthdayIdx = guess(['生日', 'Birthday']);
+        const notesIdx = guess(['備註', 'Note', '需求']);
+        const tagIdx = guess(['標籤', 'Tag', '狀態']);
+        setMapping({
+          name: nameIdx >= 0 ? headerRow[nameIdx] : '',
+          phone: phoneIdx >= 0 ? headerRow[phoneIdx] : '',
+          birthday: birthdayIdx >= 0 ? headerRow[birthdayIdx] : '',
+          notes: notesIdx >= 0 ? headerRow[notesIdx] : '',
+          tag: tagIdx >= 0 ? headerRow[tagIdx] : ''
+        });
+        setStep(2);
+      } catch (err) {
+        console.error(err);
+        setError('讀取Excel檔案失敗，請確認檔案格式是否正確（.xlsx 或 .xls）');
+      }
+    };
+    reader.readAsArrayBuffer(file);
+  };
+
+  const getColIndex = (headerName) => headers.indexOf(headerName);
+
+  const previewRows = useMemo(() => {
+    const nameIdx = getColIndex(mapping.name);
+    const phoneIdx = getColIndex(mapping.phone);
+    const birthdayIdx = getColIndex(mapping.birthday);
+    const notesIdx = getColIndex(mapping.notes);
+    const tagIdx = getColIndex(mapping.tag);
+    return rows.map(r => ({
+      name: nameIdx >= 0 ? String(r[nameIdx] || '').trim() : '',
+      phone: phoneIdx >= 0 ? String(r[phoneIdx] || '').trim() : '',
+      birthday: birthdayIdx >= 0 ? String(r[birthdayIdx] || '').trim() : '',
+      notes: notesIdx >= 0 ? String(r[notesIdx] || '').trim() : '',
+      tag: tagIdx >= 0 ? String(r[tagIdx] || '').trim() : ''
+    })).filter(r => r.name);
+  }, [rows, mapping, headers]);
+
+  const handleImport = async () => {
+    if (previewRows.length === 0 || !loggedInUser) return;
+    setIsSubmitting(true);
+    try {
+      const batch = writeBatch(db);
+      previewRows.forEach(r => {
+        const ref = doc(collection(db, 'customers'));
+        batch.set(ref, {
+          name: r.name,
+          phone: r.phone || '',
+          birthday: r.birthday || '',
+          gender: '', region: '', incomeRange: '', address: '', lineId: '', igHandle: '',
+          tags: [CUSTOMER_TAGS.includes(r.tag) ? r.tag : '既有客戶'],
+          notes: r.notes || '',
+          nextFollowUpDate: '',
+          source: 'Excel匯入',
+          ownerId: loggedInUser.id,
+          visitLog: [],
+          createdAt: new Date().toISOString()
+        });
+      });
+      await batch.commit();
+      onImported();
+      onClose();
+    } catch (e) {
+      console.error(e);
+      setError('匯入失敗，請再試一次');
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4 animate-fade-in">
+      <div className="bg-white rounded-2xl w-full max-w-3xl shadow-2xl border border-gray-100 flex flex-col max-h-[90vh]">
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
+          <h3 className="text-lg font-bold text-gray-900">Excel 客戶資料匯入</h3>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X size={20} /></button>
+        </div>
+        <div className="p-6 overflow-y-auto space-y-4 flex-1">
+          {step === 1 ? (
+            <>
+              <div className="bg-blue-50 p-4 rounded-lg text-xs text-blue-700 leading-relaxed border border-blue-100">
+                上傳 .xlsx 或 .xls 檔案，第一列要是標題列（例如「姓名」「電話」），下面每一列是一筆客戶資料。
+              </div>
+              <label className="flex flex-col items-center justify-center border-2 border-dashed border-gray-200 rounded-xl p-6 cursor-pointer hover:border-indigo-400 transition">
+                <Upload size={24} className="text-gray-400 mb-2" />
+                <span className="text-sm font-bold text-gray-600">{fileName || '點擊選擇 .xlsx / .xls 檔案'}</span>
+                <input type="file" accept=".xlsx,.xls" className="hidden" onChange={handleFile} />
+              </label>
+              {error && <p className="text-xs text-red-500 font-bold">{error}</p>}
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-bold text-gray-700">欄位對應（請確認每個欄位對到 Excel 中正確的欄位）</p>
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                {[
+                  { key: 'name', label: '姓名 (必填)' },
+                  { key: 'phone', label: '電話' },
+                  { key: 'birthday', label: '生日' },
+                  { key: 'tag', label: '標籤' },
+                  { key: 'notes', label: '備註' },
+                ].map(f => (
+                  <div key={f.key}>
+                    <label className="text-xs font-bold text-gray-500 block mb-1">{f.label}</label>
+                    <select
+                      className="w-full p-2 bg-gray-50 border border-gray-200 rounded-lg text-sm outline-none focus:border-indigo-500"
+                      value={mapping[f.key]}
+                      onChange={e => setMapping(prev => ({ ...prev, [f.key]: e.target.value }))}
+                    >
+                      <option value="">(不匯入)</option>
+                      {headers.map(h => <option key={h} value={h}>{h}</option>)}
+                    </select>
+                  </div>
+                ))}
+              </div>
+              <div className="overflow-x-auto border border-gray-100 rounded-xl mt-2">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead className="bg-gray-50 text-gray-500 font-bold uppercase">
+                    <tr><th className="px-3 py-2">姓名</th><th className="px-3 py-2">電話</th><th className="px-3 py-2">生日</th><th className="px-3 py-2">標籤</th><th className="px-3 py-2">備註</th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {previewRows.slice(0, 8).map((r, i) => (
+                      <tr key={i}>
+                        <td className="px-3 py-2 font-bold">{r.name}</td>
+                        <td className="px-3 py-2">{r.phone}</td>
+                        <td className="px-3 py-2">{r.birthday}</td>
+                        <td className="px-3 py-2">{r.tag}</td>
+                        <td className="px-3 py-2 truncate max-w-[150px]">{r.notes}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-gray-400">共辨識出 {previewRows.length} 筆有效資料（僅預覽前8筆）</p>
+              {error && <p className="text-xs text-red-500 font-bold">{error}</p>}
+            </>
+          )}
+        </div>
+        <div className="p-6 border-t border-gray-100 flex justify-between bg-gray-50 rounded-b-2xl">
+          {step === 2 ? (
+            <>
+              <button onClick={() => setStep(1)} className="text-sm font-bold text-gray-500 hover:text-gray-700">上一步</button>
+              <button onClick={handleImport} disabled={previewRows.length === 0 || !mapping.name || isSubmitting} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-bold text-sm transition disabled:opacity-50 flex items-center gap-2">
+                {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : `匯入 ${previewRows.length} 筆客戶`}
+              </button>
+            </>
+          ) : <div></div>}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- IG 名單匯入 Modal ---
 const IGImportModal = ({ isOpen, onClose, loggedInUser, existingNames, onImported }) => {
   const [rawUsernames, setRawUsernames] = useState([]);
   const [fileName, setFileName] = useState('');
@@ -3693,6 +3916,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isIGOpen, setIsIGOpen] = useState(false);
   const [isNotionOpen, setIsNotionOpen] = useState(false);
+  const [isExcelOpen, setIsExcelOpen] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', tags: ['準客戶'], notes: '', nextFollowUpDate: '', address: '', emergencyContactId: '', emergencyContactName: '' };
   const [form, setForm] = useState(emptyForm);
@@ -3883,6 +4107,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
       <IGImportModal isOpen={isIGOpen} onClose={() => setIsIGOpen(false)} loggedInUser={loggedInUser} existingNames={existingNames} onImported={() => {}} />
       <RelationshipNetworkModal isOpen={!!networkFocusId} onClose={() => setNetworkFocusId(null)} focusId={networkFocusId} setFocusId={setNetworkFocusId} customers={customers} relationships={relationships || []} loggedInUser={loggedInUser} />
       <NotionImportModal isOpen={isNotionOpen} onClose={() => setIsNotionOpen(false)} loggedInUser={loggedInUser} onImported={() => {}} />
+      <ExcelImportModal isOpen={isExcelOpen} onClose={() => setIsExcelOpen(false)} loggedInUser={loggedInUser} onImported={() => {}} />
 
       <div className="flex items-center justify-between gap-4">
         <div>
@@ -3908,6 +4133,10 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                 <button onClick={() => { setIsNotionOpen(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
                   <span className="w-8 h-8 rounded-full bg-gray-100 text-gray-600 flex items-center justify-center shrink-0"><Upload size={16} /></span>
                   <span className="text-sm font-bold text-gray-700">Notion 匯入</span>
+                </button>
+                <button onClick={() => { setIsExcelOpen(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
+                  <span className="w-8 h-8 rounded-full bg-emerald-50 text-emerald-600 flex items-center justify-center shrink-0"><Upload size={16} /></span>
+                  <span className="text-sm font-bold text-gray-700">Excel 匯入</span>
                 </button>
               </div>
             </>
@@ -4401,6 +4630,154 @@ const WEEKDAY_OPTIONS = [
 const WEEK_OF_MONTH_OPTIONS = [{ value: 1, label: '第1個' }, { value: 2, label: '第2個' }, { value: 3, label: '第3個' }, { value: 4, label: '第4個' }];
 
 // --- 批次新增行程 (貼上文字快速建立多筆，適合課表這類固定課程) ---
+// --- 批次新增客戶行程（含自動新增客戶）---
+const BatchActivityImportModal = ({ isOpen, onClose, loggedInUser, customers }) => {
+  const [step, setStep] = useState(1);
+  const [rawText, setRawText] = useState('');
+  const [rows, setRows] = useState([]);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (isOpen) { setStep(1); setRawText(''); setRows([]); setIsSubmitting(false); }
+  }, [isOpen]);
+
+  const existingNameMap = useMemo(() => {
+    const map = {};
+    customers.forEach(c => { map[c.name.trim().toLowerCase()] = c.id; });
+    return map;
+  }, [customers]);
+
+  const handleParse = () => {
+    const parsed = parseActivityBatchText(rawText, new Date().getFullYear());
+    setRows(parsed.filter(r => r.date && r.name));
+    setStep(2);
+  };
+
+  const updateRow = (id, field, value) => {
+    setRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value, ...(field === 'type' ? { typeLabel: ALL_ACTIVITY_WEIGHTS[value]?.label || value } : {}) } : r));
+  };
+  const removeRow = (id) => setRows(prev => prev.filter(r => r.id !== id));
+
+  const isNewCustomer = (name) => !existingNameMap[name.trim().toLowerCase()];
+
+  const handleSubmit = async () => {
+    const validRows = rows.filter(r => r.date && r.name);
+    if (validRows.length === 0 || !loggedInUser) return;
+    setIsSubmitting(true);
+    try {
+      const nameToId = { ...existingNameMap };
+      // 先把這批資料裡還沒出現過的姓名，去重後一次新增成客戶
+      const newNames = [...new Set(validRows.map(r => r.name.trim()).filter(n => !nameToId[n.toLowerCase()]))];
+      if (newNames.length > 0) {
+        const createBatch = writeBatch(db);
+        const newRefs = newNames.map(() => doc(collection(db, 'customers')));
+        newNames.forEach((name, i) => {
+          createBatch.set(newRefs[i], {
+            name, phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', address: '',
+            tags: ['準客戶'], notes: '', nextFollowUpDate: '',
+            source: '批次新增行程', ownerId: loggedInUser.id, visitLog: [], createdAt: new Date().toISOString()
+          });
+          nameToId[name.toLowerCase()] = newRefs[i].id;
+        });
+        await createBatch.commit();
+      }
+
+      const eventBatch = writeBatch(db);
+      validRows.forEach(row => {
+        const ref = doc(collection(db, 'schedule_events'));
+        eventBatch.set(ref, {
+          ownerId: loggedInUser.id,
+          customerId: nameToId[row.name.trim().toLowerCase()] || '',
+          customerName: row.name.trim(),
+          type: row.type, isReminder: false, title: '',
+          priority: 'normal', date: row.date, time: '', endTime: '',
+          note: row.note || '', address: '',
+          status: 'scheduled', completedAt: null, createdAt: new Date().toISOString()
+        });
+      });
+      await eventBatch.commit();
+      onClose();
+    } catch (e) { console.error(e); } finally { setIsSubmitting(false); }
+  };
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl animate-scale-up border border-gray-100 flex flex-col max-h-[90vh]">
+        <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
+          <h3 className="text-lg font-bold text-gray-900">批次新增行程</h3>
+          <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X size={20} /></button>
+        </div>
+        <div className="p-6 overflow-y-auto flex-1 space-y-4">
+          {step === 1 ? (
+            <>
+              <div className="bg-blue-50 p-4 rounded-lg text-xs text-blue-700 leading-relaxed border border-blue-100">
+                每行一筆，格式：<code>日期 類型 姓名 備註(選填)</code>，空白分隔，例如：<br />
+                <code>9/11 面談 李冠葒</code><br />
+                <code>9/11 面談 王博弘 sbb</code><br />
+                <code>9/12 面談 陳伯伯</code><br />
+                沒填的欄位會給預設值（類型預設約訪），備註可填可不填；<strong>姓名沒對到既有客戶的話，匯入時會自動幫她新增一筆客戶資料</strong>。
+              </div>
+              <textarea
+                className="w-full h-48 p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-indigo-500 font-mono text-sm resize-none"
+                placeholder="貼上行程文字..."
+                value={rawText}
+                onChange={e => setRawText(e.target.value)}
+              />
+            </>
+          ) : (
+            <>
+              <div className="overflow-x-auto border border-gray-100 rounded-xl">
+                <table className="w-full text-left text-xs whitespace-nowrap">
+                  <thead className="bg-gray-50 text-gray-500 font-bold uppercase">
+                    <tr><th className="px-3 py-2">日期</th><th className="px-3 py-2">類型</th><th className="px-3 py-2">姓名</th><th className="px-3 py-2">備註</th><th className="px-3 py-2 w-10"></th></tr>
+                  </thead>
+                  <tbody className="divide-y divide-gray-100">
+                    {rows.map(row => (
+                      <tr key={row.id}>
+                        <td className="p-2"><input type="text" placeholder="YYYY-MM-DD" className="bg-transparent border border-gray-200 rounded px-1 w-28 outline-none" value={row.date} onChange={e => updateRow(row.id, 'date', e.target.value)} /></td>
+                        <td className="p-2">
+                          <select className="bg-transparent border border-gray-200 rounded px-1 outline-none" value={row.type} onChange={e => updateRow(row.id, 'type', e.target.value)}>
+                            <optgroup label="業務活動">{Object.entries(ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</optgroup>
+                            <optgroup label="增員活動">{Object.entries(RECRUIT_ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</optgroup>
+                          </select>
+                        </td>
+                        <td className="p-2">
+                          <input type="text" className="bg-transparent border border-gray-200 rounded px-1 w-24 outline-none" value={row.name} onChange={e => updateRow(row.id, 'name', e.target.value)} />
+                          {row.name && isNewCustomer(row.name) && <span className="ml-1 text-[9px] font-bold text-amber-600 bg-amber-50 px-1 py-0.5 rounded">新客戶</span>}
+                        </td>
+                        <td className="p-2"><input type="text" className="bg-transparent border border-gray-200 rounded px-1 w-full outline-none" value={row.note} onChange={e => updateRow(row.id, 'note', e.target.value)} /></td>
+                        <td className="p-2 text-center"><button onClick={() => removeRow(row.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={14} /></button></td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+              <p className="text-xs text-gray-400">共 {rows.length} 筆，其中 {rows.filter(r => r.name && isNewCustomer(r.name)).length} 筆會自動新增客戶</p>
+            </>
+          )}
+        </div>
+        <div className="p-6 border-t border-gray-100 flex justify-between bg-gray-50 rounded-b-2xl">
+          {step === 1 ? (
+            <>
+              <div></div>
+              <button onClick={handleParse} disabled={!rawText.trim()} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-bold text-sm transition disabled:opacity-50">下一步</button>
+            </>
+          ) : (
+            <>
+              <button onClick={() => setStep(1)} className="text-sm font-bold text-gray-500 hover:text-gray-700">上一步</button>
+              <button onClick={handleSubmit} disabled={rows.length === 0 || isSubmitting} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-bold text-sm transition disabled:opacity-50 flex items-center gap-2">
+                {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : `新增 ${rows.length} 筆行程`}
+              </button>
+            </>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const BatchScheduleModal = ({ isOpen, onClose, loggedInUser, team }) => {
   const [step, setStep] = useState(1);
   const [rawText, setRawText] = useState('');
@@ -5537,7 +5914,9 @@ const PersonalTodoList = ({ loggedInUser }) => {
   );
 };
 
-const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick, today }) => {
+const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick, onAddForDate, onDropOnDate, today }) => {
+  const [draggedEvent, setDraggedEvent] = useState(null);
+  const [dragOverDate, setDragOverDate] = useState(null);
   const [calendarMonth, setCalendarMonth] = useState(() => today.slice(0, 7));
   const [selectedDay, setSelectedDay] = useState(today);
 
@@ -5591,7 +5970,15 @@ const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick,
             <button
               key={dateStr}
               onClick={() => setSelectedDay(dateStr)}
-              className={`h-[92px] sm:h-[112px] rounded-lg pt-1 pb-1 flex flex-col items-stretch gap-0.5 transition overflow-hidden ${isSelected ? 'bg-indigo-50' : isToday ? 'bg-gray-50' : 'hover:bg-gray-50'}`}
+              onDragOver={(ev) => { if (draggedEvent) { ev.preventDefault(); setDragOverDate(dateStr); } }}
+              onDragLeave={() => setDragOverDate(prev => prev === dateStr ? null : prev)}
+              onDrop={(ev) => {
+                ev.preventDefault();
+                setDragOverDate(null);
+                if (draggedEvent && onDropOnDate && dateStr !== draggedEvent.date) onDropOnDate(draggedEvent, dateStr);
+                setDraggedEvent(null);
+              }}
+              className={`h-[92px] sm:h-[112px] rounded-lg pt-1 pb-1 flex flex-col items-stretch gap-0.5 transition overflow-hidden ${dragOverDate === dateStr ? 'bg-indigo-100 ring-2 ring-indigo-300' : isSelected ? 'bg-indigo-50' : isToday ? 'bg-gray-50' : 'hover:bg-gray-50'}`}
             >
               <span className={`text-xs w-5 h-5 mx-auto flex items-center justify-center rounded-full shrink-0 ${isToday ? 'bg-gray-900 text-white font-bold' : holiday ? 'text-red-500 font-bold' : 'text-gray-500'}`}>{Number(dateStr.slice(8))}</span>
               <div className="flex flex-col gap-px px-0.5 mt-0.5 min-w-0">
@@ -5607,17 +5994,32 @@ const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick,
       </div>
 
       <div className="mt-6 pt-6 border-t border-gray-100">
-        <p className="text-sm font-bold text-gray-600 mb-3">{selectedDay} 的行程{TAIWAN_HOLIDAYS_2026[selectedDay] && <span className="text-red-500"> · {TAIWAN_HOLIDAYS_2026[selectedDay]}</span>}</p>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-sm font-bold text-gray-600">{selectedDay} 的行程{TAIWAN_HOLIDAYS_2026[selectedDay] && <span className="text-red-500"> · {TAIWAN_HOLIDAYS_2026[selectedDay]}</span>}</p>
+          {onAddForDate && (
+            <button onClick={() => onAddForDate(selectedDay)} className="flex items-center gap-1 text-xs font-bold text-indigo-600 hover:text-indigo-700"><Plus size={14} /> 新增</button>
+          )}
+        </div>
+        {onDropOnDate && selectedDayEvents.length > 0 && <p className="hidden md:block text-[11px] text-gray-400 mb-2">滑鼠可以直接把行程拖到上面的日期格子，快速改期</p>}
         {selectedDayEvents.length === 0 && <p className="text-center text-gray-400 text-sm py-6">這天沒有安排</p>}
         <div className="space-y-2">
           {selectedDayEvents.map(e => {
             const isDone = e.status === 'completed';
+            const canDrag = !isDone && !e.isVirtual && onDropOnDate;
             return (
-              <button key={e.id} onClick={() => onEventClick(e)} className={`w-full flex items-center gap-2.5 p-3 rounded-lg text-left transition ${isDone ? 'bg-gray-50' : 'hover:bg-gray-50'}`}>
+              <button
+                key={e.id}
+                onClick={() => onEventClick(e)}
+                draggable={canDrag}
+                onDragStart={() => canDrag && setDraggedEvent(e)}
+                onDragEnd={() => setDraggedEvent(null)}
+                className={`w-full flex items-center gap-2.5 p-3 rounded-lg text-left transition ${isDone ? 'bg-gray-50' : 'hover:bg-gray-50'} ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''}`}
+              >
                 {isDone ? <CheckCircle2 size={16} className="text-emerald-500 shrink-0" /> : <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${getEventColor(e)}`}></span>}
                 <span className="text-sm font-bold truncate text-gray-800">{getEventLabel(e)}</span>
                 <span className="text-sm truncate text-gray-500">{e.customerName}</span>
                 {e.time && <span className="text-xs ml-auto shrink-0 text-gray-400">{e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}
+                {canDrag && <GripVertical size={14} className="text-gray-300 shrink-0" />}
               </button>
             );
           })}
@@ -5916,7 +6318,8 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   const [showRecurringForm, setShowRecurringForm] = useState(false);
   const [showRecurringManage, setShowRecurringManage] = useState(false);
   const [showBatchSchedule, setShowBatchSchedule] = useState(false);
-  const emptyForm = { customerId: '', type: 'appointment', date: getTodayDate(), time: '', endTime: '', note: '', priority: 'normal', address: '' };
+  const [showBatchActivity, setShowBatchActivity] = useState(false);
+  const emptyForm = { customerId: '', type: 'appointment', date: getTodayDate(), time: '', endTime: '', note: '', priority: 'normal', address: '', participantIds: loggedInUser ? [loggedInUser.id] : [] };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [reminderTitle, setReminderTitle] = useState('');
@@ -6150,27 +6553,32 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   };
 
   const handleAddSchedule = async () => {
-    if (!loggedInUser || !form.date) return;
+    if (!loggedInUser || !form.date || (form.participantIds || []).length === 0) return;
     setSaving(true);
     try {
       const customer = customers.find(c => c.id === form.customerId);
-      await addDoc(collection(db, 'schedule_events'), {
-        ownerId: loggedInUser.id,
-        customerId: form.customerId || '',
-        customerName: customer ? customer.name : '',
-        type: form.type,
-        isReminder: false,
-        title: '',
-        priority: form.priority,
-        date: form.date,
-        time: form.time,
-        endTime: form.endTime,
-        note: form.note,
-        address: form.address,
-        status: 'scheduled',
-        completedAt: null,
-        createdAt: new Date().toISOString()
+      const batch = writeBatch(db);
+      (form.participantIds || [loggedInUser.id]).forEach(pid => {
+        const ref = doc(collection(db, 'schedule_events'));
+        batch.set(ref, {
+          ownerId: pid,
+          customerId: form.customerId || '',
+          customerName: customer ? customer.name : '',
+          type: form.type,
+          isReminder: false,
+          title: '',
+          priority: form.priority,
+          date: form.date,
+          time: form.time,
+          endTime: form.endTime,
+          note: form.note,
+          address: form.address,
+          status: 'scheduled',
+          completedAt: null,
+          createdAt: new Date().toISOString()
+        });
       });
+      await batch.commit();
       setForm(emptyForm);
       setShowForm(false);
     } catch (e) { console.error(e); } finally { setSaving(false); }
@@ -6217,6 +6625,29 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   };
 
   const openEditEvent = (event) => { if (event.status === 'completed') return; setEditingEvent({ ...event }); };
+
+  // 拖移改日期：直接更新同一筆行程的日期欄位，不用刪除重建
+  const handleDropOnDate = async (event, newDate) => {
+    if (!event || event.isVirtual) return;
+    try { await updateDoc(doc(db, 'schedule_events', event.id), { date: newDate }); } catch (e) { console.error(e); }
+  };
+
+  // 複製行程：把現有行程的內容帶進「新增行程」表單，方便快速建立同場合的另一筆(或調整日期後再存一次)
+  const handleDuplicateEvent = (event) => {
+    setForm({
+      customerId: event.customerId || '',
+      type: event.type || 'appointment',
+      date: event.date || getTodayDate(),
+      time: event.time || '',
+      endTime: event.endTime || '',
+      note: event.note || '',
+      priority: event.priority || 'normal',
+      address: event.address || '',
+      participantIds: loggedInUser ? [loggedInUser.id] : []
+    });
+    setEditingEvent(null);
+    setShowForm(true);
+  };
 
   const handleSaveEditEvent = async () => {
     if (!editingEvent) return;
@@ -6311,6 +6742,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
     <div className="max-w-4xl lg:max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除行程" message="確定要刪除這筆行程嗎？" />
       <BatchScheduleModal isOpen={showBatchSchedule} onClose={() => setShowBatchSchedule(false)} loggedInUser={loggedInUser} team={team} />
+      <BatchActivityImportModal isOpen={showBatchActivity} onClose={() => setShowBatchActivity(false)} loggedInUser={loggedInUser} customers={customers} />
 
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -6340,9 +6772,13 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                     <span className="w-8 h-8 rounded-full bg-amber-50 text-amber-600 flex items-center justify-center shrink-0"><Bell size={16} /></span>
                     <span className="text-sm font-bold text-gray-700">純提醒</span>
                   </button>
-                  <button onClick={() => { setShowBatchSchedule(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
+                  <button onClick={() => { setShowBatchActivity(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
                     <span className="w-8 h-8 rounded-full bg-teal-50 text-teal-600 flex items-center justify-center shrink-0"><ListPlus size={16} /></span>
-                    <span className="text-sm font-bold text-gray-700">批次新增</span>
+                    <span className="text-sm font-bold text-gray-700">批次新增行程</span>
+                  </button>
+                  <button onClick={() => { setShowBatchSchedule(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
+                    <span className="w-8 h-8 rounded-full bg-sky-50 text-sky-600 flex items-center justify-center shrink-0"><ListPlus size={16} /></span>
+                    <span className="text-sm font-bold text-gray-700">批次新增提醒</span>
                   </button>
                   <div className="my-1 border-t border-gray-100"></div>
                   <button onClick={() => { setShowRecurringManage(true); setShowAddMenu(false); }} className="w-full flex items-center gap-3 px-4 py-2.5 hover:bg-gray-50 text-left transition">
@@ -6388,6 +6824,8 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
             getEventLabel={getEventLabel}
             getEventColor={getEventColor}
             onEventClick={handleCompleteEvent}
+            onAddForDate={(d) => { setForm({ ...emptyForm, date: d }); setShowForm(true); }}
+            onDropOnDate={handleDropOnDate}
             today={today}
           />
         </Card>
@@ -6595,7 +7033,22 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                 ) : null; })()}
               </div>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">備註</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-20 resize-none" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} /></div>
-              <button onClick={handleAddSchedule} disabled={!form.date || saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">參與人員（同一個場合有多人，一次勾選就好，每人各自獨立記一筆）</label>
+                <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto border border-gray-100 rounded-lg p-2">
+                  {(team || []).map(m => (
+                    <label key={m.id} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={(form.participantIds || []).includes(m.id)}
+                        onChange={() => setForm(prev => ({ ...prev, participantIds: (prev.participantIds || []).includes(m.id) ? prev.participantIds.filter(id => id !== m.id) : [...(prev.participantIds || []), m.id] }))}
+                        className="w-3.5 h-3.5"
+                      /> {m.name}
+                    </label>
+                  ))}
+                </div>
+              </div>
+              <button onClick={handleAddSchedule} disabled={!form.date || (form.participantIds || []).length === 0 || saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
                 {saving ? <Loader2 className="animate-spin" size={16} /> : '新增'}
               </button>
             </div>
@@ -6714,9 +7167,14 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                   {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                 </select>
               </div>
-              <button onClick={handleSaveEditEvent} disabled={saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
-                {saving ? <Loader2 className="animate-spin" size={16} /> : '儲存變更'}
-              </button>
+              <div className="flex gap-2 mt-2">
+                {!editingEvent.isReminder && (
+                  <button onClick={() => handleDuplicateEvent(editingEvent)} className="flex-1 flex items-center justify-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-lg font-bold transition"><Copy size={15} /> 複製</button>
+                )}
+                <button onClick={handleSaveEditEvent} disabled={saving} className="flex-[2] bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50 flex items-center justify-center gap-2">
+                  {saving ? <Loader2 className="animate-spin" size={16} /> : '儲存變更'}
+                </button>
+              </div>
             </div>
           </div>
         </div>
