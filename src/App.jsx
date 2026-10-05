@@ -52,7 +52,11 @@ import {
   LayoutGrid,
   MoreVertical,
   Copy,
-  GripVertical
+  GripVertical,
+  Megaphone,
+  Pin,
+  Heart,
+  Image as ImageIcon
 } from 'lucide-react';
 import { 
   BarChart,
@@ -2671,6 +2675,788 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
 };
 
 // --- Knowledge Base ---
+// --- 公文佈達專區：公司公文、獎勵辦法、活動講座等，由主管發佈，全員查看 ---
+const ANNOUNCEMENT_CATEGORIES = ['獎勵活動', '活動講座', '服務公告', '其他'];
+const ANNOUNCEMENT_CATEGORY_STYLE = {
+  '獎勵活動': 'bg-amber-50 text-amber-700',
+  '活動講座': 'bg-indigo-50 text-indigo-700',
+  '服務公告': 'bg-teal-50 text-teal-700',
+  '其他': 'bg-gray-100 text-gray-600'
+};
+
+// 圖片壓縮：公文圖片先在手機/電腦端縮小再存進資料庫（不需要另外開檔案儲存空間）
+const resizeDataUrl = (dataUrl, maxWidth, quality) => new Promise((resolve, reject) => {
+  const img = new Image();
+  img.onload = () => {
+    const scale = Math.min(1, maxWidth / img.width);
+    const canvas = document.createElement('canvas');
+    canvas.width = Math.round(img.width * scale);
+    canvas.height = Math.round(img.height * scale);
+    const ctx = canvas.getContext('2d');
+    ctx.fillStyle = '#ffffff';
+    ctx.fillRect(0, 0, canvas.width, canvas.height);
+    ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+    resolve(canvas.toDataURL('image/jpeg', quality));
+  };
+  img.onerror = reject;
+  img.src = dataUrl;
+});
+
+const fileToCompressedDataUrl = async (file) => {
+  const original = await new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = (e) => resolve(e.target.result);
+    reader.onerror = reject;
+    reader.readAsDataURL(file);
+  });
+  const attempts = [[1200, 0.72], [1000, 0.65], [800, 0.6]];
+  let result = '';
+  for (const [w, q] of attempts) {
+    result = await resizeDataUrl(original, w, q);
+    if (result.length < 850000) break; // 資料庫單筆文件上限約1MB，這裡留餘裕
+  }
+  return result;
+};
+
+const renderTextWithLinks = (text) => String(text || '').split(/(https?:\/\/[^\s]+)/g).map((part, i) => (
+  /^https?:\/\//.test(part)
+    ? <a key={i} href={part} target="_blank" rel="noopener noreferrer" className="text-indigo-600 underline break-all">{part}</a>
+    : <React.Fragment key={i}>{part}</React.Fragment>
+));
+
+// --- 官方公文（依公司公文圖片整理成結構化版面；內容以公司正式公告為準）---
+const BULLETIN_ACCENTS = {
+  pink: { grad: 'from-pink-500 to-rose-500', text: 'text-pink-600', soft: 'bg-pink-50', dot: 'bg-pink-400' },
+  indigo: { grad: 'from-indigo-600 to-blue-500', text: 'text-indigo-600', soft: 'bg-indigo-50', dot: 'bg-indigo-400' },
+  amber: { grad: 'from-amber-500 to-orange-500', text: 'text-amber-600', soft: 'bg-amber-50', dot: 'bg-amber-400' },
+  teal: { grad: 'from-teal-600 to-emerald-500', text: 'text-teal-600', soft: 'bg-teal-50', dot: 'bg-teal-400' },
+  violet: { grad: 'from-violet-600 to-fuchsia-500', text: 'text-violet-600', soft: 'bg-violet-50', dot: 'bg-violet-400' },
+  red: { grad: 'from-gray-900 to-red-700', text: 'text-red-600', soft: 'bg-red-50', dot: 'bg-red-400' },
+  blue: { grad: 'from-sky-600 to-blue-600', text: 'text-sky-600', soft: 'bg-sky-50', dot: 'bg-sky-400' }
+};
+const BULLETIN_ICONS = { heart: Heart, award: Award, trophy: Trophy, star: Star, target: Target, users: Users, gift: Gift, calendar: Calendar };
+const BULLETIN_TONE = {
+  green: 'bg-emerald-100 text-emerald-700',
+  red: 'bg-red-100 text-red-600',
+  blue: 'bg-sky-100 text-sky-700',
+  gray: 'bg-gray-100 text-gray-500'
+};
+
+const getBulletinStatus = (b) => {
+  if (!b.startDate && !b.endDate) return null;
+  const today = getTodayDate();
+  const start = b.startDate || b.endDate;
+  const end = b.endDate || b.startDate;
+  const diff = (x, y) => Math.round((new Date(y) - new Date(x)) / 86400000);
+  if (today < start) {
+    const n = diff(today, start);
+    return { text: b.isEvent ? `${n} 天後舉行` : `${n} 天後開始`, tone: 'blue' };
+  }
+  if (today <= end) {
+    const left = diff(today, end);
+    if (b.isEvent) return { text: '今天舉行', tone: 'red' };
+    return { text: left === 0 ? '今天截止' : `進行中・剩 ${left} 天`, tone: left <= 3 ? 'red' : 'green' };
+  }
+  return { text: '已結束', tone: 'gray' };
+};
+
+const NCIC_SUPA_TARGETS = [
+  ['南區業展一處', '台南二處', 'A', '1,320,000'], ['南區業展一處', '台南府城', 'A', '870,000'], ['南區業展一處', '台南新欣', 'B', '830,000'],
+  ['南區業展一處', '弘德', 'C', '240,000'], ['南區業展一處', '尚正', 'D', '240,000'], ['南區業展一處', '尚誠', 'C', '300,000'],
+  ['南區業展一處', '尚豐', 'C', '310,000'], ['南區業展一處', '路竹', 'D', '240,000'], ['南區業展一處', '鳳旭', 'B', '480,000'],
+  ['南區業展一處', '鳳凰', 'A', '890,000'], ['南區業展一處', '樂隆', 'C', '290,000'],
+  ['南區業展二處', '九如', 'B', '760,000'], ['南區業展二處', '岡山永安', 'C', '320,000'], ['南區業展二處', '前豐', 'A', '990,000'],
+  ['南區業展二處', '屏東直轄', 'B', '610,000'], ['南區業展二處', '高雄直轄二處', 'B', '700,000'], ['南區業展二處', '高興', 'C', '410,000'],
+  ['南區業展二處', '博大', 'D', '240,000'], ['南區業展二處', '翔新', 'D', '240,000'], ['南區業展二處', '群興', 'B', '770,000'],
+  ['南區業展二處', '融興', 'C', '280,000'],
+  ['南區業展三處', '大興', 'B', '570,000'], ['南區業展三處', '元興', 'C', '240,000'], ['南區業展三處', '永耀', 'B', '510,000'],
+  ['南區業展三處', '成新', 'A', '1,160,000'], ['南區業展三處', '和興', 'B', '830,000'], ['南區業展三處', '東澂', 'C', '240,000'],
+  ['南區業展三處', '前和', 'C', '300,000'], ['南區業展三處', '前昌', 'C', '360,000'], ['南區業展三處', '前廣', 'C', '240,000'],
+  ['南區業展三處', '展福', 'B', '580,000'], ['南區業展三處', '真興', 'B', '550,000'], ['南區業展三處', '博愛', 'C', '290,000'],
+  ['南區業展三處', '福興', 'C', '370,000'],
+  ['南區業展四處', '一心', 'A', '880,000'], ['南區業展四處', '旭成', 'A', '1,110,000'], ['南區業展四處', '欣生', 'A', '870,000'],
+  ['南區業展四處', '前一', 'B', '560,000'], ['南區業展四處', '前金', 'B', '720,000'], ['南區業展四處', '高雄直轄一處', 'B', '490,000']
+];
+
+const OFFICIAL_BULLETINS = [
+  {
+    id: 'official-seminar', isBuiltin: true, category: '活動講座', icon: 'calendar', accent: 'red', isEvent: true,
+    title: '高資保戶講座｜夫妻剩餘財產分配',
+    summary: '10/15（四）13:00–16:00，高雄福華飯店 7F 金鳳廳，限額 15 組，需攜伴保戶報名',
+    startDate: '2026-10-15', endDate: '2026-10-15', createdAt: '2026-10-05T08:08:00.000Z',
+    blocks: [
+      { type: 'intro', text: '夫妻財產怎麼分？資產傳承又該如何提前規劃？本次特別規劃「夫妻剩餘財產分配」專題講座，邀請專業律師 × 資深財管顧問聯手分享，帶您掌握夫妻財產分配與資產傳承的關鍵觀念，提前做好完善規劃！' },
+      { type: 'highlights', items: [{ value: '10/15 (四)', label: '13:00 開始報到' }, { value: '15 組', label: '限額，額滿為止' }, { value: '需攜伴', label: '保戶報名參與' }] },
+      { type: 'facts', title: '活動資訊', rows: [
+        ['時間', '10/15（四）13:00–16:00（13:00 開始報到）'],
+        ['地點', '高雄福華飯店 7F 金鳳廳（高雄市新興區七賢一路 311 號）'],
+        ['參加對象', '需攜伴保戶報名參與'],
+        ['報名狀況', '發佈時已報名 6 組（限額 15 組，額滿為止）'],
+        ['主辦', '業務暨商品推廣處']
+      ] },
+      { type: 'timeline', title: '講座流程', items: [
+        { time: '13:00–13:30', text: '入場報到' },
+        { time: '13:30–15:00', text: '夫妻剩餘財產分配（陳心儀 律師／王英茂 顧問）' },
+        { time: '15:30–16:00', text: '會後交流' }
+      ] },
+      { type: 'people', title: '高資專家團隊', items: [
+        { name: '王英茂', role: '資深經理', points: ['35 年財富規劃經驗', '專精資產傳承及遺贈規劃', '信託與財務風險管理', '企業風險整合服務'] },
+        { name: '陳心儀', role: '律師', points: ['15 年法律經驗', '民法（親屬繼承及債權債務）、刑法及勞動法', '各類稅法之稅務行政救濟及規劃', '個人資產傳承規劃'] }
+      ] },
+      { type: 'note', text: '因座位有限，報名後如需取消，務必提前通知！' },
+      { type: 'link', label: '前往報名', url: 'https://forms.gle/LMsrqu7Bih4rKJGf7' }
+    ]
+  },
+  {
+    id: 'official-first-week', isBuiltin: true, category: '獎勵活動', icon: 'star', accent: 'amber',
+    title: '十月特定商品首週搶先獎勵（NCIC／SUPA）',
+    summary: '10/9–10/16 個人累計實收保費達 2 萬，取前 300 名，每人獎金 800 元',
+    startDate: '2026-10-09', endDate: '2026-10-16', createdAt: '2026-10-05T08:07:00.000Z',
+    blocks: [
+      { type: 'highlights', items: [{ value: '$800', label: '每人獎金' }, { value: '前 300 名', label: '獎勵名額' }, { value: '2 萬', label: '累計實收保費（含）以上' }] },
+      { type: 'facts', title: '活動資訊', rows: [
+        ['獎勵目的', '鼓勵通訊處及業務同仁銷售 NCIC 及 SUPA，衝刺加權保費以達成新高峰資格'],
+        ['獎勵期間', '115/10/9～10/16（含）新受理保單，且於 115/11/30（含）前完成核保'],
+        ['獎勵對象', '南區業務同仁'],
+        ['獎勵商品', 'NCIC 及 SUPA']
+      ] },
+      { type: 'bullets', title: '獎勵內容', items: ['個人首週搶先獎：凡個人於 10/9～10/16 累計實收保費達 2 萬（含）以上，取前 300 名，每人可獲得獎金 800 元'] },
+      { type: 'note', text: '使用投保通受理之保單，實收保費可以加乘 1.1 倍計算。' }
+    ]
+  },
+  {
+    id: 'official-target-challenge', isBuiltin: true, category: '獎勵活動', icon: 'target', accent: 'blue',
+    title: '十月通訊處特定商品目標達成挑戰賽（NCIC／SUPA）',
+    summary: '極豐（暫依尚豐 C 組）目標 31 萬：首週達 40%、全月達 100%／120% 可領業展費補助',
+    startDate: '2026-10-09', endDate: '2026-10-31', createdAt: '2026-10-05T08:06:00.000Z',
+    blocks: [
+      { type: 'highlights', title: '極豐通訊處的目標（暫依尚豐：C 組）', items: [
+        { value: '31 萬', label: '實收保費目標' },
+        { value: '12.4 萬', label: '首週達成門檻（40%，10/9–10/16）' },
+        { value: '31 萬', label: '全月達成門檻（100%）' },
+        { value: '37.2 萬', label: '全月超標門檻（120%）' }
+      ] },
+      { type: 'table', title: '極豐可領的業展費補助（C 組）', columns: ['獎項', '門檻（實收保費）', '補助金額（元）'], rows: [
+        ['A 首週達成獎', '目標 40%＝124,000', '3,000'],
+        ['B（一）全月達成獎', '目標 100%＝310,000', '4,000'],
+        ['B（二）全月超標獎', '目標 120%＝372,000', '6,000']
+      ], numericCols: [2] },
+      { type: 'note', text: '極豐通訊處尚未成立，目標暫依尚豐（C 組，實收保費目標 310,000）計算。使用投保通受理之保單，實收保費可加乘 1.1 倍。正式成立後，以公司核定的組別與目標為準。' },
+      { type: 'facts', title: '活動資訊', rows: [
+        ['獎勵目的', '鼓勵通訊處及業務同仁銷售 NCIC 及 SUPA，衝刺加權保費以達成新高峰資格'],
+        ['獎勵期間', '115/10/9～10/31（含）新受理保單，且於 115/11/30（含）前完成核保'],
+        ['獎勵對象', '南區各通訊處'],
+        ['獎勵商品', 'NCIC 及 SUPA']
+      ] },
+      { type: 'bullets', title: '獎勵內容', items: [
+        'A. 首週達成獎：10/9～10/16 通訊處累計保費達目標 40%（含）以上，可獲相對應之業展費補助',
+        'B-（一）全月達成獎：10/9～10/31 通訊處累計保費達目標 100%（含）以上，可獲相對應之業展費補助',
+        'B-（二）全月超標獎：10/9～10/31 通訊處累計保費達目標 120%（含）以上，可獲相對應之業展費補助'
+      ] },
+      { type: 'table', title: '業展費補助金額（元）', columns: ['組別', 'A 首週達成獎', 'B（一）全月達成獎（實收保費達成率 100% 以上）', 'B（二）全月超標獎（實收保費達成率 120% 以上）'], rows: [
+        ['A 組', '5,000', '6,000', '9,000'], ['B 組', '4,000', '5,000', '7,000'], ['C 組', '3,000', '4,000', '6,000'], ['D 組', '2,000', '3,000', '5,000']
+      ], numericCols: [1, 2, 3] },
+      { type: 'note', text: 'A 首週達成獎與 B 全月獎可以重複獲獎；全月獎（一）及（二）僅能擇一獲獎。使用投保通受理之保單，實收保費可以加乘 1.1 倍計算。' },
+      { type: 'table', title: '各通訊處 NCIC+SUPA 實收保費目標（可搜尋）', searchable: true, maxHeight: 360, columns: ['業展處', '通訊處', '組別', '實收保費目標'], rows: NCIC_SUPA_TARGETS, numericCols: [3], highlight: '尚豐' },
+      { type: 'note', text: '下表為依公文附件整理，色塊標示的是尚豐（極豐暫依此列計算）。' }
+    ]
+  },
+  {
+    id: 'official-trainee-new-product', isBuiltin: true, category: '獎勵活動', icon: 'users', accent: 'teal',
+    title: '115年10月南區優培 NCIC／SUPA 新商品專屬獎勵',
+    summary: '早鳥開張獎、聯手出擊獎，以及保費／件數雙排名賽（各前 10 名，獎金 2,000 元）',
+    startDate: '2026-10-09', endDate: '2026-10-31', createdAt: '2026-10-05T08:05:00.000Z',
+    blocks: [
+      { type: 'highlights', items: [{ value: '$2,000', label: '排名賽獎金（各前 10 名）' }, { value: '10 萬', label: '保費排名賽門檻（實收）' }, { value: '5 件', label: '件數排名賽門檻' }] },
+      { type: 'facts', title: '活動資訊', rows: [
+        ['獎勵期間', '10/9～10/31（含）新受理 NCIC／SUPA 新商品'],
+        ['獎勵對象', '① 11411～11510 期在訓優培　② 新高峰新進業代組及特定新進業代組人員']
+      ] },
+      { type: 'rewards', title: '獎勵內容', items: [
+        { no: '1', title: '早鳥開張獎', desc: '10/9～10/15 受理且繳費商品達 1 件以上者，可獲星巴克早餐。' },
+        { no: '2', title: '聯手出擊獎', desc: '10/9～10/31 受理且於 11/30（含）前完成核保發單，獎勵對象與推薦主管皆銷售獎勵商品達 4 件以上，兩人皆可獲榮譽交流餐宴。' },
+        { no: '3', title: '銷售排名賽', desc: '10/9～10/31 受理且於 11/30（含）前完成核保發單，依獎勵商品件數／保費排序。', subs: [
+          { label: '保費排名賽', text: '獎勵商品實收保費達 10 萬（含）以上，依保費高低取前 10 名，各可獲獎金 2,000 元' },
+          { label: '件數排名賽', text: '獎勵商品件數達 5 件（含）以上，依實收保費高低取前 10 名，各可獲獎金 2,000 元' }
+        ] }
+      ] },
+      { type: 'note', text: '保費排名賽與件數排名賽不重複獲獎，以實收保費排名賽優先遴選；獎項若排名相同時，以獎勵商品累計 FYC 進行排序。' }
+    ]
+  },
+  {
+    id: 'official-wangnian', isBuiltin: true, category: '獎勵活動', icon: 'award', accent: 'violet',
+    title: '10月通訊處「神采飛羊」旺年會團隊獎勵活動',
+    summary: '通訊處達基本門檻後，個人累積業績達標準可獲邀參加旺年會（標準 ❷ 可攜伴）',
+    startDate: '2026-10-01', endDate: '2026-10-31', createdAt: '2026-10-05T08:04:00.000Z',
+    blocks: [
+      { type: 'highlights', items: [{ value: '30 萬', label: 'A&H 加權保費' }, { value: '30 萬', label: '傳統型 RP 加權保費' }, { value: '80%', label: '通訊處投保通使用率' }] },
+      { type: 'facts', title: '活動資訊', rows: [
+        ['獎勵期間', '115/10/1～10/31 新受理，且於 115/11/30（含）前完成承保保件（含不定期增額）'],
+        ['不定期增額', '須於 115/10/1～10/31 經公司過帳並完成審核結案'],
+        ['獎勵標準', '通訊處達基本門檻，且通訊處轄屬業務同仁達獲獎標準者，可獲相對應獎勵']
+      ] },
+      { type: 'bullets', title: '一、基本門檻（通訊處）', items: [
+        '獎勵期間新受理業績（含不定期增額）達 10 月份加權保費達成率 100%',
+        '通訊處 10 月投保通使用率達 80%（含）以上'
+      ] },
+      { type: 'table', title: '二、個人獲獎標準（通訊處達基本門檻後，個人獎勵期間累積業績達下列標準 ❶ 或 ❷）', columns: ['標準', '條件', '獎勵內容'], rows: [
+        ['標準 ❶', 'A&H 加權 30 萬　或　傳統型 RP 加權 30 萬', '本人可獲邀參加旺年會'],
+        ['標準 ❷', 'A&H 加權 30 萬　且　傳統型 RP 加權 30 萬', '本人可獲邀「攜伴」參加旺年會']
+      ] },
+      { type: 'note', text: '僅供參考，實際仍以公告為主。' }
+    ]
+  },
+  {
+    id: 'official-team-rank', isBuiltin: true, category: '獎勵活動', icon: 'trophy', accent: 'indigo',
+    title: '10～11月「通訊處團隊加碼」排名賽',
+    summary: '通訊處達基本要求後，依加權保費達成率遴選各組第一名，於旺年會接受授旗表揚',
+    startDate: '2026-10-01', endDate: '2026-11-30', createdAt: '2026-10-05T08:03:00.000Z',
+    blocks: [
+      { type: 'highlights', items: [{ value: '100%', label: '加權保費達成率門檻' }, { value: '80%', label: '投保通使用率門檻' }, { value: '各組第 1 名', label: '授旗儀式表揚' }] },
+      { type: 'facts', title: '活動資訊', rows: [
+        ['獎勵期間', '115/10/1～115/11/30 核保發單業績（含不定期增額）'],
+        ['獎勵標準', '通訊處達基本門檻，得按通訊處加權保費達成率遴選各參賽組別第一名，於旺年會活動與會通訊處同仁接受執行主管授旗儀式表揚']
+      ] },
+      { type: 'chips', title: '參賽組別', items: ['總監大型', '總監中小型', '處經理最大型', '處經理超大型', '處經理特大型', '處經理大型', '處經理中型', '處經理小型'] },
+      { type: 'bullets', title: '基本要求', items: ['通訊處 10～11 月加權保費達成率達 100%', '通訊處 10～11 月投保通使用率達 80%'] },
+      { type: 'bullets', title: '遴選標準', items: ['達基本要求之通訊處，按加權保費達成率遴選各組第一名'] },
+      { type: 'note', text: '僅供參考，實際仍以公告為主。' }
+    ]
+  },
+  {
+    id: 'official-anxin', isBuiltin: true, category: '獎勵活動', icon: 'gift', accent: 'pink',
+    title: '第四季「安心守護」業務員抽獎活動',
+    summary: '每協助一位客戶完成指定「保單安心聯絡人」申請，即可獲得一次 Gogoro EZZY 500 抽獎機會',
+    startDate: '2026-10-01', endDate: '2026-12-31', createdAt: '2026-10-05T08:02:00.000Z',
+    blocks: [
+      { type: 'highlights', items: [{ value: '1 位客戶', label: '＝ 1 次抽獎機會' }, { value: '12/31', label: '活動截止' }, { value: '簽回越多', label: '中獎機會越大' }] },
+      { type: 'facts', title: '活動資訊', rows: [
+        ['活動期間', '115/10/1～115/12/31'],
+        ['獎項', 'Gogoro EZZY 500　玩具總動員系列　乙台'],
+        ['活動內容', '業務員每協助一位客戶完成指定「保單安心聯絡人」申請，即可獲得乙次抽獎機會，以此類推']
+      ] },
+      { type: 'note', text: '獎項圖片僅供參考，實際依廠商提供為準。' },
+      { type: 'note', text: '小提醒：本系統「客戶管理」的客戶資料可以記錄保單安心聯絡人，方便追蹤哪些客戶已經完成申請。' }
+    ]
+  },
+  {
+    id: 'official-warm-care', isBuiltin: true, category: '服務公告', icon: 'heart', accent: 'teal',
+    title: '2026 暖心關懷服務',
+    summary: '共 9 項免費暖心關懷服務，數量有限，請至南山 AP「通知」查詢客戶資格並盡快申請',
+    createdAt: '2026-10-05T08:01:00.000Z',
+    blocks: [
+      { type: 'highlights', items: [{ value: '9 項', label: '免費暖心關懷服務' }, { value: '數量有限', label: '請把握時間申請' }] },
+      { type: 'bullets', title: '申請方式', items: [
+        '立刻上到南山 AP「通知」功能',
+        '轉查詢是否有客戶符合資格',
+        '符合資格的客戶，就可以馬上提出申請'
+      ] },
+      { type: 'note', text: '9 項服務的詳細內容，原公告圖片未列出，請洽公司公文或主管確認。' }
+    ]
+  }
+];
+
+const BulletinHeading = ({ title, accent }) => (
+  title ? <h4 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2"><span className={`w-1 h-4 rounded-full ${accent.dot}`}></span>{title}</h4> : null
+);
+
+const BulletinTable = ({ block, accent }) => {
+  const [search, setSearch] = useState('');
+  const keyword = search.trim();
+  const rows = block.rows.filter(r => !keyword || r.some(c => String(c).includes(keyword)));
+  const numeric = block.numericCols || [];
+  return (
+    <div>
+      <BulletinHeading title={block.title} accent={accent} />
+      {block.searchable && (
+        <input type="text" placeholder="搜尋通訊處、業展處或組別..." className="w-full p-3 mb-3 bg-gray-50 border border-gray-200 rounded-xl text-base outline-none focus:border-indigo-400" value={search} onChange={e => setSearch(e.target.value)} />
+      )}
+      <div className="overflow-x-auto rounded-2xl border border-gray-100" style={block.maxHeight ? { maxHeight: block.maxHeight, overflowY: 'auto' } : undefined}>
+        <table className="w-full text-sm text-left">
+          <thead className="bg-gray-50 text-gray-500 text-xs font-bold sticky top-0">
+            <tr>{block.columns.map((c, i) => <th key={i} className={`px-3 py-2.5 ${numeric.includes(i) ? 'text-right' : ''}`}>{c}</th>)}</tr>
+          </thead>
+          <tbody>
+            {rows.map((r, i) => (
+              <tr key={i} className={`border-t border-gray-50 ${block.highlight && r[1] === block.highlight ? accent.soft : ''}`}>
+                {r.map((c, j) => <td key={j} className={`px-3 py-3 ${j === 0 ? 'font-bold text-gray-800 whitespace-nowrap' : 'text-gray-600'} ${numeric.includes(j) ? 'text-right tabular-nums' : ''}`}>{c}</td>)}
+              </tr>
+            ))}
+            {rows.length === 0 && <tr><td colSpan={block.columns.length} className="px-3 py-6 text-center text-gray-400">找不到符合的資料</td></tr>}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+
+const BulletinBlock = ({ block, accentKey }) => {
+  const accent = BULLETIN_ACCENTS[accentKey] || BULLETIN_ACCENTS.indigo;
+  switch (block.type) {
+    case 'intro':
+      return <p className="text-base text-gray-600 leading-relaxed">{block.text}</p>;
+    case 'highlights':
+      return (
+        <div>
+          <BulletinHeading title={block.title} accent={accent} />
+          <div className={`grid gap-3 ${block.items.length === 2 ? 'grid-cols-2' : block.items.length === 4 ? 'grid-cols-2 sm:grid-cols-4' : 'grid-cols-2 sm:grid-cols-3'}`}>
+            {block.items.map((it, i) => (
+              <div key={i} className={`${accent.soft} rounded-2xl p-4`}>
+                <p className={`text-2xl font-bold leading-tight ${accent.text}`}>{it.value}</p>
+                <p className="text-xs text-gray-500 mt-1.5 leading-snug">{it.label}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    case 'facts':
+      return (
+        <div>
+          <BulletinHeading title={block.title} accent={accent} />
+          <div className="rounded-2xl border border-gray-100 divide-y divide-gray-50">
+            {block.rows.map((r, i) => (
+              <div key={i} className="p-4 flex flex-col sm:flex-row sm:gap-4">
+                <p className="text-xs font-bold text-gray-400 sm:w-24 shrink-0 mb-1 sm:mb-0 sm:pt-0.5">{r[0]}</p>
+                <p className="text-base text-gray-800 leading-relaxed">{r[1]}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    case 'bullets':
+      return (
+        <div>
+          <BulletinHeading title={block.title} accent={accent} />
+          <ul className="space-y-2.5">
+            {block.items.map((t, i) => (
+              <li key={i} className="flex gap-3 text-base text-gray-700 leading-relaxed"><span className={`w-1.5 h-1.5 rounded-full mt-2.5 shrink-0 ${accent.dot}`}></span><span>{t}</span></li>
+            ))}
+          </ul>
+        </div>
+      );
+    case 'chips':
+      return (
+        <div>
+          <BulletinHeading title={block.title} accent={accent} />
+          <div className="flex flex-wrap gap-2">
+            {block.items.map((t, i) => <span key={i} className={`text-sm font-bold px-3 py-1.5 rounded-full ${accent.soft} ${accent.text}`}>{t}</span>)}
+          </div>
+        </div>
+      );
+    case 'table':
+      return <BulletinTable block={block} accent={accent} />;
+    case 'rewards':
+      return (
+        <div>
+          <BulletinHeading title={block.title} accent={accent} />
+          <div className="space-y-3">
+            {block.items.map((it, i) => (
+              <div key={i} className="rounded-2xl border border-gray-100 p-4 flex gap-3">
+                <span className={`w-8 h-8 rounded-full bg-gradient-to-br ${accent.grad} text-white text-sm font-bold flex items-center justify-center shrink-0`}>{it.no}</span>
+                <div className="min-w-0">
+                  <p className="font-bold text-gray-900 text-base">{it.title}</p>
+                  <p className="text-base text-gray-600 leading-relaxed mt-1">{it.desc}</p>
+                  {it.subs && (
+                    <div className="mt-3 space-y-2">
+                      {it.subs.map((s, j) => (
+                        <div key={j} className={`${accent.soft} rounded-xl p-3`}>
+                          <p className={`text-sm font-bold ${accent.text}`}>{s.label}</p>
+                          <p className="text-sm text-gray-700 leading-relaxed mt-0.5">{s.text}</p>
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    case 'timeline':
+      return (
+        <div>
+          <BulletinHeading title={block.title} accent={accent} />
+          <div className="space-y-0">
+            {block.items.map((it, i) => (
+              <div key={i} className="flex gap-4">
+                <div className="flex flex-col items-center">
+                  <span className={`w-3 h-3 rounded-full mt-1.5 ${accent.dot}`}></span>
+                  {i < block.items.length - 1 && <span className="w-px flex-1 bg-gray-200 my-1"></span>}
+                </div>
+                <div className="pb-5">
+                  <p className={`text-sm font-bold ${accent.text}`}>{it.time}</p>
+                  <p className="text-base text-gray-800 mt-0.5">{it.text}</p>
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    case 'people':
+      return (
+        <div>
+          <BulletinHeading title={block.title} accent={accent} />
+          <div className="grid sm:grid-cols-2 gap-3">
+            {block.items.map((p, i) => (
+              <div key={i} className="rounded-2xl border border-gray-100 p-4">
+                <div className="flex items-center gap-3 mb-3">
+                  <span className={`w-11 h-11 rounded-full bg-gradient-to-br ${accent.grad} text-white font-bold text-lg flex items-center justify-center`}>{p.name.charAt(0)}</span>
+                  <div>
+                    <p className="font-bold text-gray-900 text-base">{p.name}</p>
+                    <p className="text-xs text-gray-400">{p.role}</p>
+                  </div>
+                </div>
+                <ul className="space-y-1.5">
+                  {p.points.map((t, j) => <li key={j} className="text-sm text-gray-600 flex gap-2"><span className={`w-1.5 h-1.5 rounded-full mt-2 shrink-0 ${accent.dot}`}></span><span>{t}</span></li>)}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+      );
+    case 'note':
+      return <div className="rounded-2xl bg-amber-50 border border-amber-100 p-4 text-sm text-amber-800 leading-relaxed">※ {block.text}</div>;
+    case 'link':
+      return (
+        <a href={block.url} target="_blank" rel="noopener noreferrer" className={`block text-center py-4 rounded-2xl font-bold text-white text-base bg-gradient-to-r ${accent.grad} shadow-sm`}>
+          {block.label}
+          <span className="block text-xs font-normal text-white/80 mt-0.5 break-all">{block.url}</span>
+        </a>
+      );
+    default:
+      return null;
+  }
+};
+
+const BulletinDetail = ({ bulletin, onClose }) => {
+  const accent = BULLETIN_ACCENTS[bulletin.accent] || BULLETIN_ACCENTS.indigo;
+  const IconComp = BULLETIN_ICONS[bulletin.icon] || Megaphone;
+  const status = getBulletinStatus(bulletin);
+  return (
+    <div className="fixed inset-0 z-[100] flex items-end md:items-center justify-center bg-black/50 backdrop-blur-sm">
+      <div className="bg-white w-full md:max-w-2xl h-[94vh] md:h-auto md:max-h-[92vh] rounded-t-3xl md:rounded-2xl shadow-2xl animate-scale-up flex flex-col overflow-hidden">
+        <div className={`bg-gradient-to-br ${accent.grad} p-5 pb-6 text-white shrink-0 relative`}>
+          <button onClick={onClose} className="absolute top-3 right-3 w-10 h-10 rounded-full bg-white/20 flex items-center justify-center"><X size={22} /></button>
+          <div className="flex items-center gap-2 mb-3 pr-12">
+            <span className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center"><IconComp size={22} /></span>
+            <span className="text-xs font-bold bg-white/20 px-2.5 py-1 rounded-full">{bulletin.category}</span>
+            {status && <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${BULLETIN_TONE[status.tone]}`}>{status.text}</span>}
+          </div>
+          <h3 className="text-xl font-bold leading-snug pr-8">{bulletin.title}</h3>
+          <p className="text-sm text-white/85 mt-2 leading-relaxed">{bulletin.summary}</p>
+        </div>
+        <div className="p-5 overflow-y-auto flex-1 space-y-6" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)' }}>
+          {bulletin.blocks.map((b, i) => <BulletinBlock key={i} block={b} accentKey={bulletin.accent} />)}
+          <p className="text-xs text-gray-300 text-center pt-2">本頁為依公司公文整理的重點摘要，詳細內容以公司正式公告為準</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const AnnouncementsPage = ({ loggedInUser, announcements, canPost, onSeen }) => {
+  const [seenCutoff] = useState(loggedInUser?.lastSeenAnnouncements || '');
+  const [filterCategory, setFilterCategory] = useState('');
+  const [viewing, setViewing] = useState(null);
+  const [viewImages, setViewImages] = useState([]);
+  const [loadingImages, setLoadingImages] = useState(false);
+  const [zoomSrc, setZoomSrc] = useState(null);
+  const [zoomed, setZoomed] = useState(false);
+  const [editing, setEditing] = useState(null);
+  const [isAdding, setIsAdding] = useState(false);
+  const emptyForm = { title: '', category: ANNOUNCEMENT_CATEGORIES[0], content: '', pinned: false };
+  const [form, setForm] = useState(emptyForm);
+  const [existingImages, setExistingImages] = useState([]);
+  const [removedImageIds, setRemovedImageIds] = useState([]);
+  const [newImages, setNewImages] = useState([]);
+  const [processingImages, setProcessingImages] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState(null);
+  const [errorMsg, setErrorMsg] = useState('');
+
+  // 打開這一頁就視為「已讀」，底部導覽的紅點會消失 (本頁上的「新」標籤仍會保留到離開為止)
+  useEffect(() => { if (onSeen) onSeen(); }, []); // eslint-disable-line
+
+  const sorted = useMemo(() => {
+    const isEnded = (x) => x.isBuiltin && getBulletinStatus(x)?.text === '已結束';
+    return [...announcements, ...OFFICIAL_BULLETINS]
+      .filter(a => !filterCategory || a.category === filterCategory)
+      .sort((a, b) => {
+        if (!!a.pinned !== !!b.pinned) return a.pinned ? -1 : 1;
+        if (isEnded(a) !== isEnded(b)) return isEnded(a) ? 1 : -1;
+        return (b.createdAt || '').localeCompare(a.createdAt || '');
+      });
+  }, [announcements, filterCategory]);
+
+  const loadImages = async (annId) => {
+    const snap = await getDocs(query(collection(db, 'announcement_images'), where('announcementId', '==', annId)));
+    return snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.order || 0) - (b.order || 0));
+  };
+
+  const openView = async (a) => {
+    setViewing(a);
+    setViewImages([]);
+    if (a.isBuiltin) return;
+    if (a.imageCount > 0) {
+      setLoadingImages(true);
+      try { setViewImages(await loadImages(a.id)); } catch (e) { console.error(e); } finally { setLoadingImages(false); }
+    }
+  };
+
+  const openAdd = () => {
+    setForm(emptyForm); setExistingImages([]); setRemovedImageIds([]); setNewImages([]); setErrorMsg('');
+    setIsAdding(true);
+  };
+
+  const openEdit = async (a) => {
+    setViewing(null);
+    setForm({ title: a.title, category: a.category, content: a.content || '', pinned: !!a.pinned });
+    setRemovedImageIds([]); setNewImages([]); setErrorMsg(''); setExistingImages([]);
+    setEditing(a);
+    if (a.imageCount > 0) {
+      try { setExistingImages(await loadImages(a.id)); } catch (e) { console.error(e); }
+    }
+  };
+
+  const closeForm = () => { setIsAdding(false); setEditing(null); };
+
+  const keptExisting = existingImages.filter(i => !removedImageIds.includes(i.id));
+
+  const handlePickImages = async (e) => {
+    const files = Array.from(e.target.files || []);
+    e.target.value = '';
+    if (files.length === 0) return;
+    const room = Math.max(0, 8 - keptExisting.length - newImages.length);
+    const accepted = files.slice(0, room);
+    setErrorMsg(accepted.length < files.length ? '每則公文最多放 8 張圖片，多的已略過' : '');
+    setProcessingImages(true);
+    try {
+      const urls = [];
+      for (const f of accepted) urls.push(await fileToCompressedDataUrl(f));
+      setNewImages(prev => [...prev, ...urls]);
+    } catch (err) {
+      console.error(err);
+      setErrorMsg('有圖片讀取失敗，請換一張或轉成 JPG 再試');
+    } finally { setProcessingImages(false); }
+  };
+
+  const handleSave = async () => {
+    if (!form.title.trim() || !loggedInUser || !canPost) return;
+    setSaving(true);
+    try {
+      const now = new Date().toISOString();
+      const firstImage = keptExisting[0]?.dataUrl || newImages[0] || '';
+      const thumb = firstImage ? await resizeDataUrl(firstImage, 360, 0.6) : '';
+      const base = {
+        title: form.title.trim(), category: form.category, content: form.content, pinned: form.pinned,
+        imageCount: keptExisting.length + newImages.length, thumb, updatedAt: now
+      };
+      let annId;
+      if (editing) {
+        await updateDoc(doc(db, 'announcements', editing.id), base);
+        annId = editing.id;
+      } else {
+        const ref = await addDoc(collection(db, 'announcements'), { ...base, authorId: loggedInUser.id, authorName: loggedInUser.name, createdAt: now });
+        annId = ref.id;
+      }
+      const batch = writeBatch(db);
+      removedImageIds.forEach(id => batch.delete(doc(db, 'announcement_images', id)));
+      const maxOrder = keptExisting.reduce((m, i) => Math.max(m, i.order || 0), -1);
+      newImages.forEach((url, idx) => {
+        batch.set(doc(collection(db, 'announcement_images')), { announcementId: annId, order: maxOrder + 1 + idx, dataUrl: url });
+      });
+      await batch.commit();
+      closeForm();
+    } catch (e) {
+      console.error(e);
+      setErrorMsg('儲存失敗，請稍後再試（如果圖片很多，可以少放幾張）');
+    } finally { setSaving(false); }
+  };
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget) return;
+    try {
+      const imgs = await loadImages(deleteTarget);
+      const batch = writeBatch(db);
+      imgs.forEach(i => batch.delete(doc(db, 'announcement_images', i.id)));
+      batch.delete(doc(db, 'announcements', deleteTarget));
+      await batch.commit();
+      setDeleteTarget(null);
+      setViewing(null);
+    } catch (e) { console.error(e); }
+  };
+
+  return (
+    <div className="max-w-4xl lg:max-w-5xl mx-auto space-y-5 animate-fade-in pb-12">
+      <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除公文" message="確定要刪除這則公文（含圖片）嗎？此動作無法復原。" />
+
+      <div className="flex items-center justify-between gap-4">
+        <div>
+          <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">公文佈達專區</h2>
+          <p className="text-sm text-gray-400 md:mt-1">公司公文、獎勵辦法、活動講座都集中在這裡，共 {announcements.length + OFFICIAL_BULLETINS.length} 則</p>
+        </div>
+        {canPost && (
+          <button onClick={openAdd} className="w-11 h-11 rounded-full bg-indigo-600 hover:bg-indigo-700 text-white flex items-center justify-center shadow-sm shrink-0"><Plus size={22} /></button>
+        )}
+      </div>
+
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        {['', ...ANNOUNCEMENT_CATEGORIES].map(cat => (
+          <button key={cat || 'all'} onClick={() => setFilterCategory(cat)} className={`shrink-0 px-4 py-2 rounded-full text-sm font-bold transition ${filterCategory === cat ? 'bg-gray-900 text-white' : 'bg-white text-gray-500 border border-gray-100'}`}>{cat || '全部'}</button>
+        ))}
+      </div>
+
+      {sorted.length === 0 ? (
+        <Card className="p-10 text-center text-gray-400 text-sm">這個分類沒有公文</Card>
+      ) : (
+        <div className="space-y-3">
+          {sorted.map(a => {
+            const isNew = a.authorId !== loggedInUser?.id && (a.createdAt || '') > seenCutoff;
+            return (
+              <button key={a.id} onClick={() => openView(a)} className="w-full text-left bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition p-4 flex gap-4 items-start">
+                {a.isBuiltin ? (
+                  <div className={`w-20 h-20 sm:w-24 sm:h-24 rounded-xl bg-gradient-to-br ${(BULLETIN_ACCENTS[a.accent] || BULLETIN_ACCENTS.indigo).grad} flex items-center justify-center shrink-0`}>
+                    {React.createElement(BULLETIN_ICONS[a.icon] || Megaphone, { size: 30, className: 'text-white' })}
+                  </div>
+                ) : a.thumb ? (
+                  <img src={a.thumb} alt="" className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover shrink-0 bg-gray-50" />
+                ) : (
+                  <div className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl bg-gray-50 flex items-center justify-center shrink-0"><Megaphone size={28} className="text-gray-300" /></div>
+                )}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+                    <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${ANNOUNCEMENT_CATEGORY_STYLE[a.category] || ANNOUNCEMENT_CATEGORY_STYLE['其他']}`}>{a.category}</span>
+                    {a.pinned && <span className="flex items-center gap-0.5 text-xs font-bold text-red-500"><Pin size={12} /> 置頂</span>}
+                    {isNew && <span className="text-xs font-bold bg-red-500 text-white px-2 py-0.5 rounded-full">新</span>}
+                    {a.isBuiltin && (() => { const st = getBulletinStatus(a); return st ? <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${BULLETIN_TONE[st.tone]}`}>{st.text}</span> : null; })()}
+                  </div>
+                  <p className="font-bold text-gray-900 text-base leading-snug line-clamp-2">{a.title}</p>
+                  <p className="text-sm text-gray-400 mt-1 line-clamp-2">{((a.isBuiltin ? a.summary : a.content) || '').replace(/\s+/g, ' ')}</p>
+                  <p className="text-xs text-gray-300 mt-1.5">{a.isBuiltin ? '官方公文整理' : `${(a.createdAt || '').slice(0, 10)}${a.authorName ? ` · ${a.authorName}` : ''}${a.imageCount > 0 ? ` · ${a.imageCount} 張圖` : ''}`}</p>
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      )}
+
+      {/* 官方公文（結構化版面） */}
+      {viewing && viewing.isBuiltin && <BulletinDetail bulletin={viewing} onClose={() => setViewing(null)} />}
+
+      {/* 公文內容 */}
+      {viewing && !viewing.isBuiltin && (
+        <div className="fixed inset-0 z-[100] flex items-end md:items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white w-full md:max-w-2xl h-[92vh] md:h-auto md:max-h-[90vh] rounded-t-3xl md:rounded-2xl shadow-2xl animate-scale-up flex flex-col">
+            <div className="p-5 border-b border-gray-100 flex items-start justify-between gap-3 shrink-0">
+              <div className="min-w-0">
+                <div className="flex items-center gap-1.5 flex-wrap mb-1.5">
+                  <span className={`text-xs font-bold px-2 py-0.5 rounded-full ${ANNOUNCEMENT_CATEGORY_STYLE[viewing.category] || ANNOUNCEMENT_CATEGORY_STYLE['其他']}`}>{viewing.category}</span>
+                  {viewing.pinned && <span className="flex items-center gap-0.5 text-xs font-bold text-red-500"><Pin size={12} /> 置頂</span>}
+                </div>
+                <h3 className="text-lg font-bold text-gray-900 leading-snug">{viewing.title}</h3>
+                <p className="text-xs text-gray-400 mt-1">{(viewing.createdAt || '').slice(0, 10)}{viewing.authorName ? ` · ${viewing.authorName}` : ''}</p>
+              </div>
+              <button onClick={() => setViewing(null)} className="w-10 h-10 -mr-2 -mt-1 rounded-full flex items-center justify-center hover:bg-gray-100 shrink-0"><X size={22} /></button>
+            </div>
+            <div className="p-5 overflow-y-auto flex-1 space-y-4">
+              {viewing.content && <p className="text-base text-gray-700 whitespace-pre-wrap leading-relaxed">{renderTextWithLinks(viewing.content)}</p>}
+              {loadingImages && <div className="flex justify-center py-6"><Loader2 className="animate-spin text-gray-300" size={24} /></div>}
+              {viewImages.length > 0 && (
+                <div className="space-y-3">
+                  <p className="text-xs text-gray-400">點圖片可以放大查看</p>
+                  {viewImages.map(img => (
+                    <img key={img.id} src={img.dataUrl} alt="" onClick={() => { setZoomed(false); setZoomSrc(img.dataUrl); }} className="w-full rounded-xl border border-gray-100 cursor-zoom-in" />
+                  ))}
+                </div>
+              )}
+            </div>
+            {canPost && (
+              <div className="p-4 border-t border-gray-100 flex gap-2 shrink-0" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1rem)' }}>
+                <button onClick={() => openEdit(viewing)} className="flex-1 flex items-center justify-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-xl font-bold text-sm"><Edit3 size={16} /> 編輯</button>
+                <button onClick={() => setDeleteTarget(viewing.id)} className="flex-1 flex items-center justify-center gap-1.5 bg-red-50 hover:bg-red-100 text-red-600 py-3 rounded-xl font-bold text-sm"><Trash2 size={16} /> 刪除</button>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+
+      {/* 發佈／編輯公文 */}
+      {(isAdding || editing) && (
+        <div className="fixed inset-0 z-[110] flex items-end md:items-center justify-center bg-black/50 backdrop-blur-sm">
+          <div className="bg-white w-full md:max-w-lg h-[94vh] md:h-auto md:max-h-[92vh] rounded-t-3xl md:rounded-2xl shadow-2xl animate-scale-up flex flex-col">
+            <div className="p-5 border-b border-gray-100 flex items-center justify-between shrink-0">
+              <h3 className="text-lg font-bold text-gray-900">{editing ? '編輯公文' : '發佈公文'}</h3>
+              <button onClick={closeForm} className="w-10 h-10 -mr-2 rounded-full flex items-center justify-center hover:bg-gray-100"><X size={22} /></button>
+            </div>
+            <div className="p-5 overflow-y-auto flex-1 space-y-4">
+              <div>
+                <label className="text-sm font-bold text-gray-500 block mb-1.5">標題</label>
+                <input type="text" className="w-full p-3 border border-gray-200 rounded-xl text-base outline-none focus:border-indigo-500" placeholder="例如：10月高資保戶講座" value={form.title} onChange={e => setForm({ ...form, title: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-sm font-bold text-gray-500 block mb-1.5">分類</label>
+                <div className="flex gap-2 flex-wrap">
+                  {ANNOUNCEMENT_CATEGORIES.map(cat => (
+                    <button key={cat} type="button" onClick={() => setForm({ ...form, category: cat })} className={`px-4 py-2 rounded-full text-sm font-bold transition ${form.category === cat ? 'bg-gray-900 text-white' : 'bg-gray-100 text-gray-500'}`}>{cat}</button>
+                  ))}
+                </div>
+              </div>
+              <div>
+                <label className="text-sm font-bold text-gray-500 block mb-1.5">內文（可以直接貼上公告文字，網址會自動變成可點的連結）</label>
+                <textarea className="w-full p-3 border border-gray-200 rounded-xl text-base h-48 resize-none outline-none focus:border-indigo-500" value={form.content} onChange={e => setForm({ ...form, content: e.target.value })} />
+              </div>
+              <div>
+                <label className="text-sm font-bold text-gray-500 block mb-1.5">圖片（最多8張，系統會自動壓縮）</label>
+                <div className="grid grid-cols-3 gap-2">
+                  {keptExisting.map(img => (
+                    <div key={img.id} className="relative aspect-square rounded-xl overflow-hidden bg-gray-50 border border-gray-100">
+                      <img src={img.dataUrl} alt="" className="w-full h-full object-cover" />
+                      <button type="button" onClick={() => setRemovedImageIds(prev => [...prev, img.id])} className="absolute top-1 right-1 w-7 h-7 rounded-full bg-black/60 text-white flex items-center justify-center"><X size={14} /></button>
+                    </div>
+                  ))}
+                  {newImages.map((url, idx) => (
+                    <div key={idx} className="relative aspect-square rounded-xl overflow-hidden bg-gray-50 border border-gray-100">
+                      <img src={url} alt="" className="w-full h-full object-cover" />
+                      <button type="button" onClick={() => setNewImages(prev => prev.filter((_, i) => i !== idx))} className="absolute top-1 right-1 w-7 h-7 rounded-full bg-black/60 text-white flex items-center justify-center"><X size={14} /></button>
+                    </div>
+                  ))}
+                  {keptExisting.length + newImages.length < 8 && (
+                    <label className="aspect-square rounded-xl border-2 border-dashed border-gray-200 flex flex-col items-center justify-center text-gray-400 cursor-pointer hover:border-indigo-300 transition">
+                      {processingImages ? <Loader2 size={22} className="animate-spin" /> : <ImageIcon size={22} />}
+                      <span className="text-xs font-bold mt-1">{processingImages ? '處理中' : '加圖片'}</span>
+                      <input type="file" accept="image/*" multiple className="hidden" onChange={handlePickImages} disabled={processingImages} />
+                    </label>
+                  )}
+                </div>
+              </div>
+              <label className="flex items-center gap-3 p-3 bg-gray-50 rounded-xl cursor-pointer">
+                <input type="checkbox" className="w-5 h-5" checked={form.pinned} onChange={e => setForm({ ...form, pinned: e.target.checked })} />
+                <span className="text-sm font-bold text-gray-700">置頂這則公文（重要公告會固定顯示在最上面）</span>
+              </label>
+              {errorMsg && <p className="text-sm text-red-500 font-bold">{errorMsg}</p>}
+            </div>
+            <div className="p-4 border-t border-gray-100 shrink-0" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1rem)' }}>
+              <button onClick={handleSave} disabled={!form.title.trim() || saving || processingImages} className="w-full bg-indigo-600 text-white py-3.5 rounded-xl font-bold text-base hover:bg-indigo-700 transition disabled:opacity-50 flex items-center justify-center gap-2">
+                {saving ? <Loader2 className="animate-spin" size={18} /> : (editing ? '儲存變更' : '發佈')}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 圖片放大檢視 */}
+      {zoomSrc && (
+        <div className="fixed inset-0 z-[130] bg-black/90 overflow-auto">
+          <button onClick={() => setZoomSrc(null)} className="fixed top-4 right-4 z-10 w-11 h-11 rounded-full bg-white/20 text-white flex items-center justify-center"><X size={22} /></button>
+          <div className="min-h-full p-3 pt-16">
+            <img src={zoomSrc} alt="" onClick={() => setZoomed(z => !z)} className={zoomed ? 'block w-[250%] max-w-none cursor-zoom-out' : 'block w-full max-w-2xl mx-auto cursor-zoom-in'} />
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
+
 const KB_CATEGORIES = ['新人入門', '商品知識', '銷售技巧', '增員知識', '競賽與獎勵', '行政與工具', '法規合規', '主管專區'];
 
 // --- 業務戰情室：權限分層 (吳政翰看全部，主管看自己+全部下線，一般業務只看自己) ---
@@ -7618,6 +8404,7 @@ const App = () => {
   const [scheduleEvents, setScheduleEvents] = useState([]);
   const [recurringRules, setRecurringRules] = useState([]);
   const [teamScheduleEvents, setTeamScheduleEvents] = useState([]);
+  const [announcements, setAnnouncements] = useState([]);
 
   useEffect(() => {
     const initAuth = async () => { await signInAnonymously(auth); };
@@ -7658,6 +8445,15 @@ const App = () => {
   }, [user]);
 
   // 主管視角 (第一階段，先只開放給吳政翰)：讀取全體同仁的行程，用來顯示「團隊行程總覽」
+  // 公文佈達：全員都讀取 (圖片本體不在這裡載入，只有縮圖，點開公文才會去抓完整圖片)
+  useEffect(() => {
+    if (!user) return;
+    const unsubAnnouncements = onSnapshot(collection(db, 'announcements'), (snap) => {
+      setAnnouncements(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+    });
+    return () => unsubAnnouncements();
+  }, [user]);
+
   const isTeamScheduleViewer = loggedInUser?.name === '吳政翰';
   useEffect(() => {
     if (!user || !isTeamScheduleViewer) { setTeamScheduleEvents([]); return; }
@@ -7830,6 +8626,7 @@ const App = () => {
           rememberToken: data.rememberToken || null,
           lastSeenCelebration: data.lastSeenCelebration || '',
           defaultScheduleView: data.defaultScheduleView || '',
+          lastSeenAnnouncements: data.lastSeenAnnouncements || '',
           qualityTalentStartMonth: data.qualityTalentStartMonth || ''
         };
       });
@@ -7894,13 +8691,23 @@ const App = () => {
 
   const todoCount = useMemo(() => computeDueTodayCount(loggedInUser, customers, scheduleEvents, recurringRules), [loggedInUser, customers, scheduleEvents, recurringRules]);
 
+  const handleMarkAnnouncementsSeen = async () => {
+    if (!loggedInUser) return;
+    const now = new Date().toISOString();
+    setLoggedInUser(prev => prev ? { ...prev, lastSeenAnnouncements: now } : prev);
+    try { await updateDoc(doc(db, 'user', loggedInUser.id), { lastSeenAnnouncements: now }); } catch (e) { console.error(e); }
+  };
+  const unreadAnnouncementCount = loggedInUser
+    ? announcements.filter(a => a.authorId !== loggedInUser.id && (a.createdAt || '') > (loggedInUser.lastSeenAnnouncements || '')).length
+    : 0;
+
   const navItems = [
     { id: 'todo', label: '今日待辦', icon: CheckSquare, badge: todoCount },
     { id: 'calendar', label: '行事曆', icon: Calendar },
     { id: 'customers', label: '客戶管理', icon: Phone },
     { id: 'watchlist', label: '關注名單', icon: Star },
     { id: 'warroom', label: '業務戰情室', icon: ClipboardList },
-    { id: 'bingo', label: '區運作', icon: Trophy },
+    { id: 'announce', label: '公文佈達', icon: Megaphone, badge: unreadAnnouncementCount },
     { id: 'dashboard', label: '業績儀表板', icon: LayoutDashboard },
     { id: 'activity', label: 'MEA 活動量', icon: Activity },
     { id: 'entry', label: '業績回報', icon: Plus },
@@ -7999,6 +8806,7 @@ const App = () => {
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
         {activeTab === 'warroom' && <SalesWarRoomPage loggedInUser={loggedInUser} team={team} customers={customers} records={enrichedRecords} />}
+        {activeTab === 'announce' && <AnnouncementsPage loggedInUser={loggedInUser} announcements={announcements} canPost={isTeamScheduleViewer} onSeen={handleMarkAnnouncementsSeen} />}
         {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} isManagerViewer={isTeamScheduleViewer} />}
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
         {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} />}
@@ -8032,6 +8840,7 @@ const App = () => {
           })}
           <button onClick={() => setShowMoreSheet(true)} className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1">
             <LayoutGrid size={22} className={isMoreActive ? 'text-gray-900' : 'text-gray-300'} />
+            {moreNavItems.some(i => i.badge) && <span className="absolute top-2 right-[28%] w-2.5 h-2.5 bg-red-500 rounded-full"></span>}
             <span className={`text-[10px] ${isMoreActive ? 'font-bold text-gray-900' : 'text-gray-400'}`}>更多</span>
           </button>
         </div>
