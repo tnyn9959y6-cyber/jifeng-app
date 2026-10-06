@@ -234,7 +234,7 @@ const calcAge = (birthday) => {
 
 const getGoogleMapsUrl = (address) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 const getAppleMapsUrl = (address) => `https://maps.apple.com/?q=${encodeURIComponent(address)}`;
-const getInstagramUrl = (handle) => `https://instagram.com/${encodeURIComponent(handle.replace(/^@/, ''))}`;
+const getInstagramUrl = (handle) => /^https?:\/\//i.test(handle) ? handle : `https://instagram.com/${encodeURIComponent(handle.replace(/^@/, ''))}`;
 const openLineChat = (lineId) => {
   try { navigator.clipboard?.writeText(lineId); } catch (e) { /* ignore */ }
   window.open(`https://line.me/ti/p/~${encodeURIComponent(lineId)}`, '_blank');
@@ -266,55 +266,71 @@ const parseCSV = (text) => {
   return rows.filter(r => r.length > 0 && !(r.length === 1 && r[0].trim() === ''));
 };
 
-// 批次新增行程文字解析：每行「日期(YYYY-MM-DD 或 MM/DD) 時間(選填 HH:MM) 標題」
+// 日期/時間文字解析共用工具（批次新增用）：日期可寫單日(9/11)或範圍(9/11-9/13)，時間可寫單一(14:00)或範圍(14:00-15:30)
+const padTwo = (n) => String(n).padStart(2, '0');
+const parseDateToken = (tok, defaultYear) => {
+  let m = String(tok || '').match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
+  if (m) return `${m[1]}-${padTwo(m[2])}-${padTwo(m[3])}`;
+  m = String(tok || '').match(/^(\d{1,2})\/(\d{1,2})$/);
+  if (m) return `${defaultYear}-${padTwo(m[1])}-${padTwo(m[2])}`;
+  return '';
+};
+const extractDateTime = (parts, defaultYear) => {
+  let idx = 0, date = '', endDate = '', time = '', endTime = '';
+  const tok = parts[0] || '';
+  const range = tok.match(/^(\d{1,2}\/\d{1,2})[-~](\d{1,2}\/\d{1,2})$/) || tok.match(/^(\d{4}-\d{1,2}-\d{1,2})~(\d{4}-\d{1,2}-\d{1,2})$/);
+  if (range) {
+    date = parseDateToken(range[1], defaultYear);
+    endDate = parseDateToken(range[2], defaultYear);
+    idx = 1;
+  } else {
+    const d = parseDateToken(tok, defaultYear);
+    if (d) { date = d; idx = 1; }
+  }
+  const tm = (parts[idx] || '').match(/^(\d{1,2}):(\d{2})(?:[-~](\d{1,2}):(\d{2}))?$/);
+  if (tm) {
+    time = `${padTwo(tm[1])}:${tm[2]}`;
+    if (tm[3]) endTime = `${padTwo(tm[3])}:${tm[4]}`;
+    idx++;
+  }
+  if (endDate && date && endDate < date) endDate = '';
+  return { date, endDate, time, endTime, idx };
+};
+
+// 批次新增提醒：每行「日期(可範圍) 時間(選填，可範圍) 標題」
 const parseBatchScheduleText = (text, defaultYear) => {
   return text.split('\n').map(l => l.trim()).filter(Boolean).map((line, i) => {
-    let rest = line;
-    let date = '';
-    const isoMatch = rest.match(/^(\d{4})-(\d{1,2})-(\d{1,2})/);
-    const slashMatch = rest.match(/^(\d{1,2})\/(\d{1,2})/);
-    if (isoMatch) {
-      date = `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
-      rest = rest.slice(isoMatch[0].length).trim();
-    } else if (slashMatch) {
-      date = `${defaultYear}-${slashMatch[1].padStart(2, '0')}-${slashMatch[2].padStart(2, '0')}`;
-      rest = rest.slice(slashMatch[0].length).trim();
-    }
-    const timeMatch = rest.match(/^(\d{1,2}:\d{2})/);
-    let time = '';
-    if (timeMatch) {
-      time = timeMatch[1];
-      rest = rest.slice(timeMatch[0].length).trim();
-    }
-    return { id: Date.now() + i, date, time, title: rest };
+    const parts = line.split(/\s+/).filter(Boolean);
+    const dt = extractDateTime(parts, defaultYear);
+    return { id: Date.now() + i + Math.random(), date: dt.date, endDate: dt.endDate, time: dt.time, endTime: dt.endTime, title: parts.slice(dt.idx).join(' ') };
   });
 };
 
-// 批次新增「客戶行程」用的解析器：每行 日期 類型 姓名 備註(選填)，空白或Tab分隔
-// 規則：沒填的欄位給空白/預設值；備註可填可不填；姓名沒對應到既有客戶的話，匯入時會自動新增客戶
+// 批次新增「客戶行程」：每行「日期(可範圍) 時間(選填，可範圍) 類型 姓名 備註(選填)」
+// 規則：沒填的欄位給空白/預設值(類型預設約訪)；備註可填可不填；姓名沒對應到既有客戶的話，匯入時會自動新增客戶
 const parseActivityBatchText = (text, defaultYear) => {
   const typeByLabel = {};
   Object.entries(ACTIVITY_WEIGHTS).forEach(([key, v]) => { typeByLabel[v.label] = key; });
   Object.entries(RECRUIT_ACTIVITY_WEIGHTS).forEach(([key, v]) => { typeByLabel[v.label] = key; });
   return text.split('\n').map(l => l.trim()).filter(Boolean).map((line, i) => {
     const parts = line.split(/\s+/).filter(Boolean);
-    let idx = 0;
-    let date = '';
-    const isoMatch = parts[idx]?.match(/^(\d{4})-(\d{1,2})-(\d{1,2})$/);
-    const slashMatch = parts[idx]?.match(/^(\d{1,2})\/(\d{1,2})$/);
-    if (isoMatch) { date = `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`; idx++; }
-    else if (slashMatch) { date = `${defaultYear}-${slashMatch[1].padStart(2, '0')}-${slashMatch[2].padStart(2, '0')}`; idx++; }
-
-    let type = 'appointment'; // 沒填類型時的預設值：約訪
+    const dt = extractDateTime(parts, defaultYear);
+    let idx = dt.idx;
+    let type = 'appointment';
     let typeLabel = ALL_ACTIVITY_WEIGHTS['appointment'].label;
     if (parts[idx] && typeByLabel[parts[idx]]) { type = typeByLabel[parts[idx]]; typeLabel = parts[idx]; idx++; }
-
     const name = parts[idx] || '';
     if (name) idx++;
     const note = parts.slice(idx).join(' ');
-
-    return { id: Date.now() + i + Math.random(), date, type, typeLabel, name, note };
+    return { id: Date.now() + i + Math.random(), date: dt.date, endDate: dt.endDate, time: dt.time, endTime: dt.endTime, type, typeLabel, name, note };
   });
+};
+
+// 顯示用：單日「日期 開始-結束」，跨日「開始日 時間 ~ 結束日 時間」
+const formatEventWhen = (e) => {
+  const multi = e.endDate && e.endDate !== e.date;
+  if (multi) return `${e.date}${e.time ? ' ' + e.time : ''} ~ ${e.endDate}${e.endTime ? ' ' + e.endTime : ''}`;
+  return `${e.date}${e.time ? ' ' + e.time + (e.endTime ? '-' + e.endTime : '') : ''}`;
 };
 
 const PRODUCT_MAPPING = {
@@ -1895,7 +1911,474 @@ const BatchEntryModal = ({ isOpen, onClose, team, records, onSubmit }) => {
 };
 
 // --- OrgChart Component (Replaces generic team view) ---
+// --- 組織星圖：誰屬於誰一眼看懂。處經理是恆星、主管是行星、組員是衛星；點行星看介紹 ---
+const ORG_RANK_STYLE = {
+  '處經理': { color: '#fbbf24', r: 30, ring: true },
+  '區經理': { color: '#a78bfa', r: 26, ring: true },
+  '業務襄理': { color: '#38bdf8', r: 22, ring: false },
+  '業務主任': { color: '#34d399', r: 20, ring: false },
+  '新進業務主任': { color: '#2dd4bf', r: 18, ring: false },
+  '業務代表': { color: '#94a3b8', r: 16, ring: false },
+  '新進業代': { color: '#cbd5e1', r: 15, ring: false }
+};
+const orgStyleOf = (role) => ORG_RANK_STYLE[role] || { color: '#94a3b8', r: 16, ring: false };
+const orgRankIdx = (role) => { const i = RANKS.indexOf(role); return i === -1 ? 99 : i; };
+const orgGradId = (role) => { const i = Object.keys(ORG_RANK_STYLE).indexOf(role); return i === -1 ? 'og-g-x' : `og-g-${i}`; };
+const PROMOTION_LABELS = { registered: '登錄', supervisor: '升任主任', asstManager: '升任襄理', distManager: '升任區經理', agencyManager: '升任處經理' };
+const shadeHex = (hex, amt) => {
+  const n = parseInt(hex.slice(1), 16);
+  const c = (v) => Math.max(0, Math.min(255, v));
+  const r = c((n >> 16) + amt), g = c(((n >> 8) & 255) + amt), b = c((n & 255) + amt);
+  return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
+};
+
+const orgLeafRings = (n) => {
+  const rings = [];
+  let left = n, k = 0;
+  while (left > 0) {
+    const r = 46 + k * 26;
+    const cap = Math.max(5, Math.floor((2 * Math.PI * r) / 30));
+    const take = Math.min(left, cap);
+    rings.push({ r, take });
+    left -= take;
+    k++;
+  }
+  return rings;
+};
+
+const buildOrgLayout = (team, focusId) => {
+  const byId = {};
+  team.forEach(m => { byId[String(m.id)] = m; });
+  const childrenOf = {};
+  const parentOf = {};
+  const roots = [];
+  team.forEach(m => {
+    const pid = m.parentId ? String(m.parentId) : '';
+    if (pid && pid !== '0' && pid !== String(m.id) && byId[pid]) {
+      if (!childrenOf[pid]) childrenOf[pid] = [];
+      childrenOf[pid].push(m);
+      parentOf[String(m.id)] = pid;
+    } else roots.push(m);
+  });
+  const sortMembers = (arr) => [...arr].sort((a, b) => orgRankIdx(a.role) - orgRankIdx(b.role) || String(a.name).localeCompare(String(b.name), 'zh-Hant'));
+
+  // 循環保護：如果資料裡有人互相當對方的主管，至少讓他們都出現在圖上
+  const reached = new Set();
+  const reach = (m) => { if (reached.has(String(m.id))) return; reached.add(String(m.id)); (childrenOf[String(m.id)] || []).forEach(reach); };
+  roots.forEach(reach);
+  team.forEach(m => { if (!reached.has(String(m.id))) { roots.push(m); reach(m); } });
+
+  const used = new Set();
+  const buildNode = (m, depth) => {
+    used.add(String(m.id));
+    const kids = sortMembers((childrenOf[String(m.id)] || []).filter(k => !used.has(String(k.id))));
+    const leaves = [];
+    const hubMembers = [];
+    kids.forEach(k => {
+      if ((childrenOf[String(k.id)] || []).length > 0) hubMembers.push(k);
+      else { leaves.push(k); used.add(String(k.id)); }
+    });
+    return { m, depth, leaves, hubs: hubMembers.filter(h => !used.has(String(h.id))).map(h => buildNode(h, depth + 1)) };
+  };
+
+  const focusM = focusId ? byId[String(focusId)] : null;
+  let top;
+  if (focusM) top = buildNode(focusM, 0);
+  else if (roots.length === 1) top = buildNode(roots[0], 0);
+  else {
+    const sortedRoots = sortMembers(roots);
+    const rootHubs = sortedRoots.filter(r => (childrenOf[String(r.id)] || []).length > 0);
+    const rootLeaves = sortedRoots.filter(r => !(childrenOf[String(r.id)] || []).length);
+    rootLeaves.forEach(r => used.add(String(r.id)));
+    top = { m: null, depth: 0, leaves: rootLeaves, hubs: rootHubs.map(r => buildNode(r, 1)) };
+  }
+
+  const footOf = (node) => {
+    const rings = orgLeafRings(node.leaves.length);
+    const last = rings.length ? rings[rings.length - 1].r : 0;
+    const own = node.m ? orgStyleOf(node.m.role).r : 40;
+    return Math.max(own + 18, last + 22, 34);
+  };
+  const computeSpan = (node) => {
+    node.foot = footOf(node);
+    node.hubs.forEach(computeSpan);
+    const own = node.foot * 2 + 16;
+    const sum = node.hubs.reduce((s, h) => s + h.span, 0);
+    node.span = Math.max(own, sum);
+  };
+  computeSpan(top);
+  const assignX = (node, start) => {
+    const sum = node.hubs.reduce((s, h) => s + h.span, 0);
+    let cursor = start + (node.span - sum) / 2;
+    node.hubs.forEach(h => { assignX(h, cursor); cursor += h.span; });
+    node.x = node.hubs.length ? (node.hubs[0].x + node.hubs[node.hubs.length - 1].x) / 2 : start + node.span / 2;
+  };
+  const W = Math.max(1, top.hubs.reduce((s, h) => s + h.span, 0));
+  let cursorX = 0;
+  top.hubs.forEach(h => { assignX(h, cursorX); cursorX += h.span; });
+
+  const maxFoot = {};
+  const walkFoot = (n) => { maxFoot[n.depth] = Math.max(maxFoot[n.depth] || 0, n.foot); n.hubs.forEach(walkFoot); };
+  walkFoot(top);
+  const maxDepth = Math.max(0, ...Object.keys(maxFoot).map(Number));
+  const R = [0];
+  for (let d = 1; d <= maxDepth; d++) {
+    R[d] = Math.max(W / (2 * Math.PI), R[d - 1] + (maxFoot[d - 1] || 40) + (maxFoot[d] || 40) + 30);
+  }
+
+  const hubNodes = [];
+  const leafNodes = [];
+  const links = [];
+  const place = (n, parent) => {
+    if (n.depth === 0) { n.px = 0; n.py = 0; n.angle = 0; }
+    else {
+      n.angle = (n.x / W) * Math.PI * 2 - Math.PI / 2;
+      n.px = R[n.depth] * Math.cos(n.angle);
+      n.py = R[n.depth] * Math.sin(n.angle);
+    }
+    hubNodes.push(n);
+    if (parent) links.push({ from: parent, to: n });
+    const rings = orgLeafRings(n.leaves.length);
+    n.rings = rings;
+    let idx = 0;
+    rings.forEach((ring, ri) => {
+      for (let j = 0; j < ring.take; j++) {
+        const a = (j / ring.take) * Math.PI * 2 + ri * 0.5 + (n.angle || 0);
+        leafNodes.push({ m: n.leaves[idx++], parent: n, px: n.px + ring.r * Math.cos(a), py: n.py + ring.r * Math.sin(a) });
+      }
+    });
+    n.hubs.forEach(h => place(h, n));
+  };
+  place(top, null);
+
+  const half = Math.max(260, ...hubNodes.map(n => Math.hypot(n.px, n.py) + n.foot)) + 70;
+  return { top, hubNodes, leafNodes, links, half, R, childrenOf, parentOf, byId };
+};
+
+const CountUp = ({ value, className }) => {
+  const [n, setN] = useState(0);
+  useEffect(() => {
+    let raf;
+    const start = performance.now();
+    const tick = (t) => {
+      const p = Math.min(1, (t - start) / 900);
+      setN(Math.round(value * (1 - Math.pow(1 - p, 3))));
+      if (p < 1) raf = requestAnimationFrame(tick);
+    };
+    raf = requestAnimationFrame(tick);
+    return () => cancelAnimationFrame(raf);
+  }, [value]);
+  return <span className={className}>{n}</span>;
+};
+
+const OrgGalaxy = ({ team, onGoManage }) => {
+  const [focusId, setFocusId] = useState(null);
+  const [selectedId, setSelectedId] = useState(null);
+  const [zoom, setZoom] = useState(() => (typeof window !== 'undefined' && window.innerWidth < 640 ? 2.2 : 1));
+  const [box, setBox] = useState({ w: 0, h: 0 });
+  const scrollRef = useRef(null);
+
+  const layout = useMemo(() => buildOrgLayout(team, focusId), [team, focusId]);
+  const { top, hubNodes, leafNodes, links, half, childrenOf, parentOf, byId } = layout;
+  const S = half * 2;
+
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el || typeof ResizeObserver === 'undefined') return;
+    const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }));
+    ro.observe(el);
+    setBox({ w: el.clientWidth, h: el.clientHeight });
+    return () => ro.disconnect();
+  }, []);
+
+  const base = Math.max(280, Math.min(box.w || 600, box.h || 600));
+  const svgPx = Math.round(base * zoom);
+  const unit = S / svgPx; // 1 畫面像素 = 幾個圖上單位
+
+  // 縮放或換團隊時，把畫面捲到正中央
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    requestAnimationFrame(() => {
+      el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
+      el.scrollTop = (el.scrollHeight - el.clientHeight) / 2;
+    });
+  }, [zoom, focusId, svgPx]);
+
+  const stars = useMemo(() => {
+    let seed = 11;
+    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
+    return Array.from({ length: 120 }, (_, i) => ({
+      x: (rnd() * 2 - 1) * half,
+      y: (rnd() * 2 - 1) * half,
+      r: (0.5 + rnd() * 1.1) * (half / 600),
+      d: (i % 9) * 0.55,
+      t: 2.6 + (i % 5) * 0.7
+    }));
+  }, [half]);
+
+  const total = team.length;
+  const managerCount = team.filter(m => MANAGER_RANKS.includes(m.role)).length;
+  const groupCount = team.filter(m => (childrenOf[String(m.id)] || []).length > 0).length;
+
+  const selected = selectedId ? byId[selectedId] : null;
+  const chain = useMemo(() => {
+    const set = new Set();
+    let cur = selectedId;
+    let guard = 0;
+    while (cur && guard < 20) { set.add(cur); cur = parentOf[cur]; guard++; }
+    return set;
+  }, [selectedId, parentOf]);
+
+  const countDescendants = (id) => {
+    const seen = new Set([id]);
+    const stack = [...(childrenOf[id] || [])];
+    let c = 0;
+    while (stack.length) {
+      const x = stack.pop();
+      const xi = String(x.id);
+      if (seen.has(xi)) continue;
+      seen.add(xi);
+      c++;
+      (childrenOf[xi] || []).forEach(k => stack.push(k));
+    }
+    return c;
+  };
+
+  const isNewStar = (m) => {
+    const d = m?.promotionDates?.registered;
+    if (!d) return false;
+    const diff = (new Date() - new Date(d)) / 86400000;
+    return diff >= 0 && diff <= 365;
+  };
+
+  const labelSize = Math.min(30, Math.max(12, 12.5 * unit));
+  const showLeafNames = zoom >= 1.6;
+  const gradDefs = [...Object.keys(ORG_RANK_STYLE).map((k, i) => ({ id: `og-g-${i}`, color: ORG_RANK_STYLE[k].color })), { id: 'og-g-x', color: '#94a3b8' }];
+
+  const selectMember = (id) => setSelectedId(String(id));
+
+  const renderPlanetBody = (m, r, selectedNow) => {
+    const st = orgStyleOf(m.role);
+    return (
+      <>
+        <circle r={r + 9} fill={st.color} opacity="0.13" className="og-pulse" />
+        {st.ring && <ellipse rx={r * 1.95} ry={r * 0.52} transform="rotate(-18)" fill="none" stroke={st.color} strokeWidth="2.2" opacity="0.75" />}
+        <circle r={r} fill={`url(#${orgGradId(m.role)})`} stroke="rgba(255,255,255,0.6)" strokeWidth="1.2" />
+        <text textAnchor="middle" dy="0.35em" fontSize={Math.max(10, r * 0.95)} fontWeight="700" fill="#fff">{String(m.name).charAt(0)}</text>
+        {isNewStar(m) && <text x={r * 0.75} y={-r * 0.55} fontSize={r * 0.9} fill="#fde68a">✦</text>}
+        {selectedNow && <circle r={r + 8} fill="none" stroke="#fff" strokeWidth="2" strokeDasharray="5 5" className="og-spin" />}
+      </>
+    );
+  };
+
+  if (team.length === 0) {
+    return <Card className="p-10 text-center text-gray-400">還沒有任何成員</Card>;
+  }
+
+  return (
+    <div className="space-y-4">
+      <div>
+        <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">組織架構</h2>
+        <p className="text-sm text-gray-400 md:mt-1">每一顆行星是一位主管，環繞在身邊的衛星是他帶的組員；點任何一顆看介紹</p>
+      </div>
+
+      <div className="relative rounded-3xl overflow-hidden border border-slate-800 shadow-lg" style={{ background: 'radial-gradient(ellipse at 25% 15%, rgba(99,102,241,0.30), transparent 52%), radial-gradient(ellipse at 80% 75%, rgba(168,85,247,0.24), transparent 55%), radial-gradient(ellipse at 50% 100%, rgba(251,146,60,0.10), transparent 50%), #050816' }}>
+        <style>{`
+          @keyframes ogTwinkle { 0%,100% { opacity: .2 } 50% { opacity: 1 } }
+          @keyframes ogPulse { 0%,100% { transform: scale(1); opacity: .16 } 50% { transform: scale(1.3); opacity: .04 } }
+          @keyframes ogDash { to { stroke-dashoffset: -48 } }
+          @keyframes ogSpin { to { transform: rotate(360deg) } }
+          .og-twinkle { animation: ogTwinkle 3.5s ease-in-out infinite }
+          .og-pulse { transform-box: fill-box; transform-origin: center; animation: ogPulse 3.4s ease-in-out infinite }
+          .og-flow { animation: ogDash 3.2s linear infinite }
+          .og-spin { transform-box: fill-box; transform-origin: center; animation: ogSpin 9s linear infinite }
+        `}</style>
+
+        <div ref={scrollRef} className="overflow-auto h-[68vh] min-h-[440px]" style={{ WebkitOverflowScrolling: 'touch' }}>
+          <svg width={svgPx} height={svgPx} viewBox={`${-half} ${-half} ${S} ${S}`} style={{ display: 'block', margin: '0 auto' }} onClick={() => setSelectedId(null)}>
+            <defs>
+              {gradDefs.map(g => (
+                <radialGradient key={g.id} id={g.id} cx="35%" cy="30%" r="75%">
+                  <stop offset="0%" stopColor={shadeHex(g.color, 70)} />
+                  <stop offset="55%" stopColor={g.color} />
+                  <stop offset="100%" stopColor={shadeHex(g.color, -70)} />
+                </radialGradient>
+              ))}
+              <radialGradient id="og-core" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stopColor="#fffbeb" />
+                <stop offset="45%" stopColor="#fbbf24" />
+                <stop offset="100%" stopColor="#b45309" />
+              </radialGradient>
+            </defs>
+
+            {stars.map((s, i) => (
+              <circle key={i} cx={s.x} cy={s.y} r={s.r} fill="#fff" className="og-twinkle" style={{ animationDelay: `${s.d}s`, animationDuration: `${s.t}s` }} />
+            ))}
+
+            {/* 軌道：每位主管身邊的衛星軌道 */}
+            {hubNodes.map((n, i) => (n.rings || []).map((ring, ri) => (
+              <circle key={`ring-${i}-${ri}`} cx={n.px} cy={n.py} r={ring.r} fill="none" stroke={n.m ? orgStyleOf(n.m.role).color : '#fbbf24'} strokeOpacity="0.2" strokeWidth="1" strokeDasharray="2 7" />
+            )))}
+
+            {/* 主管之間的連線 */}
+            {links.map((l, i) => {
+              const color = l.to.m ? orgStyleOf(l.to.m.role).color : '#94a3b8';
+              const lit = l.to.m && chain.has(String(l.to.m.id));
+              const pr = Math.hypot(l.from.px, l.from.py);
+              const cx = pr * Math.cos(l.to.angle);
+              const cy = pr * Math.sin(l.to.angle);
+              return (
+                <path key={`link-${i}`} d={`M ${l.from.px} ${l.from.py} Q ${cx} ${cy} ${l.to.px} ${l.to.py}`} fill="none" stroke={color} strokeOpacity={lit ? 0.95 : 0.4} strokeWidth={lit ? 2.6 : 1.5} strokeDasharray="7 7" className="og-flow" />
+              );
+            })}
+
+            {/* 衛星（組員） */}
+            {leafNodes.map(lf => {
+              const st = orgStyleOf(lf.m.role);
+              const r = Math.max(9, st.r * 0.62);
+              const on = selectedId === String(lf.m.id);
+              return (
+                <g key={`leaf-${lf.m.id}`} transform={`translate(${lf.px} ${lf.py})`} style={{ cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); selectMember(lf.m.id); }}>
+                  <line x1={lf.parent.px - lf.px} y1={lf.parent.py - lf.py} x2="0" y2="0" stroke={orgStyleOf(lf.parent.m?.role).color} strokeOpacity="0.14" strokeWidth="1" />
+                  <circle r={r + 7} fill="transparent" />
+                  <circle r={r} fill={`url(#${orgGradId(lf.m.role)})`} stroke={on ? '#fff' : 'rgba(255,255,255,0.45)'} strokeWidth={on ? 2 : 1} />
+                  <text textAnchor="middle" dy="0.35em" fontSize={Math.max(9, r * 0.95)} fontWeight="700" fill="#fff">{String(lf.m.name).charAt(0)}</text>
+                  {isNewStar(lf.m) && <text x={r * 0.7} y={-r * 0.5} fontSize={r * 0.9} fill="#fde68a">✦</text>}
+                  {(showLeafNames || on) && <text y={r + labelSize * 0.95} textAnchor="middle" fontSize={labelSize * 0.82} fill="#cbd5e1" style={{ paintOrder: 'stroke', stroke: '#050816', strokeWidth: labelSize * 0.3, strokeLinejoin: 'round' }}>{lf.m.name}</text>}
+                </g>
+              );
+            })}
+
+            {/* 行星（主管）與中央恆星 */}
+            {hubNodes.map((n) => {
+              if (n.depth === 0) {
+                const m = n.m;
+                const on = m && selectedId === String(m.id);
+                return (
+                  <g key="core" transform={`translate(${n.px} ${n.py})`} style={{ cursor: m ? 'pointer' : 'default' }} onClick={(e) => { e.stopPropagation(); if (m) selectMember(m.id); }}>
+                    <circle r="64" fill="#fbbf24" opacity="0.10" className="og-pulse" />
+                    <circle r="50" fill="#fbbf24" opacity="0.14" className="og-pulse" style={{ animationDelay: '1s' }} />
+                    <ellipse rx="66" ry="17" transform="rotate(-18)" fill="none" stroke="#fde68a" strokeWidth="2.4" opacity="0.7" />
+                    <circle r="38" fill="url(#og-core)" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" />
+                    <text textAnchor="middle" dy="0.35em" fontSize="30" fontWeight="800" fill="#7c2d12">{m ? String(m.name).charAt(0) : '極'}</text>
+                    {on && <circle r="48" fill="none" stroke="#fff" strokeWidth="2.4" strokeDasharray="6 6" className="og-spin" />}
+                    <text y={38 + labelSize * 1.15} textAnchor="middle" fontSize={labelSize * 1.1} fontWeight="700" fill="#fef3c7" style={{ paintOrder: 'stroke', stroke: '#050816', strokeWidth: labelSize * 0.35, strokeLinejoin: 'round' }}>{m ? m.name : '極豐通訊處'}</text>
+                  </g>
+                );
+              }
+              const m = n.m;
+              const st = orgStyleOf(m.role);
+              const on = selectedId === String(m.id);
+              return (
+                <g key={`hub-${m.id}`} transform={`translate(${n.px} ${n.py})`} style={{ cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); selectMember(m.id); }}>
+                  {renderPlanetBody(m, st.r, on)}
+                  <text y={st.r + labelSize * 1.05} textAnchor="middle" fontSize={labelSize} fontWeight="700" fill="#f1f5f9" style={{ paintOrder: 'stroke', stroke: '#050816', strokeWidth: labelSize * 0.32, strokeLinejoin: 'round' }}>{m.name}</text>
+                </g>
+              );
+            })}
+          </svg>
+        </div>
+
+        {/* 左上：會跳動的總數 */}
+        <div className="absolute top-3 left-3 flex flex-wrap gap-2 pointer-events-none max-w-[70%]">
+          {[['全隊', total, '人'], ['主管', managerCount, '位'], ['團隊', groupCount, '組']].map(([label, val, suffix]) => (
+            <div key={label} className="bg-white/10 backdrop-blur-md border border-white/15 rounded-xl px-3 py-1.5 text-white">
+              <p className="text-[10px] text-white/60 leading-none">{label}</p>
+              <p className="leading-tight"><CountUp value={val} className="text-lg font-bold" /><span className="text-xs text-white/70 ml-0.5">{suffix}</span></p>
+            </div>
+          ))}
+        </div>
+
+        {/* 右上：縮放 */}
+        <div className="absolute top-3 right-3 flex flex-col gap-2">
+          <button onClick={(e) => { e.stopPropagation(); setZoom(z => Math.min(5, +(z * 1.35).toFixed(2))); }} className="w-10 h-10 rounded-full bg-white/15 backdrop-blur-md border border-white/20 text-white text-xl font-bold flex items-center justify-center">+</button>
+          <button onClick={(e) => { e.stopPropagation(); setZoom(z => Math.max(0.6, +(z / 1.35).toFixed(2))); }} className="w-10 h-10 rounded-full bg-white/15 backdrop-blur-md border border-white/20 text-white text-xl font-bold flex items-center justify-center">−</button>
+          <button onClick={(e) => { e.stopPropagation(); setZoom(typeof window !== 'undefined' && window.innerWidth < 640 ? 2.2 : 1); setSelectedId(null); }} className="w-10 h-10 rounded-full bg-white/15 backdrop-blur-md border border-white/20 text-white text-[11px] font-bold flex items-center justify-center">重置</button>
+        </div>
+
+        {focusId && byId[focusId] && (
+          <button onClick={() => { setFocusId(null); setSelectedId(null); }} className="absolute bottom-3 left-3 bg-amber-400 text-amber-950 text-xs font-bold px-3 py-2 rounded-full shadow flex items-center gap-1.5">
+            只看 {byId[focusId].name} 的團隊　<X size={13} />
+          </button>
+        )}
+
+        {/* 介紹卡 */}
+        {selected && (() => {
+          const st = orgStyleOf(selected.role);
+          const pid = parentOf[String(selected.id)];
+          const parent = pid ? byId[pid] : null;
+          const kids = (childrenOf[String(selected.id)] || []).slice().sort((a, b) => orgRankIdx(a.role) - orgRankIdx(b.role));
+          const promos = Object.entries(PROMOTION_LABELS).filter(([k]) => selected.promotionDates && selected.promotionDates[k]).map(([k, label]) => ({ label, date: selected.promotionDates[k] })).sort((a, b) => String(a.date).localeCompare(String(b.date)));
+          return (
+            <div className="absolute left-3 right-3 bottom-3 md:left-auto md:right-4 md:bottom-4 md:w-80 bg-slate-900/90 backdrop-blur-xl border border-white/15 rounded-2xl p-4 text-white shadow-2xl max-h-[60%] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
+              <div className="flex items-start gap-3">
+                <span className="w-12 h-12 rounded-full flex items-center justify-center text-xl font-bold text-white shrink-0" style={{ background: `radial-gradient(circle at 35% 30%, ${shadeHex(st.color, 70)}, ${st.color} 55%, ${shadeHex(st.color, -70)})` }}>{String(selected.name).charAt(0)}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold text-lg leading-tight">{selected.name}{isNewStar(selected) && <span className="text-amber-300 ml-1">✦</span>}</p>
+                  <span className="inline-block text-xs font-bold mt-1 px-2 py-0.5 rounded-full" style={{ background: `${st.color}33`, color: st.color }}>{selected.role}</span>
+                </div>
+                <button onClick={() => setSelectedId(null)} className="w-8 h-8 -mr-1 rounded-full hover:bg-white/10 flex items-center justify-center shrink-0"><X size={18} /></button>
+              </div>
+              <div className="grid grid-cols-3 gap-2 mt-4 text-center">
+                <div className="bg-white/5 rounded-xl py-2"><p className="text-lg font-bold">{kids.length}</p><p className="text-[10px] text-white/60">直屬人數</p></div>
+                <div className="bg-white/5 rounded-xl py-2"><p className="text-lg font-bold">{countDescendants(String(selected.id))}</p><p className="text-[10px] text-white/60">團隊總人數</p></div>
+                <div className="bg-white/5 rounded-xl py-2"><p className="text-lg font-bold">{chain.size}</p><p className="text-[10px] text-white/60">傳承層級</p></div>
+              </div>
+              <div className="mt-4 text-sm space-y-2">
+                <p className="flex gap-2"><span className="text-white/50 shrink-0">直屬主管</span>{parent ? <button onClick={() => selectMember(parent.id)} className="font-bold text-amber-300 underline underline-offset-2">{parent.name}（{parent.role}）</button> : <span className="text-white/70">最上層</span>}</p>
+                {promos.length > 0 && (
+                  <div>
+                    <p className="text-white/50 mb-1">晉升紀錄</p>
+                    <div className="space-y-1">
+                      {promos.map((p, i) => <p key={i} className="flex justify-between text-white/85"><span>{p.label}</span><span className="text-white/50">{p.date}</span></p>)}
+                    </div>
+                  </div>
+                )}
+                {kids.length > 0 && (
+                  <div>
+                    <p className="text-white/50 mb-1.5">帶領的夥伴</p>
+                    <div className="flex flex-wrap gap-1.5">
+                      {kids.map(k => <button key={k.id} onClick={() => selectMember(k.id)} className="text-xs font-bold px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20">{k.name}</button>)}
+                    </div>
+                  </div>
+                )}
+              </div>
+              <div className="flex gap-2 mt-4">
+                {kids.length > 0 && focusId !== String(selected.id) && (
+                  <button onClick={() => { setFocusId(String(selected.id)); setSelectedId(null); }} className="flex-1 bg-amber-400 hover:bg-amber-300 text-amber-950 font-bold text-sm py-2.5 rounded-xl">只看他的團隊</button>
+                )}
+                {onGoManage && <button onClick={onGoManage} className="flex-1 bg-white/10 hover:bg-white/20 text-white font-bold text-sm py-2.5 rounded-xl">到管理頁編輯</button>}
+              </div>
+            </div>
+          );
+        })()}
+      </div>
+
+      <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-gray-500 justify-center">
+        {Object.entries(ORG_RANK_STYLE).map(([role, st]) => (
+          <span key={role} className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full" style={{ background: st.color }}></span>{role}</span>
+        ))}
+        <span className="flex items-center gap-1.5"><span className="text-amber-400">✦</span>登錄一年內的新星</span>
+      </div>
+    </div>
+  );
+};
+
 const OrgChart = ({ team, recruits }) => {
+  const [view, setView] = useState('galaxy');
+  return (
+    <div>
+      <div className="flex gap-1 bg-gray-100 p-0.5 rounded-lg w-fit mx-auto mb-5">
+        <button onClick={() => setView('galaxy')} className={`px-5 py-2 rounded-md text-sm font-bold transition ${view === 'galaxy' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>星圖</button>
+        <button onClick={() => setView('manage')} className={`px-5 py-2 rounded-md text-sm font-bold transition ${view === 'manage' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>成員管理</button>
+      </div>
+      {view === 'galaxy' ? <OrgGalaxy team={team} onGoManage={() => setView('manage')} /> : <OrgChartManage team={team} recruits={recruits} />}
+    </div>
+  );
+};
+
+const OrgChartManage = ({ team, recruits }) => {
   const [editMember, setEditMember] = useState(null);
   const [deleteInfo, setDeleteInfo] = useState(null);
   const [newMember, setNewMember] = useState({ name: '', role: '業務代表', parentId: '', type: '正式人員' });
@@ -2676,10 +3159,11 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
 
 // --- Knowledge Base ---
 // --- 公文佈達專區：公司公文、獎勵辦法、活動講座等，由主管發佈，全員查看 ---
-const ANNOUNCEMENT_CATEGORIES = ['獎勵活動', '活動講座', '服務公告', '其他'];
+const ANNOUNCEMENT_CATEGORIES = ['獎勵活動', '活動講座', '團隊活動', '服務公告', '其他'];
 const ANNOUNCEMENT_CATEGORY_STYLE = {
   '獎勵活動': 'bg-amber-50 text-amber-700',
   '活動講座': 'bg-indigo-50 text-indigo-700',
+  '團隊活動': 'bg-purple-50 text-purple-700',
   '服務公告': 'bg-teal-50 text-teal-700',
   '其他': 'bg-gray-100 text-gray-600'
 };
@@ -2732,7 +3216,8 @@ const BULLETIN_ACCENTS = {
   teal: { grad: 'from-teal-600 to-emerald-500', text: 'text-teal-600', soft: 'bg-teal-50', dot: 'bg-teal-400' },
   violet: { grad: 'from-violet-600 to-fuchsia-500', text: 'text-violet-600', soft: 'bg-violet-50', dot: 'bg-violet-400' },
   red: { grad: 'from-gray-900 to-red-700', text: 'text-red-600', soft: 'bg-red-50', dot: 'bg-red-400' },
-  blue: { grad: 'from-sky-600 to-blue-600', text: 'text-sky-600', soft: 'bg-sky-50', dot: 'bg-sky-400' }
+  blue: { grad: 'from-sky-600 to-blue-600', text: 'text-sky-600', soft: 'bg-sky-50', dot: 'bg-sky-400' },
+  night: { grad: 'from-purple-900 via-purple-700 to-orange-500', text: 'text-purple-700', soft: 'bg-purple-50', dot: 'bg-orange-400' }
 };
 const BULLETIN_ICONS = { heart: Heart, award: Award, trophy: Trophy, star: Star, target: Target, users: Users, gift: Gift, calendar: Calendar };
 const BULLETIN_TONE = {
@@ -2780,7 +3265,7 @@ const NCIC_SUPA_TARGETS = [
 
 const OFFICIAL_BULLETINS = [
   {
-    id: 'official-seminar', isBuiltin: true, category: '活動講座', icon: 'calendar', accent: 'red', isEvent: true,
+    id: 'official-seminar', art: 'seminar', isBuiltin: true, category: '活動講座', icon: 'calendar', accent: 'red', isEvent: true,
     title: '高資保戶講座｜夫妻剩餘財產分配',
     summary: '10/15（四）13:00–16:00，高雄福華飯店 7F 金鳳廳，限額 15 組，需攜伴保戶報名',
     startDate: '2026-10-15', endDate: '2026-10-15', createdAt: '2026-10-05T08:08:00.000Z',
@@ -2808,7 +3293,7 @@ const OFFICIAL_BULLETINS = [
     ]
   },
   {
-    id: 'official-first-week', isBuiltin: true, category: '獎勵活動', icon: 'star', accent: 'amber',
+    id: 'official-first-week', art: 'firstweek', isBuiltin: true, category: '獎勵活動', icon: 'star', accent: 'amber',
     title: '十月特定商品首週搶先獎勵（NCIC／SUPA）',
     summary: '10/9–10/16 個人累計實收保費達 2 萬，取前 300 名，每人獎金 800 元',
     startDate: '2026-10-09', endDate: '2026-10-16', createdAt: '2026-10-05T08:07:00.000Z',
@@ -2825,7 +3310,25 @@ const OFFICIAL_BULLETINS = [
     ]
   },
   {
-    id: 'official-target-challenge', isBuiltin: true, category: '獎勵活動', icon: 'target', accent: 'blue',
+    id: 'official-halloween', art: 'halloween', isBuiltin: true, category: '團隊活動', icon: 'calendar', accent: 'night', isEvent: true,
+    title: '萬聖節變裝遊行｜神鬼奇航',
+    summary: '10/25（日）18:00，穿著各個國家「神鬼」造型的服裝，一起參加變裝遊行',
+    startDate: '2026-10-25', endDate: '2026-10-25', createdAt: '2026-10-05T08:06:30.000Z',
+    blocks: [
+      { type: 'intro', text: '10/25 晚上要舉辦萬聖節變裝遊行，主題是「神鬼奇航」，請大家穿著各個國家「神鬼」造型的服裝參加！' },
+      { type: 'highlights', items: [{ value: '10/25 (日)', label: '18:00 開始' }, { value: '神鬼奇航', label: '活動主題' }, { value: '各國神鬼', label: '造型服裝規定' }] },
+      { type: 'facts', title: '活動資訊', rows: [
+        ['活動', '萬聖節變裝遊行'],
+        ['時間', '10/25（日）18:00'],
+        ['主題', '神鬼奇航'],
+        ['服裝規定', '穿著各個國家「神鬼」造型的服裝']
+      ] },
+      { type: 'chips', title: '造型靈感（僅供參考）', items: ['日本妖怪', '墨西哥亡靈節骷髏', '歐洲吸血鬼與狼人', '埃及神祇', '北歐神話', '加勒比海海盜幽靈'] },
+      { type: 'note', text: '集合地點、報名方式與評比獎勵，原通知未提供，請洽主管確認。' }
+    ]
+  },
+  {
+    id: 'official-target-challenge', art: 'challenge', isBuiltin: true, category: '獎勵活動', icon: 'target', accent: 'blue',
     title: '十月通訊處特定商品目標達成挑戰賽（NCIC／SUPA）',
     summary: '極豐（暫依尚豐 C 組）目標 31 萬：首週達 40%、全月達 100%／120% 可領業展費補助',
     startDate: '2026-10-09', endDate: '2026-10-31', createdAt: '2026-10-05T08:06:00.000Z',
@@ -2862,7 +3365,7 @@ const OFFICIAL_BULLETINS = [
     ]
   },
   {
-    id: 'official-trainee-new-product', isBuiltin: true, category: '獎勵活動', icon: 'users', accent: 'teal',
+    id: 'official-trainee-new-product', art: 'trainee', isBuiltin: true, category: '獎勵活動', icon: 'users', accent: 'teal',
     title: '115年10月南區優培 NCIC／SUPA 新商品專屬獎勵',
     summary: '早鳥開張獎、聯手出擊獎，以及保費／件數雙排名賽（各前 10 名，獎金 2,000 元）',
     startDate: '2026-10-09', endDate: '2026-10-31', createdAt: '2026-10-05T08:05:00.000Z',
@@ -2884,7 +3387,7 @@ const OFFICIAL_BULLETINS = [
     ]
   },
   {
-    id: 'official-wangnian', isBuiltin: true, category: '獎勵活動', icon: 'award', accent: 'violet',
+    id: 'official-wangnian', art: 'wangnian', isBuiltin: true, category: '獎勵活動', icon: 'award', accent: 'violet',
     title: '10月通訊處「神采飛羊」旺年會團隊獎勵活動',
     summary: '通訊處達基本門檻後，個人累積業績達標準可獲邀參加旺年會（標準 ❷ 可攜伴）',
     startDate: '2026-10-01', endDate: '2026-10-31', createdAt: '2026-10-05T08:04:00.000Z',
@@ -2907,7 +3410,7 @@ const OFFICIAL_BULLETINS = [
     ]
   },
   {
-    id: 'official-team-rank', isBuiltin: true, category: '獎勵活動', icon: 'trophy', accent: 'indigo',
+    id: 'official-team-rank', art: 'teamrank', isBuiltin: true, category: '獎勵活動', icon: 'trophy', accent: 'indigo',
     title: '10～11月「通訊處團隊加碼」排名賽',
     summary: '通訊處達基本要求後，依加權保費達成率遴選各組第一名，於旺年會接受授旗表揚',
     startDate: '2026-10-01', endDate: '2026-11-30', createdAt: '2026-10-05T08:03:00.000Z',
@@ -2924,7 +3427,7 @@ const OFFICIAL_BULLETINS = [
     ]
   },
   {
-    id: 'official-anxin', isBuiltin: true, category: '獎勵活動', icon: 'gift', accent: 'pink',
+    id: 'official-anxin', art: 'anxin', isBuiltin: true, category: '獎勵活動', icon: 'gift', accent: 'pink',
     title: '第四季「安心守護」業務員抽獎活動',
     summary: '每協助一位客戶完成指定「保單安心聯絡人」申請，即可獲得一次 Gogoro EZZY 500 抽獎機會',
     startDate: '2026-10-01', endDate: '2026-12-31', createdAt: '2026-10-05T08:02:00.000Z',
@@ -2940,7 +3443,7 @@ const OFFICIAL_BULLETINS = [
     ]
   },
   {
-    id: 'official-warm-care', isBuiltin: true, category: '服務公告', icon: 'heart', accent: 'teal',
+    id: 'official-warm-care', art: 'warmcare', isBuiltin: true, category: '服務公告', icon: 'heart', accent: 'teal',
     title: '2026 暖心關懷服務',
     summary: '共 9 項免費暖心關懷服務，數量有限，請至南山 AP「通知」查詢客戶資格並盡快申請',
     createdAt: '2026-10-05T08:01:00.000Z',
@@ -2955,6 +3458,200 @@ const OFFICIAL_BULLETINS = [
     ]
   }
 ];
+
+// --- 公文插圖：每則公文一張向量插畫（白色半透明圖形，會自動套上該公文的主色漸層）---
+const ArtSparkle = ({ x, y, s = 1, o = 0.9 }) => (
+  <path transform={`translate(${x} ${y}) scale(${s})`} d="M0 -8 L2.2 -2.2 L8 0 L2.2 2.2 L0 8 L-2.2 2.2 L-8 0 L-2.2 -2.2Z" fill="#fff" opacity={o} />
+);
+const ArtHeart = ({ x, y, s = 1, o = 0.9 }) => (
+  <path transform={`translate(${x} ${y}) scale(${s})`} d="M0 4 C-8 -4 -10 -10 -5 -12 C-2 -13 0 -11 0 -9 C0 -11 2 -13 5 -12 C10 -10 8 -4 0 4Z" fill="#fff" opacity={o} />
+);
+const ArtStar = ({ x, y, s = 1, fill = '#fff' }) => (
+  <polygon transform={`translate(${x} ${y}) scale(${s})`} points="0,-10 3,-3 10,-3 4.5,2 6.5,9 0,5 -6.5,9 -4.5,2 -10,-3 -3,-3" fill={fill} />
+);
+
+const BulletinArt = ({ kind, className = '', slice = false }) => (
+  <svg viewBox="0 0 240 160" className={className} preserveAspectRatio={slice ? 'xMidYMid slice' : 'xMidYMid meet'} aria-hidden="true">
+    <circle cx="120" cy="80" r="64" fill="#fff" opacity="0.10" />
+    <circle cx="120" cy="80" r="46" fill="#fff" opacity="0.08" />
+
+    {kind === 'seminar' && (
+      <g>
+        <rect x="117" y="40" width="6" height="84" rx="3" fill="#fff" />
+        <rect x="92" y="122" width="56" height="9" rx="4.5" fill="#fff" />
+        <rect x="60" y="44" width="120" height="5" rx="2.5" fill="#fff" />
+        <circle cx="120" cy="42" r="8" fill="#fff" />
+        <path d="M66 49 L50 92 M66 49 L82 92 M174 49 L158 92 M174 49 L190 92" stroke="#fff" strokeWidth="2" opacity="0.85" fill="none" />
+        <path d="M46 92 H86 Q84 108 66 108 Q48 108 46 92Z" fill="#fff" />
+        <path d="M154 92 H194 Q192 108 174 108 Q156 108 154 92Z" fill="#fff" />
+        <ellipse cx="174" cy="88" rx="13" ry="4" fill="#fff" opacity="0.7" />
+        <ellipse cx="174" cy="83" rx="13" ry="4" fill="#fff" opacity="0.85" />
+        <ellipse cx="174" cy="78" rx="13" ry="4" fill="#fff" />
+        <ArtSparkle x={54} y={64} s={0.9} />
+        <ArtSparkle x={196} y={46} s={1.2} />
+        <ArtSparkle x={86} y={32} s={0.7} o={0.7} />
+      </g>
+    )}
+
+    {kind === 'firstweek' && (
+      <g>
+        <rect x="112" y="26" width="16" height="12" rx="3" fill="#fff" />
+        <rect x="150" y="38" width="12" height="8" rx="2" fill="#fff" transform="rotate(40 156 42)" />
+        <circle cx="120" cy="86" r="44" fill="#fff" opacity="0.18" stroke="#fff" strokeWidth="8" />
+        {Array.from({ length: 12 }).map((_, i) => {
+          const a = (i * 30 * Math.PI) / 180;
+          return <line key={i} x1={120 + 33 * Math.sin(a)} y1={86 - 33 * Math.cos(a)} x2={120 + 38 * Math.sin(a)} y2={86 - 38 * Math.cos(a)} stroke="#fff" strokeWidth="2" opacity="0.8" />;
+        })}
+        <path d="M128 56 L102 92 H119 L111 118 L142 78 H124 Z" fill="#fff" />
+        <ArtSparkle x={60} y={50} s={1.1} />
+        <ArtSparkle x={188} y={42} s={0.9} />
+        <ArtSparkle x={196} y={118} s={1.2} o={0.8} />
+      </g>
+    )}
+
+    {kind === 'challenge' && (
+      <g>
+        <circle cx="108" cy="86" r="50" fill="none" stroke="#fff" strokeWidth="6" opacity="0.95" />
+        <circle cx="108" cy="86" r="34" fill="none" stroke="#fff" strokeWidth="6" opacity="0.8" />
+        <circle cx="108" cy="86" r="18" fill="none" stroke="#fff" strokeWidth="6" opacity="0.65" />
+        <circle cx="108" cy="86" r="6" fill="#fff" />
+        <line x1="112" y1="82" x2="176" y2="30" stroke="#fff" strokeWidth="5" strokeLinecap="round" />
+        <path d="M176 30 L188 22 M176 30 L184 42" stroke="#fff" strokeWidth="5" strokeLinecap="round" fill="none" />
+        <ArtSparkle x={52} y={42} s={1} />
+        <ArtSparkle x={190} y={104} s={1.1} o={0.8} />
+      </g>
+    )}
+
+    {kind === 'trainee' && (
+      <g>
+        <path d="M92 116 H148 L142 142 H98 Z" fill="#fff" />
+        <rect x="88" y="110" width="64" height="9" rx="4.5" fill="#fff" />
+        <path d="M120 112 C120 92 120 78 120 60" stroke="#fff" strokeWidth="6" strokeLinecap="round" fill="none" />
+        <path d="M120 92 C98 94 84 80 84 62 C104 60 120 72 120 92Z" fill="#fff" opacity="0.9" />
+        <path d="M120 78 C142 80 156 64 156 46 C136 44 120 56 120 78Z" fill="#fff" />
+        <ArtStar x={120} y={34} s={1.2} />
+        <ArtSparkle x={64} y={44} s={1} />
+        <ArtSparkle x={182} y={84} s={0.9} />
+        <ArtSparkle x={60} y={108} s={0.7} o={0.7} />
+      </g>
+    )}
+
+    {kind === 'wangnian' && (
+      <g>
+        <line x1="62" y1="20" x2="62" y2="40" stroke="#fff" strokeWidth="2" opacity="0.8" />
+        <ellipse cx="62" cy="52" rx="10" ry="12" fill="#fff" opacity="0.9" />
+        <rect x="58" y="63" width="8" height="5" rx="2" fill="#fff" opacity="0.7" />
+        <line x1="190" y1="16" x2="190" y2="34" stroke="#fff" strokeWidth="2" opacity="0.8" />
+        <ellipse cx="190" cy="44" rx="9" ry="11" fill="#fff" opacity="0.9" />
+        <rect x="186" y="54" width="8" height="5" rx="2" fill="#fff" opacity="0.7" />
+        <rect x="98" y="114" width="6" height="22" rx="3" fill="rgba(0,0,0,0.3)" />
+        <rect x="116" y="116" width="6" height="22" rx="3" fill="rgba(0,0,0,0.3)" />
+        <rect x="134" y="116" width="6" height="22" rx="3" fill="rgba(0,0,0,0.3)" />
+        <rect x="148" y="112" width="6" height="22" rx="3" fill="rgba(0,0,0,0.3)" />
+        <circle cx="92" cy="92" r="20" fill="#fff" />
+        <circle cx="116" cy="82" r="24" fill="#fff" />
+        <circle cx="142" cy="90" r="21" fill="#fff" />
+        <circle cx="106" cy="104" r="18" fill="#fff" />
+        <circle cx="130" cy="106" r="17" fill="#fff" />
+        <ellipse cx="172" cy="88" rx="12" ry="15" fill="rgba(0,0,0,0.3)" />
+        <ellipse cx="160" cy="74" rx="11" ry="5" transform="rotate(-30 160 74)" fill="rgba(0,0,0,0.3)" />
+        <path d="M166 74 C160 60 172 56 174 64" stroke="#fff" strokeWidth="4" fill="none" strokeLinecap="round" />
+        <circle cx="175" cy="84" r="2.5" fill="#fff" />
+        <circle cx="44" cy="100" r="3" fill="#fff" opacity="0.8" />
+        <circle cx="206" cy="108" r="3" fill="#fff" opacity="0.8" />
+        <circle cx="198" cy="76" r="2" fill="#fff" opacity="0.7" />
+        <ArtSparkle x={86} y={34} s={0.9} />
+      </g>
+    )}
+
+    {kind === 'teamrank' && (
+      <g>
+        <rect x="64" y="108" width="40" height="32" rx="3" fill="#fff" opacity="0.7" />
+        <rect x="104" y="92" width="44" height="48" rx="3" fill="#fff" opacity="0.95" />
+        <rect x="148" y="116" width="40" height="24" rx="3" fill="#fff" opacity="0.55" />
+        <text x="84" y="130" textAnchor="middle" fontSize="20" fontWeight="700" fill="rgba(0,0,0,0.3)">2</text>
+        <text x="126" y="124" textAnchor="middle" fontSize="26" fontWeight="700" fill="rgba(0,0,0,0.3)">1</text>
+        <text x="168" y="134" textAnchor="middle" fontSize="18" fontWeight="700" fill="rgba(0,0,0,0.3)">3</text>
+        <path d="M108 34 H144 V50 Q144 72 126 76 Q108 72 108 50 Z" fill="#fff" />
+        <path d="M108 40 H98 Q98 58 112 60" stroke="#fff" strokeWidth="4" fill="none" />
+        <path d="M144 40 H154 Q154 58 140 60" stroke="#fff" strokeWidth="4" fill="none" />
+        <rect x="122" y="76" width="8" height="10" fill="#fff" />
+        <rect x="114" y="84" width="24" height="8" rx="3" fill="#fff" />
+        <ArtStar x={126} y={52} s={0.8} fill="rgba(0,0,0,0.22)" />
+        <ArtSparkle x={70} y={52} s={1} />
+        <ArtSparkle x={182} y={60} s={0.9} />
+      </g>
+    )}
+
+    {kind === 'anxin' && (
+      <g>
+        <circle cx="88" cy="122" r="15" fill="none" stroke="#fff" strokeWidth="6" />
+        <circle cx="88" cy="122" r="4" fill="#fff" />
+        <circle cx="162" cy="122" r="15" fill="none" stroke="#fff" strokeWidth="6" />
+        <circle cx="162" cy="122" r="4" fill="#fff" />
+        <path d="M96 110 C96 88 110 78 128 78 H140 L148 110 Z" fill="#fff" />
+        <rect x="82" y="70" width="46" height="10" rx="5" fill="#fff" />
+        <rect x="100" y="108" width="52" height="8" rx="4" fill="#fff" />
+        <path d="M150 112 L160 66" stroke="#fff" strokeWidth="6" strokeLinecap="round" />
+        <path d="M152 62 H174" stroke="#fff" strokeWidth="5" strokeLinecap="round" />
+        <circle cx="166" cy="74" r="5" fill="#fff" opacity="0.85" />
+        <rect x="168" y="36" width="26" height="22" rx="3" fill="#fff" />
+        <rect x="179" y="36" width="4" height="22" fill="rgba(0,0,0,0.2)" />
+        <rect x="168" y="45" width="26" height="4" fill="rgba(0,0,0,0.2)" />
+        <path d="M181 36 C172 24 166 34 181 36 C196 34 190 24 181 36Z" fill="#fff" />
+        <ArtHeart x={62} y={52} s={1.4} />
+        <ArtHeart x={82} y={34} s={0.9} o={0.7} />
+        <ArtSparkle x={46} y={92} s={0.8} o={0.8} />
+      </g>
+    )}
+
+    {kind === 'warmcare' && (
+      <g>
+        <path d="M120 130 C68 94 60 60 84 46 C102 36 116 46 120 56 C124 46 138 36 156 46 C180 60 172 94 120 130Z" fill="#fff" />
+        <path d="M54 112 C76 140 164 140 186 112" stroke="#fff" strokeWidth="8" strokeLinecap="round" fill="none" opacity="0.9" />
+        <ArtHeart x={58} y={52} s={1.5} o={0.8} />
+        <ArtHeart x={188} y={44} s={1.1} o={0.8} />
+        <ArtHeart x={198} y={84} s={0.8} o={0.6} />
+        <ArtSparkle x={44} y={90} s={0.9} />
+        <ArtSparkle x={120} y={28} s={0.9} />
+      </g>
+    )}
+
+    {kind === 'halloween' && (
+      <g>
+        <circle cx="152" cy="46" r="26" fill="#fff" opacity="0.92" />
+        <circle cx="144" cy="40" r="5" fill="rgba(0,0,0,0.07)" />
+        <circle cx="160" cy="54" r="7" fill="rgba(0,0,0,0.07)" />
+        <circle cx="156" cy="36" r="3" fill="rgba(0,0,0,0.07)" />
+        <path d="M60 36 q6 -8 12 0 q6 -8 12 0 q-6 4 -12 2 q-6 2 -12 -2Z" fill="#fff" opacity="0.8" />
+        <path d="M96 22 q4 -6 8 0 q4 -6 8 0 q-4 3 -8 1 q-4 2 -8 -1Z" fill="#fff" opacity="0.6" />
+        <path d="M62 112 H182 L168 134 H76 Z" fill="#fff" />
+        <rect x="118" y="46" width="4" height="68" fill="#fff" />
+        <rect x="150" y="66" width="3" height="48" fill="#fff" />
+        <path d="M124 50 C150 62 152 94 124 106 Z" fill="#fff" opacity="0.95" />
+        <path d="M116 58 C96 68 96 92 116 100 Z" fill="#fff" opacity="0.85" />
+        <path d="M156 70 C172 78 172 96 156 102 Z" fill="#fff" opacity="0.8" />
+        <path d="M122 46 L142 52 L122 58 Z" fill="#fff" />
+        <circle cx="136" cy="78" r="8" fill="rgba(0,0,0,0.28)" />
+        <circle cx="133" cy="76" r="2" fill="#fff" />
+        <circle cx="139" cy="76" r="2" fill="#fff" />
+        <rect x="134" y="82" width="4" height="4" fill="#fff" />
+        <path d="M30 138 Q45 128 60 138 T90 138 T120 138 T150 138 T180 138 T210 138" stroke="#fff" strokeWidth="4" fill="none" opacity="0.85" strokeLinecap="round" />
+        <path d="M20 150 Q35 142 50 150 T80 150 T110 150 T140 150 T170 150 T200 150 T230 150" stroke="#fff" strokeWidth="3" fill="none" opacity="0.5" strokeLinecap="round" />
+        <path d="M30 120 V98 C30 82 56 82 56 98 V120 L50 115 L43 120 L36 115Z" fill="#fff" opacity="0.9" />
+        <circle cx="38" cy="98" r="3" fill="rgba(0,0,0,0.35)" />
+        <circle cx="48" cy="98" r="3" fill="rgba(0,0,0,0.35)" />
+        <ellipse cx="206" cy="126" rx="14" ry="12" fill="#fff" opacity="0.92" />
+        <rect x="204" y="111" width="4" height="6" fill="#fff" />
+        <polygon points="199,122 203,122 201,126" fill="rgba(0,0,0,0.3)" />
+        <polygon points="209,122 213,122 211,126" fill="rgba(0,0,0,0.3)" />
+        <path d="M200 131 Q206 135 212 131" stroke="rgba(0,0,0,0.3)" strokeWidth="2" fill="none" />
+        <ArtSparkle x={96} y={46} s={0.8} o={0.8} />
+        <ArtSparkle x={196} y={74} s={0.8} o={0.7} />
+      </g>
+    )}
+  </svg>
+);
 
 const BulletinHeading = ({ title, accent }) => (
   title ? <h4 className="text-sm font-bold text-gray-900 mb-3 flex items-center gap-2"><span className={`w-1 h-4 rounded-full ${accent.dot}`}></span>{title}</h4> : null
@@ -3130,20 +3827,25 @@ const BulletinBlock = ({ block, accentKey }) => {
 
 const BulletinDetail = ({ bulletin, onClose }) => {
   const accent = BULLETIN_ACCENTS[bulletin.accent] || BULLETIN_ACCENTS.indigo;
-  const IconComp = BULLETIN_ICONS[bulletin.icon] || Megaphone;
   const status = getBulletinStatus(bulletin);
   return (
     <div className="fixed inset-0 z-[100] flex items-end md:items-center justify-center bg-black/50 backdrop-blur-sm">
       <div className="bg-white w-full md:max-w-2xl h-[94vh] md:h-auto md:max-h-[92vh] rounded-t-3xl md:rounded-2xl shadow-2xl animate-scale-up flex flex-col overflow-hidden">
-        <div className={`bg-gradient-to-br ${accent.grad} p-5 pb-6 text-white shrink-0 relative`}>
-          <button onClick={onClose} className="absolute top-3 right-3 w-10 h-10 rounded-full bg-white/20 flex items-center justify-center"><X size={22} /></button>
-          <div className="flex items-center gap-2 mb-3 pr-12">
-            <span className="w-10 h-10 rounded-xl bg-white/20 flex items-center justify-center"><IconComp size={22} /></span>
-            <span className="text-xs font-bold bg-white/20 px-2.5 py-1 rounded-full">{bulletin.category}</span>
-            {status && <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${BULLETIN_TONE[status.tone]}`}>{status.text}</span>}
+        <div className={`bg-gradient-to-br ${accent.grad} text-white shrink-0 relative overflow-hidden`}>
+          <div className="absolute -top-16 -left-10 w-52 h-52 rounded-full bg-white/10"></div>
+          <div className="absolute -bottom-24 -right-14 w-64 h-64 rounded-full bg-white/10"></div>
+          <button onClick={onClose} className="absolute top-3 right-3 z-10 w-10 h-10 rounded-full bg-white/20 flex items-center justify-center"><X size={22} /></button>
+          <div className="relative h-40 pt-5 flex items-center justify-center">
+            <BulletinArt kind={bulletin.art} className="h-full w-auto" />
           </div>
-          <h3 className="text-xl font-bold leading-snug pr-8">{bulletin.title}</h3>
-          <p className="text-sm text-white/85 mt-2 leading-relaxed">{bulletin.summary}</p>
+          <div className="relative px-5 pb-6 pt-3">
+            <div className="flex items-center gap-2 mb-2.5">
+              <span className="text-xs font-bold bg-white/20 px-2.5 py-1 rounded-full">{bulletin.category}</span>
+              {status && <span className={`text-xs font-bold px-2.5 py-1 rounded-full ${BULLETIN_TONE[status.tone]}`}>{status.text}</span>}
+            </div>
+            <h3 className="text-xl font-bold leading-snug">{bulletin.title}</h3>
+            <p className="text-sm text-white/85 mt-2 leading-relaxed">{bulletin.summary}</p>
+          </div>
         </div>
         <div className="p-5 overflow-y-auto flex-1 space-y-6" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.5rem)' }}>
           {bulletin.blocks.map((b, i) => <BulletinBlock key={i} block={b} accentKey={bulletin.accent} />)}
@@ -3315,8 +4017,8 @@ const AnnouncementsPage = ({ loggedInUser, announcements, canPost, onSeen }) => 
             return (
               <button key={a.id} onClick={() => openView(a)} className="w-full text-left bg-white rounded-2xl border border-gray-100 shadow-sm hover:shadow-md transition p-4 flex gap-4 items-start">
                 {a.isBuiltin ? (
-                  <div className={`w-20 h-20 sm:w-24 sm:h-24 rounded-xl bg-gradient-to-br ${(BULLETIN_ACCENTS[a.accent] || BULLETIN_ACCENTS.indigo).grad} flex items-center justify-center shrink-0`}>
-                    {React.createElement(BULLETIN_ICONS[a.icon] || Megaphone, { size: 30, className: 'text-white' })}
+                  <div className={`w-20 h-20 sm:w-24 sm:h-24 rounded-xl bg-gradient-to-br ${(BULLETIN_ACCENTS[a.accent] || BULLETIN_ACCENTS.indigo).grad} overflow-hidden shrink-0`}>
+                    <BulletinArt kind={a.art} slice className="w-full h-full" />
                   </div>
                 ) : a.thumb ? (
                   <img src={a.thumb} alt="" className="w-20 h-20 sm:w-24 sm:h-24 rounded-xl object-cover shrink-0 bg-gray-50" />
@@ -5217,16 +5919,43 @@ const WEEKDAY_OPTIONS = [
 const WEEK_OF_MONTH_OPTIONS = [{ value: 1, label: '第1個' }, { value: 2, label: '第2個' }, { value: 3, label: '第3個' }, { value: 4, label: '第4個' }];
 
 // --- 批次新增行程 (貼上文字快速建立多筆，適合課表這類固定課程) ---
+// --- 批次新增（客戶行程／提醒）共用：每種建檔方式都有 開始/結束日期、開始/結束時間、參與人員 ---
+const commitDocsInChunks = async (items) => {
+  for (let i = 0; i < items.length; i += 400) {
+    const b = writeBatch(db);
+    items.slice(i, i + 400).forEach(([ref, data]) => b.set(ref, data));
+    await b.commit();
+  }
+};
+
+const ParticipantChecklist = ({ team, selectedIds, onToggle, label }) => (
+  <div>
+    <label className="text-xs font-bold text-gray-500 block mb-1">{label || '參與人員（每個人各自獨立記一筆）'}</label>
+    <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto border border-gray-100 rounded-lg p-2">
+      {(team || []).map(m => (
+        <label key={m.id} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
+          <input type="checkbox" checked={selectedIds.includes(m.id)} onChange={() => onToggle(m.id)} className="w-3.5 h-3.5" /> {m.name}
+        </label>
+      ))}
+    </div>
+  </div>
+);
+
 // --- 批次新增客戶行程（含自動新增客戶）---
-const BatchActivityImportModal = ({ isOpen, onClose, loggedInUser, customers }) => {
+const BatchActivityImportModal = ({ isOpen, onClose, loggedInUser, customers, team }) => {
   const [step, setStep] = useState(1);
   const [rawText, setRawText] = useState('');
   const [rows, setRows] = useState([]);
+  const [participantIds, setParticipantIds] = useState(() => loggedInUser ? [loggedInUser.id] : []);
+  const [priority, setPriority] = useState('normal');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   useEffect(() => {
-    if (isOpen) { setStep(1); setRawText(''); setRows([]); setIsSubmitting(false); }
-  }, [isOpen]);
+    if (isOpen) {
+      setStep(1); setRawText(''); setRows([]); setPriority('normal'); setIsSubmitting(false);
+      setParticipantIds(loggedInUser ? [loggedInUser.id] : []);
+    }
+  }, [isOpen, loggedInUser?.id]); // eslint-disable-line
 
   const existingNameMap = useMemo(() => {
     const map = {};
@@ -5244,54 +5973,58 @@ const BatchActivityImportModal = ({ isOpen, onClose, loggedInUser, customers }) 
     setRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value, ...(field === 'type' ? { typeLabel: ALL_ACTIVITY_WEIGHTS[value]?.label || value } : {}) } : r));
   };
   const removeRow = (id) => setRows(prev => prev.filter(r => r.id !== id));
-
+  const toggleParticipant = (id) => setParticipantIds(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
   const isNewCustomer = (name) => !existingNameMap[name.trim().toLowerCase()];
 
+  const validRows = rows.filter(r => r.date && r.name.trim());
+
   const handleSubmit = async () => {
-    const validRows = rows.filter(r => r.date && r.name);
-    if (validRows.length === 0 || !loggedInUser) return;
+    if (validRows.length === 0 || participantIds.length === 0 || !loggedInUser) return;
     setIsSubmitting(true);
     try {
+      const now = new Date().toISOString();
       const nameToId = { ...existingNameMap };
-      // 先把這批資料裡還沒出現過的姓名，去重後一次新增成客戶
       const newNames = [...new Set(validRows.map(r => r.name.trim()).filter(n => !nameToId[n.toLowerCase()]))];
       if (newNames.length > 0) {
-        const createBatch = writeBatch(db);
-        const newRefs = newNames.map(() => doc(collection(db, 'customers')));
-        newNames.forEach((name, i) => {
-          createBatch.set(newRefs[i], {
+        const customerItems = newNames.map(name => {
+          const ref = doc(collection(db, 'customers'));
+          nameToId[name.toLowerCase()] = ref.id;
+          return [ref, {
             name, phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', address: '',
             tags: ['準客戶'], notes: '', nextFollowUpDate: '',
-            source: '批次新增行程', ownerId: loggedInUser.id, visitLog: [], createdAt: new Date().toISOString()
-          });
-          nameToId[name.toLowerCase()] = newRefs[i].id;
+            source: '批次新增行程', ownerId: loggedInUser.id, visitLog: [], createdAt: now
+          }];
         });
-        await createBatch.commit();
+        await commitDocsInChunks(customerItems);
       }
-
-      const eventBatch = writeBatch(db);
+      const eventItems = [];
       validRows.forEach(row => {
-        const ref = doc(collection(db, 'schedule_events'));
-        eventBatch.set(ref, {
-          ownerId: loggedInUser.id,
-          customerId: nameToId[row.name.trim().toLowerCase()] || '',
-          customerName: row.name.trim(),
-          type: row.type, isReminder: false, title: '',
-          priority: 'normal', date: row.date, time: '', endTime: '',
-          note: row.note || '', address: '',
-          status: 'scheduled', completedAt: null, createdAt: new Date().toISOString()
+        participantIds.forEach(pid => {
+          eventItems.push([doc(collection(db, 'schedule_events')), {
+            ownerId: pid,
+            customerId: nameToId[row.name.trim().toLowerCase()] || '',
+            customerName: row.name.trim(),
+            type: row.type, isReminder: false, title: '', priority,
+            date: row.date, endDate: (row.endDate && row.endDate > row.date) ? row.endDate : '',
+            time: row.time || '', endTime: row.endTime || '',
+            note: row.note || '', address: '',
+            status: 'scheduled', completedAt: null,
+            createdById: loggedInUser.id, createdByName: loggedInUser.name, createdAt: now
+          }]);
         });
       });
-      await eventBatch.commit();
+      await commitDocsInChunks(eventItems);
       onClose();
     } catch (e) { console.error(e); } finally { setIsSubmitting(false); }
   };
 
   if (!isOpen) return null;
 
+  const cellInput = 'bg-transparent border border-gray-200 rounded px-1 outline-none';
+
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl animate-scale-up border border-gray-100 flex flex-col max-h-[90vh]">
+      <div className="bg-white rounded-2xl w-full max-w-3xl shadow-2xl animate-scale-up border border-gray-100 flex flex-col max-h-[90vh]">
         <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
           <h3 className="text-lg font-bold text-gray-900">批次新增行程</h3>
           <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X size={20} /></button>
@@ -5300,11 +6033,11 @@ const BatchActivityImportModal = ({ isOpen, onClose, loggedInUser, customers }) 
           {step === 1 ? (
             <>
               <div className="bg-blue-50 p-4 rounded-lg text-xs text-blue-700 leading-relaxed border border-blue-100">
-                每行一筆，格式：<code>日期 類型 姓名 備註(選填)</code>，空白分隔，例如：<br />
+                每行一筆，格式：<code>日期 時間(選填) 類型 姓名 備註(選填)</code>，空白分隔。日期可以寫範圍（9/11-9/13），時間也可以寫範圍（14:00-15:30），例如：<br />
                 <code>9/11 面談 李冠葒</code><br />
-                <code>9/11 面談 王博弘 sbb</code><br />
-                <code>9/12 面談 陳伯伯</code><br />
-                沒填的欄位會給預設值（類型預設約訪），備註可填可不填；<strong>姓名沒對到既有客戶的話，匯入時會自動幫她新增一筆客戶資料</strong>。
+                <code>9/11 14:00-15:30 面談 王博弘 sbb</code><br />
+                <code>9/12-9/13 約訪 陳伯伯</code><br />
+                沒填的欄位會給預設值（類型預設約訪），備註可填可不填；<strong>姓名沒對到既有客戶的話，匯入時會自動幫他新增一筆客戶資料</strong>。
               </div>
               <textarea
                 className="w-full h-48 p-3 bg-gray-50 border border-gray-200 rounded-xl outline-none focus:border-indigo-500 font-mono text-sm resize-none"
@@ -5318,30 +6051,41 @@ const BatchActivityImportModal = ({ isOpen, onClose, loggedInUser, customers }) 
               <div className="overflow-x-auto border border-gray-100 rounded-xl">
                 <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead className="bg-gray-50 text-gray-500 font-bold uppercase">
-                    <tr><th className="px-3 py-2">日期</th><th className="px-3 py-2">類型</th><th className="px-3 py-2">姓名</th><th className="px-3 py-2">備註</th><th className="px-3 py-2 w-10"></th></tr>
+                    <tr><th className="px-3 py-2">開始日</th><th className="px-3 py-2">結束日</th><th className="px-3 py-2">開始</th><th className="px-3 py-2">結束</th><th className="px-3 py-2">類型</th><th className="px-3 py-2">姓名</th><th className="px-3 py-2">備註</th><th className="px-3 py-2 w-10"></th></tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {rows.map(row => (
                       <tr key={row.id}>
-                        <td className="p-2"><input type="text" placeholder="YYYY-MM-DD" className="bg-transparent border border-gray-200 rounded px-1 w-28 outline-none" value={row.date} onChange={e => updateRow(row.id, 'date', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" placeholder="YYYY-MM-DD" className={`${cellInput} w-28`} value={row.date} onChange={e => updateRow(row.id, 'date', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" placeholder="選填" className={`${cellInput} w-28`} value={row.endDate || ''} onChange={e => updateRow(row.id, 'endDate', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" placeholder="HH:MM" className={`${cellInput} w-16`} value={row.time || ''} onChange={e => updateRow(row.id, 'time', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" placeholder="HH:MM" className={`${cellInput} w-16`} value={row.endTime || ''} onChange={e => updateRow(row.id, 'endTime', e.target.value)} /></td>
                         <td className="p-2">
-                          <select className="bg-transparent border border-gray-200 rounded px-1 outline-none" value={row.type} onChange={e => updateRow(row.id, 'type', e.target.value)}>
+                          <select className={cellInput} value={row.type} onChange={e => updateRow(row.id, 'type', e.target.value)}>
                             <optgroup label="業務活動">{Object.entries(ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</optgroup>
                             <optgroup label="增員活動">{Object.entries(RECRUIT_ACTIVITY_WEIGHTS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}</optgroup>
                           </select>
                         </td>
                         <td className="p-2">
-                          <input type="text" className="bg-transparent border border-gray-200 rounded px-1 w-24 outline-none" value={row.name} onChange={e => updateRow(row.id, 'name', e.target.value)} />
+                          <input type="text" className={`${cellInput} w-24`} value={row.name} onChange={e => updateRow(row.id, 'name', e.target.value)} />
                           {row.name && isNewCustomer(row.name) && <span className="ml-1 text-[9px] font-bold text-amber-600 bg-amber-50 px-1 py-0.5 rounded">新客戶</span>}
                         </td>
-                        <td className="p-2"><input type="text" className="bg-transparent border border-gray-200 rounded px-1 w-full outline-none" value={row.note} onChange={e => updateRow(row.id, 'note', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" className={`${cellInput} w-full min-w-[100px]`} value={row.note} onChange={e => updateRow(row.id, 'note', e.target.value)} /></td>
                         <td className="p-2 text-center"><button onClick={() => removeRow(row.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={14} /></button></td>
                       </tr>
                     ))}
+                    {rows.length === 0 && <tr><td colSpan="8" className="text-center py-6 text-gray-400">無法解析出任何資料，請確認格式</td></tr>}
                   </tbody>
                 </table>
               </div>
-              <p className="text-xs text-gray-400">共 {rows.length} 筆，其中 {rows.filter(r => r.name && isNewCustomer(r.name)).length} 筆會自動新增客戶</p>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">優先度</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={priority} onChange={e => setPriority(e.target.value)}>
+                  {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
+                </select>
+              </div>
+              <ParticipantChecklist team={team} selectedIds={participantIds} onToggle={toggleParticipant} />
+              <p className="text-right text-xs text-gray-400">共 {validRows.length} 筆 × {participantIds.length} 人 = {validRows.length * participantIds.length} 筆行程，其中 {new Set(validRows.filter(r => isNewCustomer(r.name)).map(r => r.name.trim().toLowerCase())).size} 位會自動新增為客戶</p>
             </>
           )}
         </div>
@@ -5354,8 +6098,8 @@ const BatchActivityImportModal = ({ isOpen, onClose, loggedInUser, customers }) 
           ) : (
             <>
               <button onClick={() => setStep(1)} className="text-sm font-bold text-gray-500 hover:text-gray-700">上一步</button>
-              <button onClick={handleSubmit} disabled={rows.length === 0 || isSubmitting} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-bold text-sm transition disabled:opacity-50 flex items-center gap-2">
-                {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : `新增 ${rows.length} 筆行程`}
+              <button onClick={handleSubmit} disabled={validRows.length === 0 || participantIds.length === 0 || isSubmitting} className="bg-indigo-600 hover:bg-indigo-700 text-white px-5 py-2.5 rounded-lg font-bold text-sm transition disabled:opacity-50 flex items-center gap-2">
+                {isSubmitting ? <Loader2 size={16} className="animate-spin" /> : `新增 ${validRows.length * participantIds.length} 筆行程`}
               </button>
             </>
           )}
@@ -5365,6 +6109,7 @@ const BatchActivityImportModal = ({ isOpen, onClose, loggedInUser, customers }) 
   );
 };
 
+// --- 批次新增提醒 ---
 const BatchScheduleModal = ({ isOpen, onClose, loggedInUser, team }) => {
   const [step, setStep] = useState(1);
   const [rawText, setRawText] = useState('');
@@ -5380,65 +6125,63 @@ const BatchScheduleModal = ({ isOpen, onClose, loggedInUser, team }) => {
       setParticipantIds(loggedInUser ? [loggedInUser.id] : []);
       setCategory('meeting'); setPriority('normal'); setIsSubmitting(false);
     }
-  }, [isOpen, loggedInUser]);
+  }, [isOpen, loggedInUser?.id]); // eslint-disable-line
 
   const handleParse = () => {
     const parsed = parseBatchScheduleText(rawText, new Date().getFullYear());
     setRows(parsed.filter(r => r.title));
     setStep(2);
   };
-
-  const updateRow = (id, field, value) => {
-    setRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
-  };
-
+  const updateRow = (id, field, value) => setRows(prev => prev.map(r => r.id === id ? { ...r, [field]: value } : r));
   const removeRow = (id) => setRows(prev => prev.filter(r => r.id !== id));
+  const toggleParticipant = (id) => setParticipantIds(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
 
-  const toggleParticipant = (id) => {
-    setParticipantIds(prev => prev.includes(id) ? prev.filter(p => p !== id) : [...prev, id]);
-  };
+  const validRows = rows.filter(r => r.date && r.title);
 
   const handleSubmit = async () => {
-    const validRows = rows.filter(r => r.date && r.title);
-    if (validRows.length === 0 || participantIds.length === 0) return;
+    if (validRows.length === 0 || participantIds.length === 0 || !loggedInUser) return;
     setIsSubmitting(true);
     try {
-      const batch = writeBatch(db);
+      const now = new Date().toISOString();
+      const items = [];
       validRows.forEach(row => {
         participantIds.forEach(pid => {
-          const ref = doc(collection(db, 'schedule_events'));
-          batch.set(ref, {
+          items.push([doc(collection(db, 'schedule_events')), {
             ownerId: pid,
             customerId: '', customerName: '',
             isReminder: true, type: 'reminder',
             title: row.title, category, priority,
-            date: row.date, time: row.time, note: '',
+            date: row.date, endDate: (row.endDate && row.endDate > row.date) ? row.endDate : '',
+            time: row.time || '', endTime: row.endTime || '', note: '', address: '',
             status: 'scheduled', completedAt: null,
-            createdAt: new Date().toISOString()
-          });
+            createdById: loggedInUser.id, createdByName: loggedInUser.name, createdAt: now
+          }]);
         });
       });
-      await batch.commit();
+      await commitDocsInChunks(items);
       onClose();
     } catch (e) { console.error(e); } finally { setIsSubmitting(false); }
   };
 
   if (!isOpen) return null;
 
+  const cellInput = 'bg-transparent border border-gray-200 rounded px-1 outline-none';
+
   return (
     <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
       <div className="bg-white rounded-2xl w-full max-w-2xl shadow-2xl animate-scale-up border border-gray-100 flex flex-col max-h-[90vh]">
         <div className="p-6 border-b border-gray-100 flex justify-between items-center bg-gray-50 rounded-t-2xl">
-          <h3 className="text-lg font-bold text-gray-900">批次新增行程</h3>
+          <h3 className="text-lg font-bold text-gray-900">批次新增提醒</h3>
           <button onClick={onClose} className="p-2 hover:bg-gray-200 rounded-full transition"><X size={20} /></button>
         </div>
         <div className="p-6 overflow-y-auto flex-1 space-y-4">
           {step === 1 ? (
             <>
               <div className="bg-blue-50 p-4 rounded-lg text-xs text-blue-700 leading-relaxed border border-blue-100">
-                每行一筆，格式：<code>日期 時間(選填) 標題</code>，例如：<br />
+                每行一筆，格式：<code>日期 時間(選填) 標題</code>。日期可以寫範圍（9/11-9/13），時間也可以寫範圍（14:00-17:00），例如：<br />
                 <code>7/15 14:00 新人訓練第一堂：商品概論</code><br />
-                <code>2026-07-22 14:00 新人訓練第二堂：話術演練</code><br />
+                <code>2026-07-22 14:00-16:00 新人訓練第二堂：話術演練</code><br />
+                <code>9/11-9/13 出差高雄</code><br />
                 如果課表是照片，把照片傳給 Claude，請它幫你轉成這個格式再貼上來。
               </div>
               <textarea
@@ -5453,18 +6196,20 @@ const BatchScheduleModal = ({ isOpen, onClose, loggedInUser, team }) => {
               <div className="overflow-x-auto border border-gray-100 rounded-xl">
                 <table className="w-full text-left text-xs whitespace-nowrap">
                   <thead className="bg-gray-50 text-gray-500 font-bold uppercase">
-                    <tr><th className="px-3 py-2">日期</th><th className="px-3 py-2">時間</th><th className="px-3 py-2">標題</th><th className="px-3 py-2 w-10"></th></tr>
+                    <tr><th className="px-3 py-2">開始日</th><th className="px-3 py-2">結束日</th><th className="px-3 py-2">開始</th><th className="px-3 py-2">結束</th><th className="px-3 py-2">標題</th><th className="px-3 py-2 w-10"></th></tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {rows.map(row => (
                       <tr key={row.id}>
-                        <td className="p-2"><input type="text" placeholder="YYYY-MM-DD" className="bg-transparent border border-gray-200 rounded px-1 w-28 outline-none" value={row.date} onChange={e => updateRow(row.id, 'date', e.target.value)} /></td>
-                        <td className="p-2"><input type="text" placeholder="HH:MM" className="bg-transparent border border-gray-200 rounded px-1 w-16 outline-none" value={row.time} onChange={e => updateRow(row.id, 'time', e.target.value)} /></td>
-                        <td className="p-2"><input type="text" className="bg-transparent border border-gray-200 rounded px-1 w-full outline-none" value={row.title} onChange={e => updateRow(row.id, 'title', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" placeholder="YYYY-MM-DD" className={`${cellInput} w-28`} value={row.date} onChange={e => updateRow(row.id, 'date', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" placeholder="選填" className={`${cellInput} w-28`} value={row.endDate || ''} onChange={e => updateRow(row.id, 'endDate', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" placeholder="HH:MM" className={`${cellInput} w-16`} value={row.time || ''} onChange={e => updateRow(row.id, 'time', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" placeholder="HH:MM" className={`${cellInput} w-16`} value={row.endTime || ''} onChange={e => updateRow(row.id, 'endTime', e.target.value)} /></td>
+                        <td className="p-2"><input type="text" className={`${cellInput} w-full min-w-[140px]`} value={row.title} onChange={e => updateRow(row.id, 'title', e.target.value)} /></td>
                         <td className="p-2 text-center"><button onClick={() => removeRow(row.id)} className="text-gray-300 hover:text-red-500"><Trash2 size={14} /></button></td>
                       </tr>
                     ))}
-                    {rows.length === 0 && <tr><td colSpan="4" className="text-center py-6 text-gray-400">無法解析出任何資料，請確認格式</td></tr>}
+                    {rows.length === 0 && <tr><td colSpan="6" className="text-center py-6 text-gray-400">無法解析出任何資料，請確認格式</td></tr>}
                   </tbody>
                 </table>
               </div>
@@ -5482,28 +6227,18 @@ const BatchScheduleModal = ({ isOpen, onClose, loggedInUser, team }) => {
                   </select>
                 </div>
               </div>
-              <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">套用給哪些人（每個人各自獨立在自己的今日待辦中看到）</label>
-                <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto border border-gray-100 rounded-lg p-2">
-                  {(team || []).map(m => (
-                    <label key={m.id} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
-                      <input type="checkbox" checked={participantIds.includes(m.id)} onChange={() => toggleParticipant(m.id)} className="w-3.5 h-3.5" />
-                      {m.name}
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <p className="text-right text-xs text-gray-400">共 {rows.filter(r => r.date && r.title).length} 筆有效資料 × {participantIds.length} 人 = {rows.filter(r => r.date && r.title).length * participantIds.length} 筆行程</p>
+              <ParticipantChecklist team={team} selectedIds={participantIds} onToggle={toggleParticipant} label="參與人員（每個人各自獨立在自己的今日待辦中看到）" />
+              <p className="text-right text-xs text-gray-400">共 {validRows.length} 筆有效資料 × {participantIds.length} 人 = {validRows.length * participantIds.length} 筆提醒</p>
             </>
           )}
         </div>
         <div className="p-6 border-t border-gray-100 flex justify-end gap-3 bg-gray-50 rounded-b-2xl">
           {step === 1 ? (
-            <button onClick={handleParse} disabled={!rawText} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50">下一步：確認內容</button>
+            <button onClick={handleParse} disabled={!rawText.trim()} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50">下一步：確認內容</button>
           ) : (
             <>
               <button onClick={() => setStep(1)} className="px-6 py-2 text-gray-500 font-bold hover:bg-gray-200 rounded-lg transition">返回</button>
-              <button onClick={handleSubmit} disabled={isSubmitting || rows.filter(r => r.date && r.title).length === 0 || participantIds.length === 0} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50 flex items-center gap-2">
+              <button onClick={handleSubmit} disabled={isSubmitting || validRows.length === 0 || participantIds.length === 0} className="bg-indigo-600 text-white px-6 py-2 rounded-lg font-bold hover:bg-indigo-700 transition disabled:opacity-50 flex items-center gap-2">
                 {isSubmitting && <Loader2 className="animate-spin" size={16} />} 確認新增
               </button>
             </>
@@ -6250,6 +6985,7 @@ const WatchlistPage = ({ loggedInUser, customers }) => {
               {c.phone && <p className="text-xs text-gray-400">{c.phone}</p>}
             </div>
             <div className="flex gap-1.5 shrink-0">
+              {c.igHandle && <a href={getInstagramUrl(c.igHandle)} target="_blank" rel="noopener noreferrer" title="開啟 IG" className="bg-gradient-to-tr from-amber-400 via-pink-500 to-purple-600 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center">IG</a>}
               <button disabled={busyId === c.id} onClick={() => openContactModal(c)} className={`${s.btn} text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1`}>
                 {busyId === c.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 標記聯繫
               </button>
@@ -6501,7 +7237,7 @@ const PersonalTodoList = ({ loggedInUser }) => {
   );
 };
 
-const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick, onAddForDate, onDropOnDate, today }) => {
+const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick, onAddForDate, onDropOnDate, getEventMeta, today }) => {
   const [draggedEvent, setDraggedEvent] = useState(null);
   const [dragOverDate, setDragOverDate] = useState(null);
   const [calendarMonth, setCalendarMonth] = useState(() => today.slice(0, 7));
@@ -6516,8 +7252,16 @@ const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick,
   const eventsByDate = useMemo(() => {
     const map = {};
     events.forEach(e => {
-      if (!map[e.date]) map[e.date] = [];
-      map[e.date].push(e);
+      const last = e.endDate && e.endDate > e.date ? e.endDate : e.date;
+      let cursor = e.date;
+      let guard = 0;
+      while (cursor <= last && guard < 62) {
+        if (!map[cursor]) map[cursor] = [];
+        map[cursor].push(e);
+        const [y, m, d] = cursor.split('-').map(Number);
+        cursor = dateToStr(new Date(y, m - 1, d + 1));
+        guard++;
+      }
     });
     return map;
   }, [events]);
@@ -6605,6 +7349,7 @@ const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick,
                 {isDone ? <CheckCircle2 size={16} className="text-emerald-500 shrink-0" /> : <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${getEventColor(e)}`}></span>}
                 <span className="text-sm font-bold truncate text-gray-800">{getEventLabel(e)}</span>
                 <span className="text-sm truncate text-gray-500">{e.customerName}</span>
+                {getEventMeta && getEventMeta(e) && <span className="text-[11px] text-indigo-400 shrink-0">{getEventMeta(e)}</span>}
                 {e.time && <span className="text-xs ml-auto shrink-0 text-gray-400">{e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}
                 {canDrag && <GripVertical size={14} className="text-gray-300 shrink-0" />}
               </button>
@@ -6813,6 +7558,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
                     <p className="text-sm text-gray-400">追蹤日期：{c.nextFollowUpDate}</p>
                   </div>
                   <div className="flex gap-2 shrink-0">
+                    {c.igHandle && <a href={getInstagramUrl(c.igHandle)} target="_blank" rel="noopener noreferrer" title="開啟 IG" className="bg-gradient-to-tr from-amber-400 via-pink-500 to-purple-600 text-white text-sm font-bold px-3 py-2.5 rounded-lg flex items-center">IG</a>}
                     <button disabled={busyId === c.id} onClick={() => openContactModal(c)} className="bg-indigo-600 hover:bg-indigo-700 text-white text-sm font-bold px-4 py-2.5 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
                       {busyId === c.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 已聯繫
                     </button>
@@ -6841,6 +7587,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
                     <p className="font-bold text-gray-900 truncate">{c.name} <span className="text-xs text-gray-400 font-normal">· {(c.tags || []).join('、')}</span></p>
                   </div>
                   <div className="flex gap-2 shrink-0">
+                    {c.igHandle && <a href={getInstagramUrl(c.igHandle)} target="_blank" rel="noopener noreferrer" title="開啟 IG" className="bg-gradient-to-tr from-amber-400 via-pink-500 to-purple-600 text-white text-sm font-bold px-3 py-2.5 rounded-lg flex items-center">IG</a>}
                     <button disabled={busyId === c.id} onClick={() => openContactModal(c)} className="bg-teal-600 hover:bg-teal-700 text-white text-sm font-bold px-4 py-2.5 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
                       {busyId === c.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 標記聯繫
                     </button>
@@ -6906,7 +7653,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   const [showRecurringManage, setShowRecurringManage] = useState(false);
   const [showBatchSchedule, setShowBatchSchedule] = useState(false);
   const [showBatchActivity, setShowBatchActivity] = useState(false);
-  const emptyForm = { customerId: '', customerIds: [], type: 'appointment', date: getTodayDate(), time: '', endTime: '', note: '', priority: 'normal', address: '', participantIds: loggedInUser ? [loggedInUser.id] : [] };
+  const emptyForm = { customerId: '', customerIds: [], type: 'appointment', date: getTodayDate(), endDate: '', time: '', endTime: '', note: '', priority: 'normal', address: '', participantIds: loggedInUser ? [loggedInUser.id] : [] };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const [reminderTitle, setReminderTitle] = useState('');
@@ -6914,6 +7661,8 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   const [reminderTime, setReminderTime] = useState('');
   const [reminderEndDate, setReminderEndDate] = useState('');
   const [reminderEndTime, setReminderEndTime] = useState('');
+  const [reminderNote, setReminderNote] = useState('');
+  const [reminderAddress, setReminderAddress] = useState('');
   const [reminderCategory, setReminderCategory] = useState('personal');
   const [reminderPriority, setReminderPriority] = useState('normal');
   const [reminderSaving, setReminderSaving] = useState(false);
@@ -7001,6 +7750,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
           id: `virtual_${rule.id}_${date}`,
           isVirtual: true,
           ruleId: rule.id,
+          creatorId: rule.creatorId || '',
           customerId: '', customerName: '',
           isReminder: true, type: 'reminder',
           title: rule.title,
@@ -7019,7 +7769,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
 
   // 今日焦點：今天/過期的行程與提醒
   const isEventActiveToday = (e) => {
-    if (e.isReminder && e.endDate) return e.date <= today && today <= e.endDate;
+    if (e.endDate) return e.date <= today && today <= e.endDate;
     return e.date <= today;
   };
   const dueEvents = useMemo(() => allItems.filter(e => e.status === 'scheduled' && isEventActiveToday(e) && matchesFilter(e)).sort(sortByPriorityThenDate), [allItems, today, filterCategory, filterPriority]);
@@ -7100,7 +7850,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
       if (completingEvent.isVirtual) {
         await addDoc(collection(db, 'schedule_events'), {
           ownerId: loggedInUser.id, ruleId: completingEvent.ruleId, customerId: '', customerName: '',
-          isReminder: true, type: 'reminder', title: completingEvent.title, category: completingEvent.category, priority: completingEvent.priority,
+          isReminder: true, type: 'reminder', title: completingEvent.title, category: completingEvent.category, priority: completingEvent.priority, createdById: completingEvent.creatorId || loggedInUser.id,
           date: completingEvent.date, time: completingEvent.time, note: completingEvent.note,
           status: 'completed', completedAt: new Date().toISOString(), createdAt: new Date().toISOString()
         });
@@ -7159,8 +7909,11 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
             title: '',
             priority: form.priority,
             date: form.date,
+            endDate: (form.endDate && form.endDate > form.date) ? form.endDate : '',
             time: form.time,
             endTime: form.endTime,
+            createdById: loggedInUser.id,
+            createdByName: loggedInUser.name,
             note: form.note,
             address: form.address,
             status: 'scheduled',
@@ -7195,7 +7948,10 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
           endDate: reminderEndDate || '',
           endTime: reminderEndTime || '',
           time: reminderTime,
-          note: '',
+          note: reminderNote,
+          address: reminderAddress,
+          createdById: loggedInUser.id,
+          createdByName: loggedInUser.name,
           status: 'scheduled',
           completedAt: null,
           createdAt: new Date().toISOString()
@@ -7205,14 +7961,32 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
       setReminderTitle('');
       setReminderDate(getTodayDate());
       setReminderTime('');
-      setReminderEndTime('');
       setReminderEndDate('');
       setReminderEndTime('');
+      setReminderNote('');
+      setReminderAddress('');
       setReminderCategory('personal');
       setReminderPriority('normal');
       setReminderParticipantIds(loggedInUser ? [loggedInUser.id] : []);
       setShowReminderForm(false);
     } catch (e) { console.error(e); } finally { setReminderSaving(false); }
+  };
+
+  const [actionEvent, setActionEvent] = useState(null);
+  const handleEventTap = (event) => setActionEvent(event);
+
+  // 建檔人：新資料有記錄 createdByName；固定行程用規則建立者；舊資料沒有記錄就不顯示
+  const getCreatorName = (e) => {
+    if (e.createdByName) return e.createdByName;
+    const id = e.createdById || e.creatorId;
+    const m = id ? (team || []).find(t => t.id === id) : null;
+    return m ? m.name : '';
+  };
+  // 列表上只在「別人幫你建的」才顯示，避免每筆都掛一行；完整建檔人在點開的操作選單裡
+  const getCreatorHint = (e) => {
+    const cid = e.createdById || e.creatorId;
+    const name = getCreatorName(e);
+    return name && cid && cid !== (e.ownerId || loggedInUser?.id) ? `${name} 建檔` : '';
   };
 
   const openEditEvent = (event) => { if (event.status === 'completed') return; setEditingEvent({ ...event }); };
@@ -7229,6 +8003,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
       customerId: event.customerId || '',
       type: event.type || 'appointment',
       date: event.date || getTodayDate(),
+      endDate: event.endDate || '',
       time: event.time || '',
       endTime: event.endTime || '',
       note: event.note || '',
@@ -7246,10 +8021,10 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
     try {
       let payload;
       if (editingEvent.isReminder) {
-        payload = { title: editingEvent.title, date: editingEvent.date, endDate: editingEvent.endDate || '', endTime: editingEvent.endTime || '', time: editingEvent.time || '', category: editingEvent.category, priority: editingEvent.priority };
+        payload = { title: editingEvent.title, date: editingEvent.date, endDate: editingEvent.endDate || '', endTime: editingEvent.endTime || '', time: editingEvent.time || '', note: editingEvent.note || '', address: editingEvent.address || '', category: editingEvent.category, priority: editingEvent.priority };
       } else {
         const customer = customers.find(c => c.id === editingEvent.customerId);
-        payload = { type: editingEvent.type, customerId: editingEvent.customerId || '', customerName: customer ? customer.name : '', date: editingEvent.date, time: editingEvent.time, endTime: editingEvent.endTime || '', note: editingEvent.note, priority: editingEvent.priority, address: editingEvent.address || '' };
+        payload = { type: editingEvent.type, customerId: editingEvent.customerId || '', customerName: customer ? customer.name : '', date: editingEvent.date, endDate: editingEvent.endDate || '', time: editingEvent.time, endTime: editingEvent.endTime || '', note: editingEvent.note, priority: editingEvent.priority, address: editingEvent.address || '' };
       }
       await updateDoc(doc(db, 'schedule_events', editingEvent.id), payload);
       setEditingEvent(null);
@@ -7333,7 +8108,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
     <div className="max-w-4xl lg:max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除行程" message="確定要刪除這筆行程嗎？" />
       <BatchScheduleModal isOpen={showBatchSchedule} onClose={() => setShowBatchSchedule(false)} loggedInUser={loggedInUser} team={team} />
-      <BatchActivityImportModal isOpen={showBatchActivity} onClose={() => setShowBatchActivity(false)} loggedInUser={loggedInUser} customers={customers} />
+      <BatchActivityImportModal isOpen={showBatchActivity} onClose={() => setShowBatchActivity(false)} loggedInUser={loggedInUser} customers={customers} team={team} />
 
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
@@ -7414,7 +8189,8 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
             events={calendarEvents}
             getEventLabel={getEventLabel}
             getEventColor={getEventColor}
-            onEventClick={handleCompleteEvent}
+            onEventClick={handleEventTap}
+            getEventMeta={getCreatorHint}
             onAddForDate={(d) => { setForm({ ...emptyForm, date: d }); setShowForm(true); }}
             onDropOnDate={handleDropOnDate}
             today={today}
@@ -7431,11 +8207,11 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
           <Card className="p-5">
             <h4 className="font-bold text-gray-800 mb-4 flex items-center gap-2 text-base"><Clock size={18} className="text-indigo-500" /> 待完成行程與提醒</h4>
             {viewMode === 'timeline' ? (
-              <DayTimelineView events={dueEvents} isToday={true} onEventClick={handleCompleteEvent} getEventLabel={getEventLabel} getEventPriority={getEventPriority} />
+              <DayTimelineView events={dueEvents} isToday={true} onEventClick={handleEventTap} getEventLabel={getEventLabel} getEventPriority={getEventPriority} />
             ) : (
             <div className="space-y-3">
               {dueEvents.map(e => {
-                const isOverdue = e.date < today && !(e.isReminder && e.endDate && today <= e.endDate);
+                const isOverdue = e.date < today && !(e.endDate && today <= e.endDate);
                 return (
                 <div key={e.id} className={`flex items-center justify-between gap-3 p-4 rounded-xl border ${isOverdue ? 'bg-red-50 border-red-100' : 'bg-gray-50 border-gray-100'}`}>
                   <div className="min-w-0 flex items-center gap-3">
@@ -7445,7 +8221,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                         <p className="font-bold text-gray-900 truncate">{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</p>
                         {e.priority && e.priority !== 'normal' && <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${getEventPriority(e).color} text-white`}>{getEventPriority(e).label}</span>}
                       </div>
-                      <p className="text-sm text-gray-400">{e.date}{e.isReminder && e.endDate ? ` ~ ${e.endDate}${e.isReminder && e.endTime ? ` ${e.endTime}` : ''}` : ''}{e.time && <span className="font-bold text-gray-600"> · {e.time}{!e.isReminder && e.endTime ? `-${e.endTime}` : ''}</span>}{isOverdue ? '（已過期）' : ''}</p>
+                      <p className="text-sm text-gray-500">{formatEventWhen(e)}{isOverdue ? '（已過期）' : ''}{getCreatorHint(e) && <span className="text-xs text-indigo-400"> · {getCreatorHint(e)}</span>}</p>
                       {e.address && (
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <MapPin size={11} className="text-gray-400 shrink-0" />
@@ -7485,7 +8261,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
               {groupedByDate.map(([date, events]) => (
                 <Card key={date} className="p-5">
                   <h4 className="text-sm font-bold text-gray-500 mb-3">{date}（{getWeekdayLabel(date)}）</h4>
-                  <DayTimelineView events={events} isToday={false} onEventClick={openEditEvent} getEventLabel={getEventLabel} getEventPriority={getEventPriority} />
+                  <DayTimelineView events={events} isToday={false} onEventClick={handleEventTap} getEventLabel={getEventLabel} getEventPriority={getEventPriority} />
                 </Card>
               ))}
             </div>
@@ -7504,7 +8280,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                           {e.customerName && <span className="text-sm text-gray-400">· {e.customerName}</span>}
                           {e.priority && e.priority !== 'normal' && <span className={`text-[10px] font-bold px-1.5 py-0.5 rounded ${getEventPriority(e).color} text-white`}>{getEventPriority(e).label}</span>}
                         </div>
-                        <p className="text-sm text-gray-400 mt-1">{e.date}（{getWeekdayLabel(e.date)}）{e.time && <span className="font-bold text-gray-600"> · {e.time}{e.endTime ? `-${e.endTime}` : ''}</span>}{e.note ? ` · ${e.note}` : ''}</p>
+                        <p className="text-sm text-gray-400 mt-1">{formatEventWhen(e)}（{getWeekdayLabel(e.date)}）{e.note ? ` · ${e.note}` : ''}{getCreatorHint(e) && <span className="text-xs text-indigo-400"> · {getCreatorHint(e)}</span>}</p>
                       </div>
                       <div className="flex gap-2 shrink-0">
                         <button disabled={busyId === e.id} onClick={() => handleCompleteEvent(e)} className="bg-emerald-500 hover:bg-emerald-600 text-white text-sm font-bold px-3 py-2.5 rounded-lg transition disabled:opacity-50 flex items-center gap-1">
@@ -7624,7 +8400,10 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                   </div>
                 )}
               </div>
-              <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">開始日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" min={form.date} value={form.endDate || ''} onChange={e => setForm({ ...form, endDate: e.target.value })} /></div>
+              </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">開始時間</label><TimeSelect value={form.time} onChange={(t) => setForm({ ...form, time: t })} /></div>
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">結束時間</label><TimeSelect value={form.endTime} onChange={(t) => setForm({ ...form, endTime: t })} /></div>
@@ -7677,14 +8456,13 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
             <p className="text-xs text-gray-400 mb-4">純提醒不會計入 MEA 分數，也不會寫入客戶軌跡，單純提醒自己完成事項。</p>
             <div className="space-y-3">
               <div><label className="text-xs font-bold text-gray-500 block mb-1">提醒內容</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" placeholder="例如：交報表給總公司" value={reminderTitle} onChange={e => setReminderTitle(e.target.value)} /></div>
-              <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderDate} onChange={e => setReminderDate(e.target.value)} /></div>
-              <div><label className="text-xs font-bold text-gray-500 block mb-1">時間（選填）</label><TimeSelect value={reminderTime} onChange={setReminderTime} /></div>
-              <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填，多天的事情例如出差可以填，會整段期間都提醒）</label>
-                <div className="grid grid-cols-2 gap-2">
-                  <input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderEndDate} onChange={e => setReminderEndDate(e.target.value)} />
-                  <TimeSelect value={reminderEndTime} onChange={setReminderEndTime} />
-                </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">開始日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderDate} onChange={e => setReminderDate(e.target.value)} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填，出差等多天的事可以填）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" min={reminderDate} value={reminderEndDate} onChange={e => setReminderEndDate(e.target.value)} /></div>
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">開始時間</label><TimeSelect value={reminderTime} onChange={setReminderTime} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">結束時間</label><TimeSelect value={reminderEndTime} onChange={setReminderEndTime} /></div>
               </div>
               <div>
                 <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
@@ -7698,8 +8476,10 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                   {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
                 </select>
               </div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">地點（選填）</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderAddress} onChange={e => setReminderAddress(e.target.value)} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">備註（選填）</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-16 resize-none" value={reminderNote} onChange={e => setReminderNote(e.target.value)} /></div>
               <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">套用給哪些人（每個人各自獨立在自己的今日待辦中看到）</label>
+                <label className="text-xs font-bold text-gray-500 block mb-1">參與人員（每個人各自獨立在自己的今日待辦中看到）</label>
                 <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto border border-gray-100 rounded-lg p-2">
                   {(team || []).map(m => (
                     <label key={m.id} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
@@ -7721,6 +8501,55 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
         </div>
       )}
 
+      {/* 行程操作選單：點行程先到這裡，再選擇完成／編輯／複製／刪除，不會一碰就直接完成 */}
+      {actionEvent && (() => {
+        const e = actionEvent;
+        const done = e.status === 'completed';
+        const creator = getCreatorName(e);
+        return (
+          <div className="fixed inset-0 z-[105] flex items-end md:items-center justify-center bg-black/40" onClick={() => setActionEvent(null)}>
+            <div className="bg-white w-full md:max-w-sm rounded-t-3xl md:rounded-2xl shadow-2xl animate-scale-up p-5" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.25rem)' }} onClick={(ev) => ev.stopPropagation()}>
+              <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-4 md:hidden"></div>
+              <div className="flex items-start gap-3 mb-4">
+                <span className={`w-3 h-3 rounded-full mt-2 shrink-0 ${getEventColor(e)}`}></span>
+                <div className="min-w-0 flex-1">
+                  <p className="font-bold text-gray-900 text-lg leading-snug">{getEventLabel(e)}{e.customerName && ` · ${e.customerName}`}</p>
+                  <p className="text-sm text-gray-500 mt-0.5">{formatEventWhen(e)}{done ? '（已完成）' : ''}</p>
+                </div>
+                <button onClick={() => setActionEvent(null)} className="w-9 h-9 -mr-2 -mt-1 rounded-full flex items-center justify-center hover:bg-gray-100 shrink-0"><X size={20} /></button>
+              </div>
+              <div className="space-y-1.5 mb-5 text-sm text-gray-600">
+                {e.address && (
+                  <p className="flex items-center gap-1.5 flex-wrap">
+                    <MapPin size={14} className="text-gray-400 shrink-0" /><span>{e.address}</span>
+                    <a href={getGoogleMapsUrl(e.address)} target="_blank" rel="noopener noreferrer" className="text-[10px] bg-blue-50 text-blue-600 px-1.5 py-0.5 rounded font-bold">Google</a>
+                    <a href={getAppleMapsUrl(e.address)} target="_blank" rel="noopener noreferrer" className="text-[10px] bg-gray-100 text-gray-600 px-1.5 py-0.5 rounded font-bold">Apple</a>
+                  </p>
+                )}
+                {e.note && <p className="text-gray-500 whitespace-pre-wrap">{e.note}</p>}
+                {creator && <p className="text-xs text-gray-400">建檔人：{creator}</p>}
+              </div>
+              {done ? (
+                <button onClick={() => { setActionEvent(null); handleUndoComplete(e); }} className="w-full py-3.5 rounded-xl bg-indigo-50 text-indigo-600 font-bold">取消完成（復原成未完成）</button>
+              ) : (
+                <div className="space-y-2">
+                  <button onClick={() => { setActionEvent(null); handleCompleteEvent(e); }} className="w-full py-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold flex items-center justify-center gap-2"><CheckCircle2 size={18} /> 完成</button>
+                  {e.isVirtual ? (
+                    <p className="text-xs text-gray-400 text-center pt-1">這是固定行程自動產生的場次，要修改或刪除請到「＋」→「固定行程管理」</p>
+                  ) : (
+                    <div className={`grid gap-2 ${e.isReminder ? 'grid-cols-2' : 'grid-cols-3'}`}>
+                      <button onClick={() => { setActionEvent(null); openEditEvent(e); }} className="py-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-sm flex items-center justify-center gap-1.5"><Edit3 size={15} /> 編輯</button>
+                      {!e.isReminder && <button onClick={() => { setActionEvent(null); handleDuplicateEvent(e); }} className="py-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-sm flex items-center justify-center gap-1.5"><Copy size={15} /> 複製</button>}
+                      <button onClick={() => { setActionEvent(null); setDeleteTarget(e.id); }} className="py-3 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-sm flex items-center justify-center gap-1.5"><Trash2 size={15} /> 刪除</button>
+                    </div>
+                  )}
+                </div>
+              )}
+            </div>
+          </div>
+        );
+      })()}
+
       {/* 編輯行程/提醒 */}
       {editingEvent && (
         <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -7733,15 +8562,16 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
               {editingEvent.isReminder ? (
                 <>
                   <div><label className="text-xs font-bold text-gray-500 block mb-1">提醒內容</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.title} onChange={e => setEditingEvent({ ...editingEvent, title: e.target.value })} /></div>
-                  <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.date} onChange={e => setEditingEvent({ ...editingEvent, date: e.target.value })} /></div>
-                  <div><label className="text-xs font-bold text-gray-500 block mb-1">時間（選填）</label><TimeSelect value={editingEvent.time || ''} onChange={(t) => setEditingEvent({ ...editingEvent, time: t })} /></div>
-                  <div>
-                    <label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填，多天的事情可以填）</label>
-                    <div className="grid grid-cols-2 gap-2">
-                      <input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.endDate || ''} onChange={e => setEditingEvent({ ...editingEvent, endDate: e.target.value })} />
-                      <TimeSelect value={editingEvent.endTime || ''} onChange={(t) => setEditingEvent({ ...editingEvent, endTime: t })} />
-                    </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="text-xs font-bold text-gray-500 block mb-1">開始日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.date} onChange={e => setEditingEvent({ ...editingEvent, date: e.target.value })} /></div>
+                    <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" min={editingEvent.date} value={editingEvent.endDate || ''} onChange={e => setEditingEvent({ ...editingEvent, endDate: e.target.value })} /></div>
                   </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="text-xs font-bold text-gray-500 block mb-1">開始時間</label><TimeSelect value={editingEvent.time || ''} onChange={(t) => setEditingEvent({ ...editingEvent, time: t })} /></div>
+                    <div><label className="text-xs font-bold text-gray-500 block mb-1">結束時間</label><TimeSelect value={editingEvent.endTime || ''} onChange={(t) => setEditingEvent({ ...editingEvent, endTime: t })} /></div>
+                  </div>
+                  <div><label className="text-xs font-bold text-gray-500 block mb-1">地點（選填）</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.address || ''} onChange={e => setEditingEvent({ ...editingEvent, address: e.target.value })} /></div>
+                  <div><label className="text-xs font-bold text-gray-500 block mb-1">備註（選填）</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-16 resize-none" value={editingEvent.note || ''} onChange={e => setEditingEvent({ ...editingEvent, note: e.target.value })} /></div>
                   <div>
                     <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
                     <select className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.category} onChange={e => setEditingEvent({ ...editingEvent, category: e.target.value })}>
@@ -7762,7 +8592,10 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                     <label className="text-xs font-bold text-gray-500 block mb-1">關聯客戶（選填）</label>
                     <CustomerPicker customers={customers} value={editingEvent.customerId} onChange={(id) => setEditingEvent({ ...editingEvent, customerId: id })} onCreateNew={handleCreateCustomerInline} />
                   </div>
-                  <div><label className="text-xs font-bold text-gray-500 block mb-1">日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.date} onChange={e => setEditingEvent({ ...editingEvent, date: e.target.value })} /></div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label className="text-xs font-bold text-gray-500 block mb-1">開始日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={editingEvent.date} onChange={e => setEditingEvent({ ...editingEvent, date: e.target.value })} /></div>
+                    <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" min={editingEvent.date} value={editingEvent.endDate || ''} onChange={e => setEditingEvent({ ...editingEvent, endDate: e.target.value })} /></div>
+                  </div>
                   <div className="grid grid-cols-2 gap-3">
                     <div><label className="text-xs font-bold text-gray-500 block mb-1">開始時間</label><TimeSelect value={editingEvent.time || ''} onChange={(t) => setEditingEvent({ ...editingEvent, time: t })} /></div>
                     <div><label className="text-xs font-bold text-gray-500 block mb-1">結束時間</label><TimeSelect value={editingEvent.endTime || ''} onChange={(t) => setEditingEvent({ ...editingEvent, endTime: t })} /></div>
