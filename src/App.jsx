@@ -3436,7 +3436,186 @@ const RecruitmentDashboard = ({ recruits, team, user }) => {
 
 
 // --- Sales Entry ---
-const SalesEntry = ({ team, records, setRecords, user }) => {
+// --- 手機版：業績回報（深色玻璃風）---
+const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete, onMarkIssued, issuingId, onSearch, onBatch }) => {
+  const today = getTodayDate();
+  const thisMonth = today.slice(0, 7);
+  const [tab, setTab] = useState('overview');
+  const [month, setMonth] = useState(thisMonth);
+  const [chip, setChip] = useState('all');
+  const [sortDesc, setSortDesc] = useState(true);
+  const [agentFilter, setAgentFilter] = useState('');
+  const [showFilter, setShowFilter] = useState(false);
+  const [detail, setDetail] = useState(null);
+
+  const months = useMemo(() => {
+    const set = new Set(records.map(r => (r.date || '').slice(0, 7)).filter(Boolean));
+    set.add(thisMonth);
+    return Array.from(set).sort().reverse();
+  }, [records, thisMonth]);
+  const prevMonth = (() => { const [y, m] = month.split('-').map(Number); const d = new Date(y, m - 2, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
+
+  const ageOf = (r) => Math.max(0, Math.floor((new Date(today) - new Date(r.date)) / 86400000));
+  const stateOf = (r) => (r.status || '已發單') === '已發單' ? 'issued' : (ageOf(r) >= 15 ? 'overdue' : 'pending');
+  const STATE = {
+    issued: { label: '已發單', chip: 'bg-emerald-500/20 text-emerald-300', color: '#34d399' },
+    pending: { label: '受理中', chip: 'bg-amber-500/20 text-amber-300', color: '#fbbf24' },
+    overdue: { label: '逾期追蹤', chip: 'bg-rose-500/20 text-rose-300', color: '#fb7185' },
+  };
+
+  const inMonth = useMemo(() => records.filter(r => (r.date || '').startsWith(month)), [records, month]);
+  const prevRecs = useMemo(() => records.filter(r => (r.date || '').startsWith(prevMonth)), [records, prevMonth]);
+  const sumP = (l) => l.reduce((s, r) => s + (r.premium || 0), 0);
+  const issuedN = (l) => l.filter(r => stateOf(r) === 'issued').length;
+  const delta = (cur, prev) => prev > 0 ? Math.round((cur - prev) / prev * 100) : (cur > 0 ? 100 : 0);
+  const money = (n) => n >= 1000000 ? '$' + (n / 1000000).toFixed(2) + 'M' : '$' + Math.round(n).toLocaleString();
+  const reporters = new Set(inMonth.map(r => r.agentId)).size;
+
+  const tiles = [
+    { l: '本月回報件數', v: inMonth.length, u: '件', d: delta(inMonth.length, prevRecs.length), icon: FileText, c: 'bg-blue-500/25 text-blue-300' },
+    { l: '本月保費', v: money(sumP(inMonth)), d: delta(sumP(inMonth), sumP(prevRecs)), icon: TrendingUp, c: 'bg-emerald-500/25 text-emerald-300' },
+    { l: '已發單件數', v: issuedN(inMonth), u: '件', d: delta(issuedN(inMonth), issuedN(prevRecs)), icon: CheckCircle2, c: 'bg-amber-500/25 text-amber-300' },
+    { l: '團隊人數', v: team.length, u: '人', sub: `${reporters} 人有回報`, bar: team.length ? Math.round(reporters / team.length * 100) : 0, icon: Users, c: 'bg-violet-500/25 text-violet-300' },
+  ];
+
+  const parts = ['issued', 'pending', 'overdue'].map(k => {
+    const l = inMonth.filter(r => stateOf(r) === k);
+    return { key: k, label: STATE[k].label, color: STATE[k].color, n: l.length, p: sumP(l) };
+  });
+
+  const base = tab === 'mine' ? inMonth.filter(r => r.agentId === loggedInUser.id) : tab === 'manage' ? records.filter(r => stateOf(r) !== 'issued') : inMonth;
+  const filtered = useMemo(() => base.filter(r => (agentFilter ? r.agentId === agentFilter : true) && (chip === 'all' ? true : stateOf(r) === chip)).sort((a, b) => sortDesc ? (b.date || '').localeCompare(a.date || '') : (a.date || '').localeCompare(b.date || '')), [base, chip, sortDesc, agentFilter]);
+  const counts = { all: base.length, issued: base.filter(r => stateOf(r) === 'issued').length, pending: base.filter(r => stateOf(r) === 'pending').length, overdue: base.filter(r => stateOf(r) === 'overdue').length };
+  const todayN = records.filter(r => r.date === today).length;
+
+  const glass = 'rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl';
+
+  return (
+    <div className="md:hidden text-white">
+      <div className="flex items-start justify-between pt-1 pb-3 gap-2">
+        <div className="min-w-0">
+          <h1 className="text-[28px] font-bold tracking-tight leading-none">業績回報</h1>
+          <p className="text-[12px] text-white/50 mt-2">快速記錄與追蹤團隊案件</p>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
+          <button onClick={onSearch} aria-label="搜尋" className="w-10 h-10 rounded-full bg-white/[0.08] border border-white/10 flex items-center justify-center active:scale-95 transition"><Search size={18} /></button>
+          <button onClick={() => setShowFilter(v => !v)} aria-label="篩選" className={`w-10 h-10 rounded-full border flex items-center justify-center active:scale-95 transition ${agentFilter ? 'bg-blue-500/30 border-blue-400/40' : 'bg-white/[0.08] border-white/10'}`}><SlidersHorizontal size={17} /></button>
+        </div>
+      </div>
+      <button onClick={onAdd} className="w-full mb-3 py-3 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-500 font-bold text-[15px] flex items-center justify-center gap-1.5 shadow-lg shadow-blue-500/25 active:scale-[0.98] transition"><Plus size={18} />新增回報</button>
+
+      {showFilter && (
+        <div className={`${glass} p-3 mb-3 flex items-center gap-2`}>
+          <select value={agentFilter} onChange={e => setAgentFilter(e.target.value)} className="flex-1 rounded-xl px-3 py-2.5 text-[13px] font-bold outline-none">
+            <option value="">所有業務同仁</option>
+            {team.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+          </select>
+          {agentFilter && <button onClick={() => setAgentFilter('')} className="text-[12px] font-bold text-white/60 px-2">清除</button>}
+        </div>
+      )}
+
+      <div className="flex items-center gap-2 mb-3">
+        <div className="flex-1 flex rounded-full border border-white/10 bg-white/[0.06] p-1">
+          {[['overview', '團隊總覽'], ['mine', '我的回報'], ['manage', '案件管理']].map(([k, l]) => (
+            <button key={k} onClick={() => { setTab(k); setChip('all'); }} className={`flex-1 py-2 text-[12px] font-bold rounded-full transition whitespace-nowrap ${tab === k ? 'bg-blue-500 shadow-md shadow-blue-500/30' : 'text-white/60'}`}>{l}</button>
+          ))}
+        </div>
+        <div className="relative shrink-0">
+          <select value={month} onChange={e => setMonth(e.target.value)} className="appearance-none rounded-full border border-white/10 bg-white/[0.08] pl-3 pr-7 py-2.5 text-[12px] font-bold outline-none">
+            {months.map(m => <option key={m} value={m}>{m.replace('-', '年')}月</option>)}
+          </select>
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/50 text-[10px]">▾</span>
+        </div>
+      </div>
+
+      {tab === 'overview' && (
+        <>
+          <div className="grid grid-cols-2 gap-2.5 mb-3">
+            {tiles.map(t => { const Icon = t.icon; return (
+              <div key={t.l} className={`${glass} px-3.5 py-3`}>
+                <div className="flex items-center gap-2"><span className={`w-7 h-7 rounded-full flex items-center justify-center ${t.c}`}><Icon size={14} /></span><span className="text-[12px] text-white/70 truncate">{t.l}</span></div>
+                <p className="mt-2 leading-none"><b className="text-[24px] font-bold tabular-nums">{t.v}</b>{t.u && <span className="text-[13px] text-white/60 ml-1">{t.u}</span>}</p>
+                {t.d !== undefined && <p className={`text-[11px] mt-1.5 font-bold ${t.d >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{t.d >= 0 ? '↑' : '↓'} {Math.abs(t.d)}% <span className="text-white/40 font-normal">較上月</span></p>}
+                {t.sub && <p className="text-[11px] text-white/45 mt-1.5">{t.sub}</p>}
+                {t.bar !== undefined && <div className="h-1.5 rounded-full bg-white/10 mt-1.5 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-violet-400" style={{ width: `${t.bar}%` }}></div></div>}
+              </div>
+            ); })}
+          </div>
+          <div className="grid grid-cols-2 gap-2.5 mb-3">
+            <WarDonut title="案件狀態分佈" centerTop={inMonth.length} centerBottom="本月案件" parts={parts.map(p => ({ label: p.label, color: p.color, v: p.n, text: `${p.n} 件` }))} />
+            <WarDonut title="保費金額分佈" centerTop={money(sumP(inMonth))} centerBottom="本月保費" parts={parts.map(p => ({ label: p.label, color: p.color, v: p.p, text: money(p.p) }))} />
+          </div>
+        </>
+      )}
+
+      <div className={`${glass} p-3.5 mb-3`}>
+        <div className="flex items-center justify-between mb-2.5 gap-2">
+          <p className="text-[15px] font-bold">{tab === 'mine' ? '我的案件' : tab === 'manage' ? '待處理案件' : '團隊案件列表'}</p>
+          <button onClick={() => setSortDesc(v => !v)} className="text-[11px] font-bold text-white/65 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 whitespace-nowrap">成交日 {sortDesc ? '新→舊' : '舊→新'}</button>
+        </div>
+        <div className="flex gap-1.5 overflow-x-auto pb-2 -mx-1 px-1" style={{ scrollbarWidth: 'none' }}>
+          {[['all', '全部'], ['pending', '受理中'], ['overdue', '逾期追蹤'], ['issued', '已發單']].map(([k, l]) => (
+            <button key={k} onClick={() => setChip(k)} className={`shrink-0 flex items-center gap-1.5 px-3 py-1.5 rounded-full text-[12px] font-bold border transition ${chip === k ? 'bg-blue-500/25 border-blue-400/50 text-blue-200' : 'border-white/10 text-white/55'}`}>{l}<span className="text-[11px] opacity-80 tabular-nums">{counts[k]}</span></button>
+          ))}
+        </div>
+        {filtered.length === 0 && <p className="text-center text-[13px] text-white/40 py-8">沒有符合條件的案件</p>}
+        <div>
+          {filtered.slice(0, 40).map((r, i, arr) => {
+            const st = STATE[stateOf(r)];
+            return (
+              <button key={r.id} onClick={() => setDetail(r)} className={`w-full flex items-center gap-3 py-3 text-left ${i < arr.length - 1 ? 'border-b border-white/10' : ''}`}>
+                <span className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center text-[13px] font-bold shrink-0">{String(r.agentName || '?').charAt(0)}</span>
+                <div className="min-w-0 flex-1">
+                  <p className="text-[14px] font-bold truncate">{r.agentName}<span className="text-white/40 font-normal text-[12px]"> · {r.insuredName || '—'}</span></p>
+                  <p className="text-[11px] text-white/45 truncate">{(r.date || '').slice(5)} · {r.product || '—'}</p>
+                </div>
+                <div className="text-right shrink-0">
+                  <p className="text-[14px] font-bold tabular-nums text-blue-300">{money(r.premium || 0)}</p>
+                  <span className={`inline-block mt-0.5 text-[10px] font-bold px-2 py-0.5 rounded-full ${st.chip}`}>{st.label}</span>
+                </div>
+                <ChevronRight size={14} className="text-white/25 shrink-0" />
+              </button>
+            );
+          })}
+        </div>
+        {filtered.length > 40 && <p className="text-center text-[11px] text-white/40 pt-2">只顯示最新 40 筆，請用上方篩選縮小範圍</p>}
+      </div>
+
+      <div className="grid grid-cols-3 gap-2.5 mb-2">
+        {[['今日回報', `${todayN} 件`], ['本月累計', `${inMonth.length} 件`], ['本月保費', money(sumP(inMonth))]].map(([l, v]) => (
+          <div key={l} className={`${glass} px-3 py-3`}><p className="text-[11px] text-white/50">{l}</p><p className="text-[16px] font-bold tabular-nums mt-0.5 truncate">{v}</p></div>
+        ))}
+      </div>
+
+      {detail && (() => {
+        const r = records.find(x => x.id === detail.id) || detail;
+        const st = STATE[stateOf(r)];
+        return (
+          <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setDetail(null)}>
+            <div className="w-full max-w-md rounded-t-[28px] border-t border-white/10 bg-[#0c1020] p-5 pb-8" onClick={e => e.stopPropagation()}>
+              <div className="flex items-start justify-between gap-3 mb-4">
+                <div className="min-w-0"><p className="text-[18px] font-bold truncate">{r.agentName}</p><p className="text-[12px] text-white/45">{r.date} · {r.insuredName || '—'}</p></div>
+                <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${st.chip}`}>{st.label}</span>
+              </div>
+              <div className="rounded-2xl border border-white/10 bg-white/[0.05] divide-y divide-white/10 text-[13px]">
+                {[['商品', r.product || '—'], ['保單號碼', r.policyNumber || '—'], ['保費', formatMoney(r.premium || 0)], ['加權保費', formatMoney(r.weighted || 0)], ['ESG', r.isESG ? '是 (×1.05)' : '否']].map(([k, v]) => (
+                  <div key={k} className="flex justify-between px-4 py-2.5"><span className="text-white/50">{k}</span><span className="font-bold text-right ml-3 truncate">{v}</span></div>
+                ))}
+              </div>
+              <div className="flex gap-2.5 mt-4">
+                {r.status && r.status !== '已發單' && <button disabled={issuingId === r.id} onClick={() => { onMarkIssued(r); setDetail(null); }} className="flex-1 py-3 rounded-2xl bg-emerald-500 font-bold text-[14px] disabled:opacity-50">標記已發單</button>}
+                <button onClick={() => { onEdit(r); setDetail(null); }} className="flex-1 py-3 rounded-2xl bg-white/10 font-bold text-[14px]">編輯</button>
+                <button onClick={() => { onDelete(r.id); setDetail(null); }} className="px-5 py-3 rounded-2xl bg-rose-500/20 text-rose-300 font-bold text-[14px]">刪除</button>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+    </div>
+  );
+};
+
+const SalesEntry = ({ team, records, setRecords, user, loggedInUser, onSearch }) => {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ agentId: '', policyNumber: '', insuredName: '', product: '', typeCode: 'ah_general', premium: '', isESG: false, date: getTodayDate() });
   const [submitting, setSubmitting] = useState(false);
@@ -3444,6 +3623,7 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
   const [isBatchOpen, setIsBatchOpen] = useState(false);
   const [celebration, setCelebration] = useState(null);
   const [issuingId, setIssuingId] = useState(null);
+  const [showSheet, setShowSheet] = useState(false);
 
   const handleMarkIssued = async (record) => {
     setIssuingId(record.id);
@@ -3511,6 +3691,7 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
         setCelebration({ product: form.product, weighted: Math.round(weighted) });
       }
       setForm({ agentId: '', policyNumber: '', insuredName: '', product: '', typeCode: 'ah_general', premium: '', isESG: false, date: getTodayDate() });
+      setShowSheet(false);
     } catch (error) { console.error(error); } finally { setSubmitting(false); }
   };
 
@@ -3555,6 +3736,7 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
       isESG: record.isESG||false, 
       date: record.date 
     });
+    setShowSheet(true);
     window.scrollTo({top:0, behavior:'smooth'});
   };
 
@@ -3566,8 +3748,38 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
     } catch(e) { console.error(e); }
   };
 
+  const closeSheet = () => { setShowSheet(false); setEditingId(null); setForm({ agentId: loggedInUser ? loggedInUser.id : '', policyNumber: '', insuredName: '', product: '', typeCode: 'ah_general', premium: '', isESG: false, date: getTodayDate() }); };
+  const openAdd = () => { setEditingId(null); setForm({ agentId: loggedInUser ? loggedInUser.id : '', policyNumber: '', insuredName: '', product: '', typeCode: 'ah_general', premium: '', isESG: false, date: getTodayDate() }); setShowSheet(true); };
+  const fld = 'w-full rounded-2xl px-4 py-3 text-[15px] outline-none';
+
   return (
     <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
+      <MobileSalesEntry team={team} records={records} loggedInUser={loggedInUser || {}} onAdd={openAdd} onEdit={handleEdit} onDelete={(id) => setDeleteId(id)} onMarkIssued={handleMarkIssued} issuingId={issuingId} onSearch={onSearch} />
+      {showSheet && (
+        <div className="md:hidden fixed inset-0 z-[90] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={closeSheet}>
+          <form onSubmit={handleSubmit} className="w-full max-h-[92vh] overflow-y-auto rounded-t-[28px] border-t border-white/10 bg-[#0c1020] text-white p-5 pb-8" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-4">
+              <p className="text-[18px] font-bold">{editingId ? '修改紀錄' : '新增回報'}</p>
+              <div className="flex items-center gap-2">
+                {!editingId && <button type="button" onClick={() => { setIsBatchOpen(true); }} className="text-[12px] font-bold text-blue-300 flex items-center gap-1 px-3 py-1.5 rounded-full bg-blue-500/15"><ListPlus size={14} />批次</button>}
+                <button type="button" onClick={closeSheet} className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center"><X size={16} /></button>
+              </div>
+            </div>
+            <div className="space-y-3">
+              <div><label className="text-[11px] text-white/50 block mb-1">業務同仁</label><select className={fld} value={form.agentId} onChange={e => setForm({ ...form, agentId: e.target.value })} required><option value="">請選擇業務同仁</option>{team.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}</select></div>
+              <div><label className="text-[11px] text-white/50 block mb-1">成交日期</label><input type="date" className={fld} value={form.date} onChange={e => setForm({ ...form, date: e.target.value })} required /></div>
+              <div><label className="text-[11px] text-white/50 block mb-1">保單號碼</label><input type="text" className={fld} value={form.policyNumber} onChange={e => setForm({ ...form, policyNumber: e.target.value })} required />{duplicateRecord && <p className="text-[12px] text-rose-300 font-bold mt-1">⚠ 此保單號碼已存在（{duplicateRecord.agentName} · {duplicateRecord.date}）</p>}</div>
+              <div><label className="text-[11px] text-white/50 block mb-1">被保人</label><input type="text" className={fld} value={form.insuredName} onChange={e => setForm({ ...form, insuredName: e.target.value })} required /></div>
+              <div><label className="text-[11px] text-white/50 block mb-1">商品名稱</label><input type="text" className={fld} value={form.product} onChange={e => setForm({ ...form, product: e.target.value })} required /></div>
+              <div><label className="text-[11px] text-white/50 block mb-1">類型</label><select className={fld} value={form.typeCode} onChange={e => setForm({ ...form, typeCode: e.target.value })} required>{PRODUCT_TYPES_OPTIONS.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</select></div>
+              <div><label className="text-[11px] text-white/50 block mb-1">保費</label><input type="number" inputMode="numeric" className={fld} value={form.premium} onChange={e => setForm({ ...form, premium: e.target.value })} required /></div>
+              <label className="flex items-center gap-3 rounded-2xl bg-emerald-500/10 border border-emerald-400/25 px-4 py-3"><Leaf size={16} className="text-emerald-300" /><span className="text-[13px] font-bold text-emerald-200">ESG 專案 (×1.05)</span><input type="checkbox" checked={form.isESG} onChange={e => setForm({ ...form, isESG: e.target.checked })} className="ml-auto w-5 h-5" /></label>
+            </div>
+            <button type="submit" disabled={submitting} className="w-full mt-5 py-3.5 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-500 font-bold text-[15px] disabled:opacity-50">{submitting ? '儲存中…' : (editingId ? '更新' : '新增')}</button>
+          </form>
+        </div>
+      )}
+      <div className="hidden md:block space-y-8">
       {celebration && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[200] bg-gradient-to-r from-amber-400 to-orange-500 text-white px-6 py-4 rounded-2xl shadow-2xl animate-scale-up flex items-center gap-3">
           <span className="text-2xl">🎉</span>
@@ -3684,6 +3896,7 @@ const SalesEntry = ({ team, records, setRecords, user }) => {
           </Card>
         ))}
         {filteredRecords.length === 0 && <div className="text-center py-10 text-gray-400">沒有符合條件的紀錄</div>}
+      </div>
       </div>
     </div>
   );
@@ -4736,7 +4949,7 @@ const WarDonut = ({ title, centerTop, centerBottom, parts }) => {
           })}
         </svg>
         <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
-          <span className="text-[17px] font-bold leading-tight tabular-nums">{centerTop}</span>
+          <span className={`${String(centerTop).length > 6 ? 'text-[13px]' : 'text-[17px]'} font-bold leading-tight tabular-nums`}>{centerTop}</span>
           <span className="text-[10px] text-white/50">{centerBottom}</span>
         </div>
       </div>
@@ -8279,6 +8492,385 @@ const JfTechStyle = () => (
     .jf-nudge-in { animation: jfNudgeIn .45s cubic-bezier(.2,.8,.2,1) both }
     .jf-ring-done { animation: jfRingGlow 2.4s ease-in-out infinite }
     .jf-grid-bg { background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 28px 28px; }
+    @media (max-width: 767px) {
+      .jf-tech.jf-dark-m { color: #e6eaf5; }
+      .jf-tech.jf-dark-m .bg-white { background-color: #0d1220; }
+      .jf-tech.jf-dark-m .bg-gray-50 { background-color: #121829; }
+      .jf-tech.jf-dark-m .bg-gray-100 { background-color: #171e33; }
+      .jf-tech.jf-dark-m .bg-gray-200 { background-color: #1f2740; }
+      .jf-tech.jf-dark-m .bg-gray-300 { background-color: #2a3350; }
+      .jf-tech.jf-dark-m .bg-slate-50 { background-color: #121829; }
+      .jf-tech.jf-dark-m .bg-slate-100 { background-color: #171e33; }
+      .jf-tech.jf-dark-m .bg-slate-200 { background-color: #1f2740; }
+      .jf-tech.jf-dark-m .bg-neutral-50 { background-color: #121829; }
+      .jf-tech.jf-dark-m .bg-neutral-100 { background-color: #171e33; }
+      .jf-tech.jf-dark-m .bg-zinc-50 { background-color: #121829; }
+      .jf-tech.jf-dark-m .bg-zinc-100 { background-color: #171e33; }
+      .jf-tech.jf-dark-m .bg-gray-700 { background-color: #252f4d; }
+      .jf-tech.jf-dark-m .bg-gray-800 { background-color: #1a2340; }
+      .jf-tech.jf-dark-m .bg-gray-900 { background-color: #1a2340; }
+      .jf-tech.jf-dark-m .bg-slate-800 { background-color: #1a2340; }
+      .jf-tech.jf-dark-m .bg-slate-900 { background-color: #141b30; }
+      .jf-tech.jf-dark-m .hover\\:bg-gray-50:hover { background-color: #202a46; }
+      .jf-tech.jf-dark-m .hover\\:bg-gray-100:hover { background-color: #202a46; }
+      .jf-tech.jf-dark-m .hover\\:bg-gray-200:hover { background-color: #202a46; }
+      .jf-tech.jf-dark-m .hover\\:bg-slate-50:hover { background-color: #202a46; }
+      .jf-tech.jf-dark-m .hover\\:bg-slate-100:hover { background-color: #202a46; }
+      .jf-tech.jf-dark-m .hover\\:bg-white:hover { background-color: #151c32; }
+      .jf-tech.jf-dark-m .bg-\\[\\#F5F7FA\\] { background-color: #0a0f1d; }
+      .jf-tech.jf-dark-m .bg-\\[\\#f5f5f7\\] { background-color: #0a0f1d; }
+      .jf-tech.jf-dark-m .bg-\\[\\#f5f6fa\\] { background-color: #0a0f1d; }
+      .jf-tech.jf-dark-m .bg-\\[\\#F9FAFB\\] { background-color: #0a0f1d; }
+      .jf-tech.jf-dark-m .bg-\\[\\#fafafa\\] { background-color: #0a0f1d; }
+      .jf-tech.jf-dark-m .bg-\\[\\#f7f7f9\\] { background-color: #0a0f1d; }
+      .jf-tech.jf-dark-m .bg-\\[\\#F3F4F6\\] { background-color: #0a0f1d; }
+      .jf-tech.jf-dark-m .bg-\\[\\#f4f5f9\\] { background-color: #0a0f1d; }
+      .jf-tech.jf-dark-m .bg-white\\/60 { background-color: rgba(13,18,32,.88); }
+      .jf-tech.jf-dark-m .bg-white\\/70 { background-color: rgba(13,18,32,.88); }
+      .jf-tech.jf-dark-m .bg-white\\/80 { background-color: rgba(13,18,32,.88); }
+      .jf-tech.jf-dark-m .bg-white\\/90 { background-color: rgba(13,18,32,.88); }
+      .jf-tech.jf-dark-m .bg-white\\/95 { background-color: rgba(13,18,32,.88); }
+      .jf-tech.jf-dark-m .text-gray-900 { color: #f2f4fa; }
+      .jf-tech.jf-dark-m .text-gray-800 { color: #e6eaf5; }
+      .jf-tech.jf-dark-m .text-gray-700 { color: #d0d7ea; }
+      .jf-tech.jf-dark-m .text-gray-600 { color: #b3bcd4; }
+      .jf-tech.jf-dark-m .text-gray-500 { color: #96a1bd; }
+      .jf-tech.jf-dark-m .text-gray-400 { color: #7c88a6; }
+      .jf-tech.jf-dark-m .text-gray-300 { color: #5f6b8a; }
+      .jf-tech.jf-dark-m .text-slate-900 { color: #f2f4fa; }
+      .jf-tech.jf-dark-m .text-slate-800 { color: #e6eaf5; }
+      .jf-tech.jf-dark-m .text-slate-700 { color: #d0d7ea; }
+      .jf-tech.jf-dark-m .text-slate-600 { color: #b3bcd4; }
+      .jf-tech.jf-dark-m .text-slate-500 { color: #96a1bd; }
+      .jf-tech.jf-dark-m .text-slate-400 { color: #7c88a6; }
+      .jf-tech.jf-dark-m .text-black { color: #ffffff; }
+      .jf-tech.jf-dark-m .text-neutral-900 { color: #f2f4fa; }
+      .jf-tech.jf-dark-m .text-neutral-700 { color: #d0d7ea; }
+      .jf-tech.jf-dark-m .text-neutral-500 { color: #96a1bd; }
+      .jf-tech.jf-dark-m .hover\\:text-gray-900:hover, .jf-tech.jf-dark-m .hover\\:text-gray-700:hover, .jf-tech.jf-dark-m .hover\\:text-gray-600:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m .placeholder-gray-400::placeholder, .jf-tech.jf-dark-m .placeholder-gray-300::placeholder { color: #62708f; }
+      .jf-tech.jf-dark-m .border-gray-50 { border-color: rgba(255,255,255,.07); }
+      .jf-tech.jf-dark-m .border-gray-100 { border-color: rgba(255,255,255,.09); }
+      .jf-tech.jf-dark-m .border-gray-200 { border-color: rgba(255,255,255,.13); }
+      .jf-tech.jf-dark-m .border-gray-300 { border-color: rgba(255,255,255,.18); }
+      .jf-tech.jf-dark-m .border-slate-100 { border-color: rgba(255,255,255,.09); }
+      .jf-tech.jf-dark-m .border-slate-200 { border-color: rgba(255,255,255,.13); }
+      .jf-tech.jf-dark-m .border-white { border-color: rgba(255,255,255,.1); }
+      .jf-tech.jf-dark-m .border-black\\/\\[0\\.05\\] { border-color: rgba(255,255,255,.09); }
+      .jf-tech.jf-dark-m .border-black\\/\\[0\\.06\\] { border-color: rgba(255,255,255,.09); }
+      .jf-tech.jf-dark-m .border-black\\/5 { border-color: rgba(255,255,255,.09); }
+      .jf-tech.jf-dark-m .border-black\\/10 { border-color: rgba(255,255,255,.09); }
+      .jf-tech.jf-dark-m .divide-gray-50 > :not([hidden]) ~ :not([hidden]), .jf-tech.jf-dark-m .divide-gray-100 > :not([hidden]) ~ :not([hidden]), .jf-tech.jf-dark-m .divide-gray-200 > :not([hidden]) ~ :not([hidden]) { border-color: rgba(255,255,255,.08); }
+      .jf-tech.jf-dark-m .ring-gray-100, .jf-tech.jf-dark-m .ring-gray-200 { --tw-ring-color: rgba(255,255,255,.12); }
+      .jf-tech.jf-dark-m .bg-indigo-50 { background-color: rgba(99,102,241,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-indigo-50:hover { background-color: rgba(99,102,241,0.18); }
+      .jf-tech.jf-dark-m .bg-indigo-100 { background-color: rgba(99,102,241,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-indigo-100:hover { background-color: rgba(99,102,241,0.24); }
+      .jf-tech.jf-dark-m .bg-indigo-200 { background-color: rgba(99,102,241,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-indigo-200:hover { background-color: rgba(99,102,241,0.32); }
+      .jf-tech.jf-dark-m .border-indigo-100 { border-color: rgba(99,102,241,.32); }
+      .jf-tech.jf-dark-m .border-indigo-200 { border-color: rgba(99,102,241,.32); }
+      .jf-tech.jf-dark-m .border-indigo-300 { border-color: rgba(99,102,241,.32); }
+      .jf-tech.jf-dark-m .text-indigo-400 { color: #a5b4fc; }
+      .jf-tech.jf-dark-m .text-indigo-500 { color: #a5b4fc; }
+      .jf-tech.jf-dark-m .text-indigo-600 { color: #a5b4fc; }
+      .jf-tech.jf-dark-m .text-indigo-700 { color: #a5b4fc; }
+      .jf-tech.jf-dark-m .text-indigo-800 { color: #a5b4fc; }
+      .jf-tech.jf-dark-m .text-indigo-900 { color: #a5b4fc; }
+      .jf-tech.jf-dark-m .hover\\:text-indigo-600:hover, .jf-tech.jf-dark-m .hover\\:text-indigo-700:hover, .jf-tech.jf-dark-m .hover\\:text-indigo-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-indigo-50"], .jf-tech.jf-dark-m [class~="to-indigo-50"], .jf-tech.jf-dark-m [class~="from-indigo-100"], .jf-tech.jf-dark-m [class~="to-indigo-100"] { --tw-gradient-from: rgba(99,102,241,.14) !important; --tw-gradient-to: rgba(99,102,241,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-blue-50 { background-color: rgba(59,130,246,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-blue-50:hover { background-color: rgba(59,130,246,0.18); }
+      .jf-tech.jf-dark-m .bg-blue-100 { background-color: rgba(59,130,246,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-blue-100:hover { background-color: rgba(59,130,246,0.24); }
+      .jf-tech.jf-dark-m .bg-blue-200 { background-color: rgba(59,130,246,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-blue-200:hover { background-color: rgba(59,130,246,0.32); }
+      .jf-tech.jf-dark-m .border-blue-100 { border-color: rgba(59,130,246,.32); }
+      .jf-tech.jf-dark-m .border-blue-200 { border-color: rgba(59,130,246,.32); }
+      .jf-tech.jf-dark-m .border-blue-300 { border-color: rgba(59,130,246,.32); }
+      .jf-tech.jf-dark-m .text-blue-400 { color: #93c5fd; }
+      .jf-tech.jf-dark-m .text-blue-500 { color: #93c5fd; }
+      .jf-tech.jf-dark-m .text-blue-600 { color: #93c5fd; }
+      .jf-tech.jf-dark-m .text-blue-700 { color: #93c5fd; }
+      .jf-tech.jf-dark-m .text-blue-800 { color: #93c5fd; }
+      .jf-tech.jf-dark-m .text-blue-900 { color: #93c5fd; }
+      .jf-tech.jf-dark-m .hover\\:text-blue-600:hover, .jf-tech.jf-dark-m .hover\\:text-blue-700:hover, .jf-tech.jf-dark-m .hover\\:text-blue-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-blue-50"], .jf-tech.jf-dark-m [class~="to-blue-50"], .jf-tech.jf-dark-m [class~="from-blue-100"], .jf-tech.jf-dark-m [class~="to-blue-100"] { --tw-gradient-from: rgba(59,130,246,.14) !important; --tw-gradient-to: rgba(59,130,246,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-sky-50 { background-color: rgba(14,165,233,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-sky-50:hover { background-color: rgba(14,165,233,0.18); }
+      .jf-tech.jf-dark-m .bg-sky-100 { background-color: rgba(14,165,233,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-sky-100:hover { background-color: rgba(14,165,233,0.24); }
+      .jf-tech.jf-dark-m .bg-sky-200 { background-color: rgba(14,165,233,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-sky-200:hover { background-color: rgba(14,165,233,0.32); }
+      .jf-tech.jf-dark-m .border-sky-100 { border-color: rgba(14,165,233,.32); }
+      .jf-tech.jf-dark-m .border-sky-200 { border-color: rgba(14,165,233,.32); }
+      .jf-tech.jf-dark-m .border-sky-300 { border-color: rgba(14,165,233,.32); }
+      .jf-tech.jf-dark-m .text-sky-400 { color: #7dd3fc; }
+      .jf-tech.jf-dark-m .text-sky-500 { color: #7dd3fc; }
+      .jf-tech.jf-dark-m .text-sky-600 { color: #7dd3fc; }
+      .jf-tech.jf-dark-m .text-sky-700 { color: #7dd3fc; }
+      .jf-tech.jf-dark-m .text-sky-800 { color: #7dd3fc; }
+      .jf-tech.jf-dark-m .text-sky-900 { color: #7dd3fc; }
+      .jf-tech.jf-dark-m .hover\\:text-sky-600:hover, .jf-tech.jf-dark-m .hover\\:text-sky-700:hover, .jf-tech.jf-dark-m .hover\\:text-sky-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-sky-50"], .jf-tech.jf-dark-m [class~="to-sky-50"], .jf-tech.jf-dark-m [class~="from-sky-100"], .jf-tech.jf-dark-m [class~="to-sky-100"] { --tw-gradient-from: rgba(14,165,233,.14) !important; --tw-gradient-to: rgba(14,165,233,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-cyan-50 { background-color: rgba(6,182,212,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-cyan-50:hover { background-color: rgba(6,182,212,0.18); }
+      .jf-tech.jf-dark-m .bg-cyan-100 { background-color: rgba(6,182,212,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-cyan-100:hover { background-color: rgba(6,182,212,0.24); }
+      .jf-tech.jf-dark-m .bg-cyan-200 { background-color: rgba(6,182,212,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-cyan-200:hover { background-color: rgba(6,182,212,0.32); }
+      .jf-tech.jf-dark-m .border-cyan-100 { border-color: rgba(6,182,212,.32); }
+      .jf-tech.jf-dark-m .border-cyan-200 { border-color: rgba(6,182,212,.32); }
+      .jf-tech.jf-dark-m .border-cyan-300 { border-color: rgba(6,182,212,.32); }
+      .jf-tech.jf-dark-m .text-cyan-400 { color: #67e8f9; }
+      .jf-tech.jf-dark-m .text-cyan-500 { color: #67e8f9; }
+      .jf-tech.jf-dark-m .text-cyan-600 { color: #67e8f9; }
+      .jf-tech.jf-dark-m .text-cyan-700 { color: #67e8f9; }
+      .jf-tech.jf-dark-m .text-cyan-800 { color: #67e8f9; }
+      .jf-tech.jf-dark-m .text-cyan-900 { color: #67e8f9; }
+      .jf-tech.jf-dark-m .hover\\:text-cyan-600:hover, .jf-tech.jf-dark-m .hover\\:text-cyan-700:hover, .jf-tech.jf-dark-m .hover\\:text-cyan-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-cyan-50"], .jf-tech.jf-dark-m [class~="to-cyan-50"], .jf-tech.jf-dark-m [class~="from-cyan-100"], .jf-tech.jf-dark-m [class~="to-cyan-100"] { --tw-gradient-from: rgba(6,182,212,.14) !important; --tw-gradient-to: rgba(6,182,212,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-teal-50 { background-color: rgba(20,184,166,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-teal-50:hover { background-color: rgba(20,184,166,0.18); }
+      .jf-tech.jf-dark-m .bg-teal-100 { background-color: rgba(20,184,166,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-teal-100:hover { background-color: rgba(20,184,166,0.24); }
+      .jf-tech.jf-dark-m .bg-teal-200 { background-color: rgba(20,184,166,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-teal-200:hover { background-color: rgba(20,184,166,0.32); }
+      .jf-tech.jf-dark-m .border-teal-100 { border-color: rgba(20,184,166,.32); }
+      .jf-tech.jf-dark-m .border-teal-200 { border-color: rgba(20,184,166,.32); }
+      .jf-tech.jf-dark-m .border-teal-300 { border-color: rgba(20,184,166,.32); }
+      .jf-tech.jf-dark-m .text-teal-400 { color: #5eead4; }
+      .jf-tech.jf-dark-m .text-teal-500 { color: #5eead4; }
+      .jf-tech.jf-dark-m .text-teal-600 { color: #5eead4; }
+      .jf-tech.jf-dark-m .text-teal-700 { color: #5eead4; }
+      .jf-tech.jf-dark-m .text-teal-800 { color: #5eead4; }
+      .jf-tech.jf-dark-m .text-teal-900 { color: #5eead4; }
+      .jf-tech.jf-dark-m .hover\\:text-teal-600:hover, .jf-tech.jf-dark-m .hover\\:text-teal-700:hover, .jf-tech.jf-dark-m .hover\\:text-teal-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-teal-50"], .jf-tech.jf-dark-m [class~="to-teal-50"], .jf-tech.jf-dark-m [class~="from-teal-100"], .jf-tech.jf-dark-m [class~="to-teal-100"] { --tw-gradient-from: rgba(20,184,166,.14) !important; --tw-gradient-to: rgba(20,184,166,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-emerald-50 { background-color: rgba(16,185,129,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-emerald-50:hover { background-color: rgba(16,185,129,0.18); }
+      .jf-tech.jf-dark-m .bg-emerald-100 { background-color: rgba(16,185,129,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-emerald-100:hover { background-color: rgba(16,185,129,0.24); }
+      .jf-tech.jf-dark-m .bg-emerald-200 { background-color: rgba(16,185,129,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-emerald-200:hover { background-color: rgba(16,185,129,0.32); }
+      .jf-tech.jf-dark-m .border-emerald-100 { border-color: rgba(16,185,129,.32); }
+      .jf-tech.jf-dark-m .border-emerald-200 { border-color: rgba(16,185,129,.32); }
+      .jf-tech.jf-dark-m .border-emerald-300 { border-color: rgba(16,185,129,.32); }
+      .jf-tech.jf-dark-m .text-emerald-400 { color: #6ee7b7; }
+      .jf-tech.jf-dark-m .text-emerald-500 { color: #6ee7b7; }
+      .jf-tech.jf-dark-m .text-emerald-600 { color: #6ee7b7; }
+      .jf-tech.jf-dark-m .text-emerald-700 { color: #6ee7b7; }
+      .jf-tech.jf-dark-m .text-emerald-800 { color: #6ee7b7; }
+      .jf-tech.jf-dark-m .text-emerald-900 { color: #6ee7b7; }
+      .jf-tech.jf-dark-m .hover\\:text-emerald-600:hover, .jf-tech.jf-dark-m .hover\\:text-emerald-700:hover, .jf-tech.jf-dark-m .hover\\:text-emerald-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-emerald-50"], .jf-tech.jf-dark-m [class~="to-emerald-50"], .jf-tech.jf-dark-m [class~="from-emerald-100"], .jf-tech.jf-dark-m [class~="to-emerald-100"] { --tw-gradient-from: rgba(16,185,129,.14) !important; --tw-gradient-to: rgba(16,185,129,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-green-50 { background-color: rgba(34,197,94,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-green-50:hover { background-color: rgba(34,197,94,0.18); }
+      .jf-tech.jf-dark-m .bg-green-100 { background-color: rgba(34,197,94,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-green-100:hover { background-color: rgba(34,197,94,0.24); }
+      .jf-tech.jf-dark-m .bg-green-200 { background-color: rgba(34,197,94,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-green-200:hover { background-color: rgba(34,197,94,0.32); }
+      .jf-tech.jf-dark-m .border-green-100 { border-color: rgba(34,197,94,.32); }
+      .jf-tech.jf-dark-m .border-green-200 { border-color: rgba(34,197,94,.32); }
+      .jf-tech.jf-dark-m .border-green-300 { border-color: rgba(34,197,94,.32); }
+      .jf-tech.jf-dark-m .text-green-400 { color: #86efac; }
+      .jf-tech.jf-dark-m .text-green-500 { color: #86efac; }
+      .jf-tech.jf-dark-m .text-green-600 { color: #86efac; }
+      .jf-tech.jf-dark-m .text-green-700 { color: #86efac; }
+      .jf-tech.jf-dark-m .text-green-800 { color: #86efac; }
+      .jf-tech.jf-dark-m .text-green-900 { color: #86efac; }
+      .jf-tech.jf-dark-m .hover\\:text-green-600:hover, .jf-tech.jf-dark-m .hover\\:text-green-700:hover, .jf-tech.jf-dark-m .hover\\:text-green-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-green-50"], .jf-tech.jf-dark-m [class~="to-green-50"], .jf-tech.jf-dark-m [class~="from-green-100"], .jf-tech.jf-dark-m [class~="to-green-100"] { --tw-gradient-from: rgba(34,197,94,.14) !important; --tw-gradient-to: rgba(34,197,94,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-lime-50 { background-color: rgba(132,204,22,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-lime-50:hover { background-color: rgba(132,204,22,0.18); }
+      .jf-tech.jf-dark-m .bg-lime-100 { background-color: rgba(132,204,22,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-lime-100:hover { background-color: rgba(132,204,22,0.24); }
+      .jf-tech.jf-dark-m .bg-lime-200 { background-color: rgba(132,204,22,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-lime-200:hover { background-color: rgba(132,204,22,0.32); }
+      .jf-tech.jf-dark-m .border-lime-100 { border-color: rgba(132,204,22,.32); }
+      .jf-tech.jf-dark-m .border-lime-200 { border-color: rgba(132,204,22,.32); }
+      .jf-tech.jf-dark-m .border-lime-300 { border-color: rgba(132,204,22,.32); }
+      .jf-tech.jf-dark-m .text-lime-400 { color: #bef264; }
+      .jf-tech.jf-dark-m .text-lime-500 { color: #bef264; }
+      .jf-tech.jf-dark-m .text-lime-600 { color: #bef264; }
+      .jf-tech.jf-dark-m .text-lime-700 { color: #bef264; }
+      .jf-tech.jf-dark-m .text-lime-800 { color: #bef264; }
+      .jf-tech.jf-dark-m .text-lime-900 { color: #bef264; }
+      .jf-tech.jf-dark-m .hover\\:text-lime-600:hover, .jf-tech.jf-dark-m .hover\\:text-lime-700:hover, .jf-tech.jf-dark-m .hover\\:text-lime-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-lime-50"], .jf-tech.jf-dark-m [class~="to-lime-50"], .jf-tech.jf-dark-m [class~="from-lime-100"], .jf-tech.jf-dark-m [class~="to-lime-100"] { --tw-gradient-from: rgba(132,204,22,.14) !important; --tw-gradient-to: rgba(132,204,22,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-yellow-50 { background-color: rgba(234,179,8,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-yellow-50:hover { background-color: rgba(234,179,8,0.18); }
+      .jf-tech.jf-dark-m .bg-yellow-100 { background-color: rgba(234,179,8,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-yellow-100:hover { background-color: rgba(234,179,8,0.24); }
+      .jf-tech.jf-dark-m .bg-yellow-200 { background-color: rgba(234,179,8,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-yellow-200:hover { background-color: rgba(234,179,8,0.32); }
+      .jf-tech.jf-dark-m .border-yellow-100 { border-color: rgba(234,179,8,.32); }
+      .jf-tech.jf-dark-m .border-yellow-200 { border-color: rgba(234,179,8,.32); }
+      .jf-tech.jf-dark-m .border-yellow-300 { border-color: rgba(234,179,8,.32); }
+      .jf-tech.jf-dark-m .text-yellow-400 { color: #fde047; }
+      .jf-tech.jf-dark-m .text-yellow-500 { color: #fde047; }
+      .jf-tech.jf-dark-m .text-yellow-600 { color: #fde047; }
+      .jf-tech.jf-dark-m .text-yellow-700 { color: #fde047; }
+      .jf-tech.jf-dark-m .text-yellow-800 { color: #fde047; }
+      .jf-tech.jf-dark-m .text-yellow-900 { color: #fde047; }
+      .jf-tech.jf-dark-m .hover\\:text-yellow-600:hover, .jf-tech.jf-dark-m .hover\\:text-yellow-700:hover, .jf-tech.jf-dark-m .hover\\:text-yellow-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-yellow-50"], .jf-tech.jf-dark-m [class~="to-yellow-50"], .jf-tech.jf-dark-m [class~="from-yellow-100"], .jf-tech.jf-dark-m [class~="to-yellow-100"] { --tw-gradient-from: rgba(234,179,8,.14) !important; --tw-gradient-to: rgba(234,179,8,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-amber-50 { background-color: rgba(245,158,11,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-amber-50:hover { background-color: rgba(245,158,11,0.18); }
+      .jf-tech.jf-dark-m .bg-amber-100 { background-color: rgba(245,158,11,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-amber-100:hover { background-color: rgba(245,158,11,0.24); }
+      .jf-tech.jf-dark-m .bg-amber-200 { background-color: rgba(245,158,11,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-amber-200:hover { background-color: rgba(245,158,11,0.32); }
+      .jf-tech.jf-dark-m .border-amber-100 { border-color: rgba(245,158,11,.32); }
+      .jf-tech.jf-dark-m .border-amber-200 { border-color: rgba(245,158,11,.32); }
+      .jf-tech.jf-dark-m .border-amber-300 { border-color: rgba(245,158,11,.32); }
+      .jf-tech.jf-dark-m .text-amber-400 { color: #fcd34d; }
+      .jf-tech.jf-dark-m .text-amber-500 { color: #fcd34d; }
+      .jf-tech.jf-dark-m .text-amber-600 { color: #fcd34d; }
+      .jf-tech.jf-dark-m .text-amber-700 { color: #fcd34d; }
+      .jf-tech.jf-dark-m .text-amber-800 { color: #fcd34d; }
+      .jf-tech.jf-dark-m .text-amber-900 { color: #fcd34d; }
+      .jf-tech.jf-dark-m .hover\\:text-amber-600:hover, .jf-tech.jf-dark-m .hover\\:text-amber-700:hover, .jf-tech.jf-dark-m .hover\\:text-amber-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-amber-50"], .jf-tech.jf-dark-m [class~="to-amber-50"], .jf-tech.jf-dark-m [class~="from-amber-100"], .jf-tech.jf-dark-m [class~="to-amber-100"] { --tw-gradient-from: rgba(245,158,11,.14) !important; --tw-gradient-to: rgba(245,158,11,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-orange-50 { background-color: rgba(249,115,22,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-orange-50:hover { background-color: rgba(249,115,22,0.18); }
+      .jf-tech.jf-dark-m .bg-orange-100 { background-color: rgba(249,115,22,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-orange-100:hover { background-color: rgba(249,115,22,0.24); }
+      .jf-tech.jf-dark-m .bg-orange-200 { background-color: rgba(249,115,22,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-orange-200:hover { background-color: rgba(249,115,22,0.32); }
+      .jf-tech.jf-dark-m .border-orange-100 { border-color: rgba(249,115,22,.32); }
+      .jf-tech.jf-dark-m .border-orange-200 { border-color: rgba(249,115,22,.32); }
+      .jf-tech.jf-dark-m .border-orange-300 { border-color: rgba(249,115,22,.32); }
+      .jf-tech.jf-dark-m .text-orange-400 { color: #fdba74; }
+      .jf-tech.jf-dark-m .text-orange-500 { color: #fdba74; }
+      .jf-tech.jf-dark-m .text-orange-600 { color: #fdba74; }
+      .jf-tech.jf-dark-m .text-orange-700 { color: #fdba74; }
+      .jf-tech.jf-dark-m .text-orange-800 { color: #fdba74; }
+      .jf-tech.jf-dark-m .text-orange-900 { color: #fdba74; }
+      .jf-tech.jf-dark-m .hover\\:text-orange-600:hover, .jf-tech.jf-dark-m .hover\\:text-orange-700:hover, .jf-tech.jf-dark-m .hover\\:text-orange-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-orange-50"], .jf-tech.jf-dark-m [class~="to-orange-50"], .jf-tech.jf-dark-m [class~="from-orange-100"], .jf-tech.jf-dark-m [class~="to-orange-100"] { --tw-gradient-from: rgba(249,115,22,.14) !important; --tw-gradient-to: rgba(249,115,22,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-red-50 { background-color: rgba(239,68,68,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-red-50:hover { background-color: rgba(239,68,68,0.18); }
+      .jf-tech.jf-dark-m .bg-red-100 { background-color: rgba(239,68,68,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-red-100:hover { background-color: rgba(239,68,68,0.24); }
+      .jf-tech.jf-dark-m .bg-red-200 { background-color: rgba(239,68,68,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-red-200:hover { background-color: rgba(239,68,68,0.32); }
+      .jf-tech.jf-dark-m .border-red-100 { border-color: rgba(239,68,68,.32); }
+      .jf-tech.jf-dark-m .border-red-200 { border-color: rgba(239,68,68,.32); }
+      .jf-tech.jf-dark-m .border-red-300 { border-color: rgba(239,68,68,.32); }
+      .jf-tech.jf-dark-m .text-red-400 { color: #fca5a5; }
+      .jf-tech.jf-dark-m .text-red-500 { color: #fca5a5; }
+      .jf-tech.jf-dark-m .text-red-600 { color: #fca5a5; }
+      .jf-tech.jf-dark-m .text-red-700 { color: #fca5a5; }
+      .jf-tech.jf-dark-m .text-red-800 { color: #fca5a5; }
+      .jf-tech.jf-dark-m .text-red-900 { color: #fca5a5; }
+      .jf-tech.jf-dark-m .hover\\:text-red-600:hover, .jf-tech.jf-dark-m .hover\\:text-red-700:hover, .jf-tech.jf-dark-m .hover\\:text-red-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-red-50"], .jf-tech.jf-dark-m [class~="to-red-50"], .jf-tech.jf-dark-m [class~="from-red-100"], .jf-tech.jf-dark-m [class~="to-red-100"] { --tw-gradient-from: rgba(239,68,68,.14) !important; --tw-gradient-to: rgba(239,68,68,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-rose-50 { background-color: rgba(244,63,94,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-rose-50:hover { background-color: rgba(244,63,94,0.18); }
+      .jf-tech.jf-dark-m .bg-rose-100 { background-color: rgba(244,63,94,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-rose-100:hover { background-color: rgba(244,63,94,0.24); }
+      .jf-tech.jf-dark-m .bg-rose-200 { background-color: rgba(244,63,94,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-rose-200:hover { background-color: rgba(244,63,94,0.32); }
+      .jf-tech.jf-dark-m .border-rose-100 { border-color: rgba(244,63,94,.32); }
+      .jf-tech.jf-dark-m .border-rose-200 { border-color: rgba(244,63,94,.32); }
+      .jf-tech.jf-dark-m .border-rose-300 { border-color: rgba(244,63,94,.32); }
+      .jf-tech.jf-dark-m .text-rose-400 { color: #fda4af; }
+      .jf-tech.jf-dark-m .text-rose-500 { color: #fda4af; }
+      .jf-tech.jf-dark-m .text-rose-600 { color: #fda4af; }
+      .jf-tech.jf-dark-m .text-rose-700 { color: #fda4af; }
+      .jf-tech.jf-dark-m .text-rose-800 { color: #fda4af; }
+      .jf-tech.jf-dark-m .text-rose-900 { color: #fda4af; }
+      .jf-tech.jf-dark-m .hover\\:text-rose-600:hover, .jf-tech.jf-dark-m .hover\\:text-rose-700:hover, .jf-tech.jf-dark-m .hover\\:text-rose-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-rose-50"], .jf-tech.jf-dark-m [class~="to-rose-50"], .jf-tech.jf-dark-m [class~="from-rose-100"], .jf-tech.jf-dark-m [class~="to-rose-100"] { --tw-gradient-from: rgba(244,63,94,.14) !important; --tw-gradient-to: rgba(244,63,94,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-pink-50 { background-color: rgba(236,72,153,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-pink-50:hover { background-color: rgba(236,72,153,0.18); }
+      .jf-tech.jf-dark-m .bg-pink-100 { background-color: rgba(236,72,153,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-pink-100:hover { background-color: rgba(236,72,153,0.24); }
+      .jf-tech.jf-dark-m .bg-pink-200 { background-color: rgba(236,72,153,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-pink-200:hover { background-color: rgba(236,72,153,0.32); }
+      .jf-tech.jf-dark-m .border-pink-100 { border-color: rgba(236,72,153,.32); }
+      .jf-tech.jf-dark-m .border-pink-200 { border-color: rgba(236,72,153,.32); }
+      .jf-tech.jf-dark-m .border-pink-300 { border-color: rgba(236,72,153,.32); }
+      .jf-tech.jf-dark-m .text-pink-400 { color: #f9a8d4; }
+      .jf-tech.jf-dark-m .text-pink-500 { color: #f9a8d4; }
+      .jf-tech.jf-dark-m .text-pink-600 { color: #f9a8d4; }
+      .jf-tech.jf-dark-m .text-pink-700 { color: #f9a8d4; }
+      .jf-tech.jf-dark-m .text-pink-800 { color: #f9a8d4; }
+      .jf-tech.jf-dark-m .text-pink-900 { color: #f9a8d4; }
+      .jf-tech.jf-dark-m .hover\\:text-pink-600:hover, .jf-tech.jf-dark-m .hover\\:text-pink-700:hover, .jf-tech.jf-dark-m .hover\\:text-pink-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-pink-50"], .jf-tech.jf-dark-m [class~="to-pink-50"], .jf-tech.jf-dark-m [class~="from-pink-100"], .jf-tech.jf-dark-m [class~="to-pink-100"] { --tw-gradient-from: rgba(236,72,153,.14) !important; --tw-gradient-to: rgba(236,72,153,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-fuchsia-50 { background-color: rgba(217,70,239,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-fuchsia-50:hover { background-color: rgba(217,70,239,0.18); }
+      .jf-tech.jf-dark-m .bg-fuchsia-100 { background-color: rgba(217,70,239,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-fuchsia-100:hover { background-color: rgba(217,70,239,0.24); }
+      .jf-tech.jf-dark-m .bg-fuchsia-200 { background-color: rgba(217,70,239,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-fuchsia-200:hover { background-color: rgba(217,70,239,0.32); }
+      .jf-tech.jf-dark-m .border-fuchsia-100 { border-color: rgba(217,70,239,.32); }
+      .jf-tech.jf-dark-m .border-fuchsia-200 { border-color: rgba(217,70,239,.32); }
+      .jf-tech.jf-dark-m .border-fuchsia-300 { border-color: rgba(217,70,239,.32); }
+      .jf-tech.jf-dark-m .text-fuchsia-400 { color: #f0abfc; }
+      .jf-tech.jf-dark-m .text-fuchsia-500 { color: #f0abfc; }
+      .jf-tech.jf-dark-m .text-fuchsia-600 { color: #f0abfc; }
+      .jf-tech.jf-dark-m .text-fuchsia-700 { color: #f0abfc; }
+      .jf-tech.jf-dark-m .text-fuchsia-800 { color: #f0abfc; }
+      .jf-tech.jf-dark-m .text-fuchsia-900 { color: #f0abfc; }
+      .jf-tech.jf-dark-m .hover\\:text-fuchsia-600:hover, .jf-tech.jf-dark-m .hover\\:text-fuchsia-700:hover, .jf-tech.jf-dark-m .hover\\:text-fuchsia-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-fuchsia-50"], .jf-tech.jf-dark-m [class~="to-fuchsia-50"], .jf-tech.jf-dark-m [class~="from-fuchsia-100"], .jf-tech.jf-dark-m [class~="to-fuchsia-100"] { --tw-gradient-from: rgba(217,70,239,.14) !important; --tw-gradient-to: rgba(217,70,239,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-purple-50 { background-color: rgba(168,85,247,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-purple-50:hover { background-color: rgba(168,85,247,0.18); }
+      .jf-tech.jf-dark-m .bg-purple-100 { background-color: rgba(168,85,247,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-purple-100:hover { background-color: rgba(168,85,247,0.24); }
+      .jf-tech.jf-dark-m .bg-purple-200 { background-color: rgba(168,85,247,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-purple-200:hover { background-color: rgba(168,85,247,0.32); }
+      .jf-tech.jf-dark-m .border-purple-100 { border-color: rgba(168,85,247,.32); }
+      .jf-tech.jf-dark-m .border-purple-200 { border-color: rgba(168,85,247,.32); }
+      .jf-tech.jf-dark-m .border-purple-300 { border-color: rgba(168,85,247,.32); }
+      .jf-tech.jf-dark-m .text-purple-400 { color: #d8b4fe; }
+      .jf-tech.jf-dark-m .text-purple-500 { color: #d8b4fe; }
+      .jf-tech.jf-dark-m .text-purple-600 { color: #d8b4fe; }
+      .jf-tech.jf-dark-m .text-purple-700 { color: #d8b4fe; }
+      .jf-tech.jf-dark-m .text-purple-800 { color: #d8b4fe; }
+      .jf-tech.jf-dark-m .text-purple-900 { color: #d8b4fe; }
+      .jf-tech.jf-dark-m .hover\\:text-purple-600:hover, .jf-tech.jf-dark-m .hover\\:text-purple-700:hover, .jf-tech.jf-dark-m .hover\\:text-purple-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-purple-50"], .jf-tech.jf-dark-m [class~="to-purple-50"], .jf-tech.jf-dark-m [class~="from-purple-100"], .jf-tech.jf-dark-m [class~="to-purple-100"] { --tw-gradient-from: rgba(168,85,247,.14) !important; --tw-gradient-to: rgba(168,85,247,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-violet-50 { background-color: rgba(139,92,246,.10); }
+      .jf-tech.jf-dark-m .hover\\:bg-violet-50:hover { background-color: rgba(139,92,246,0.18); }
+      .jf-tech.jf-dark-m .bg-violet-100 { background-color: rgba(139,92,246,.16); }
+      .jf-tech.jf-dark-m .hover\\:bg-violet-100:hover { background-color: rgba(139,92,246,0.24); }
+      .jf-tech.jf-dark-m .bg-violet-200 { background-color: rgba(139,92,246,.24); }
+      .jf-tech.jf-dark-m .hover\\:bg-violet-200:hover { background-color: rgba(139,92,246,0.32); }
+      .jf-tech.jf-dark-m .border-violet-100 { border-color: rgba(139,92,246,.32); }
+      .jf-tech.jf-dark-m .border-violet-200 { border-color: rgba(139,92,246,.32); }
+      .jf-tech.jf-dark-m .border-violet-300 { border-color: rgba(139,92,246,.32); }
+      .jf-tech.jf-dark-m .text-violet-400 { color: #c4b5fd; }
+      .jf-tech.jf-dark-m .text-violet-500 { color: #c4b5fd; }
+      .jf-tech.jf-dark-m .text-violet-600 { color: #c4b5fd; }
+      .jf-tech.jf-dark-m .text-violet-700 { color: #c4b5fd; }
+      .jf-tech.jf-dark-m .text-violet-800 { color: #c4b5fd; }
+      .jf-tech.jf-dark-m .text-violet-900 { color: #c4b5fd; }
+      .jf-tech.jf-dark-m .hover\\:text-violet-600:hover, .jf-tech.jf-dark-m .hover\\:text-violet-700:hover, .jf-tech.jf-dark-m .hover\\:text-violet-500:hover { color: #ffffff; }
+      .jf-tech.jf-dark-m [class~="from-violet-50"], .jf-tech.jf-dark-m [class~="to-violet-50"], .jf-tech.jf-dark-m [class~="from-violet-100"], .jf-tech.jf-dark-m [class~="to-violet-100"] { --tw-gradient-from: rgba(139,92,246,.14) !important; --tw-gradient-to: rgba(139,92,246,.05) !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m [class~="from-white"], .jf-tech.jf-dark-m [class~="to-white"], .jf-tech.jf-dark-m [class~="from-gray-50"], .jf-tech.jf-dark-m [class~="to-gray-50"] { --tw-gradient-from: #121829 !important; --tw-gradient-to: #0d1220 !important; --tw-gradient-stops: var(--tw-gradient-from), var(--tw-gradient-to) !important; }
+      .jf-tech.jf-dark-m .bg-white.text-gray-900, .jf-tech.jf-dark-m .bg-white.text-black { background-color: #ffffff; color: #111827; }
+      .jf-tech.jf-dark-m .bg-indigo-600, .jf-tech.jf-dark-m .bg-indigo-500 { background-color: #4f6df5; }
+      .jf-tech.jf-dark-m .hover\\:bg-indigo-700:hover, .jf-tech.jf-dark-m .hover\\:bg-indigo-600:hover { background-color: #3f58e0; }
+      .jf-tech.jf-dark-m .border-indigo-500, .jf-tech.jf-dark-m .border-t-indigo-500, .jf-tech.jf-dark-m .border-indigo-200 { border-color: #6d7cf7; }
+      .jf-tech.jf-dark-m .text-indigo-600, .jf-tech.jf-dark-m .text-indigo-700, .jf-tech.jf-dark-m .text-indigo-500 { color: #a5b4fc; }
+      .jf-tech.jf-dark-m .bg-indigo-50, .jf-tech.jf-dark-m .bg-indigo-100 { background-color: rgba(99,102,241,.16); }
+      .jf-tech.jf-dark-m input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), .jf-tech.jf-dark-m select, .jf-tech.jf-dark-m textarea { background-color: #0a0f1d; color: #eef1fa; border-color: rgba(255,255,255,.14); color-scheme: dark; }
+      .jf-tech.jf-dark-m input::placeholder, .jf-tech.jf-dark-m textarea::placeholder { color: #62708f; }
+      .jf-tech.jf-dark-m option { background-color: #0d1220; color: #eef1fa; }
+      .jf-tech.jf-dark-m input:focus, .jf-tech.jf-dark-m select:focus, .jf-tech.jf-dark-m textarea:focus { border-color: #6d8bff; box-shadow: 0 0 0 3px rgba(109,139,255,.18); }
+      .jf-tech.jf-dark-m input[type="checkbox"], .jf-tech.jf-dark-m input[type="radio"] { color-scheme: dark; accent-color: #5b7cff; }
+      .jf-tech.jf-dark-m .recharts-cartesian-grid line { stroke: rgba(255,255,255,.08); }
+      .jf-tech.jf-dark-m .recharts-cartesian-axis-tick-value, .jf-tech.jf-dark-m .recharts-polar-angle-axis-tick-value { fill: #8d98b5; }
+      .jf-tech.jf-dark-m .recharts-default-tooltip { background-color: #0d1220 !important; border: 1px solid rgba(255,255,255,.14) !important; border-radius: 12px !important; }
+      .jf-tech.jf-dark-m .recharts-tooltip-label, .jf-tech.jf-dark-m .recharts-tooltip-item { color: #e6eaf5 !important; }
+      .jf-tech.jf-dark-m .recharts-legend-item-text { color: #b3bcd4 !important; }
+      .jf-tech.jf-dark-m .recharts-tooltip-cursor { fill: rgba(255,255,255,.05); }
+      .jf-tech.jf-dark-m ::-webkit-scrollbar { width: 0; height: 0; }
+    }
   `}</style>
 );
 
@@ -11500,10 +12092,10 @@ const App = () => {
   }
 
   return (
-    <div className={`jf-tech ${activeTab === 'todo' ? 'jf-dark' : ''} ${(activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'jf-dark-m' : ''} min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8 relative`}>
+    <div className={`jf-tech ${activeTab === 'todo' ? 'jf-dark' : ''} jf-dark-m min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8 relative`}>
       <JfTechStyle />
       {(activeTab === 'todo' || activeTab === 'warroom') && <div className={`fixed inset-0 pointer-events-none ${activeTab === 'todo' ? '' : 'md:hidden'}`} style={{ backgroundColor: '#05070f', backgroundImage: 'linear-gradient(180deg, rgba(5,7,15,0) 0%, rgba(5,7,15,.35) 38%, rgba(5,7,15,.82) 100%), url(/bg-mountain.jpg), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%)', backgroundSize: 'cover, cover, auto', backgroundPosition: 'top center', backgroundRepeat: 'no-repeat' }}></div>}
-      {(activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') && <div className="fixed inset-0 pointer-events-none md:hidden" style={{ background: 'radial-gradient(ellipse 70% 40% at 85% 6%, rgba(251,146,60,.34), transparent 60%), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%), radial-gradient(ellipse 90% 40% at 50% 100%, rgba(99,102,241,.14), transparent 60%)' }}></div>}
+      {(activeTab !== 'todo' && activeTab !== 'warroom') && <div className="fixed inset-0 pointer-events-none md:hidden" style={{ background: 'radial-gradient(ellipse 70% 40% at 85% 6%, rgba(251,146,60,.34), transparent 60%), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%), radial-gradient(ellipse 90% 40% at 50% 100%, rgba(99,102,241,.14), transparent 60%)' }}></div>}
       <DailyNudge loggedInUser={loggedInUser} activities={activities} onGo={setActiveTab} />
       {/* 桌機版：完整頂部導覽（Logo、置中分頁選單、使用者資訊） */}
       <nav className="hidden md:block sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-white/20 shadow-sm overflow-x-auto">
@@ -11556,9 +12148,9 @@ const App = () => {
       </nav>
 
       {/* 手機版：極簡頂部列，只有目前頁面標題＋搜尋＋登出，其餘導覽交給底部列 */}
-      <div className={`${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100`}>
+      <div className={`${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry'].includes(activeTab) ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-[#070914]/90 backdrop-blur-xl border-b border-white/10`}>
         <div className="h-14 px-4 flex items-center justify-between">
-          <h1 className="text-base font-bold text-gray-900">{currentNavItem?.label || '極豐通訊處'}</h1>
+          <h1 className="text-base font-bold text-white">{currentNavItem?.label || '極豐通訊處'}</h1>
           <div className="flex items-center gap-1">
             <button onClick={() => setShowGlobalSearch(true)} className="w-9 h-9 rounded-full flex items-center justify-center text-gray-400 active:bg-gray-100 transition"><Search size={18} /></button>
             <button onClick={handleLogout} className="w-9 h-9 rounded-full flex items-center justify-center text-gray-400 active:bg-red-50 transition"><LogOut size={18} /></button>
@@ -11569,7 +12161,7 @@ const App = () => {
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
-      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
+      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry'].includes(activeTab) ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
@@ -11579,7 +12171,7 @@ const App = () => {
         {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} isManagerViewer={isTeamScheduleViewer} />}
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} loggedInUser={loggedInUser} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} onSearch={() => setShowGlobalSearch(true)} />}
-        {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} />}
+        {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} loggedInUser={loggedInUser} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'team' && <OrgChart team={team} recruits={recruits} />}
         {activeTab === 'recruitment' && <RecruitmentDashboard recruits={recruits} team={team} user={user} />}
         {activeTab === 'wiki' && <KnowledgeBase loggedInUser={loggedInUser} isManagerViewer={isTeamScheduleViewer} />}
@@ -11588,7 +12180,7 @@ const App = () => {
       </main>
 
       {/* 手機版底部導覽列：4個常用分頁＋更多，App感的核心 */}
-      <nav className={`md:hidden fixed bottom-0 left-0 right-0 z-50 backdrop-blur-2xl border-t ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'bg-[#070914]/85 border-white/10' : 'bg-white/80 border-black/[0.06]'}`} style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
+      <nav className={`md:hidden fixed bottom-0 left-0 right-0 z-50 backdrop-blur-2xl border-t ${true ? 'bg-[#070914]/85 border-white/10' : 'bg-white/80 border-black/[0.06]'}`} style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
         <div className="flex items-stretch">
           {primaryNavItems.map(item => {
             const ItemIcon = item.icon;
@@ -11599,8 +12191,8 @@ const App = () => {
                 onClick={() => setActiveTab(item.id)}
                 className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1"
               >
-                <ItemIcon size={22} className={active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-white/35' : 'text-gray-300')} />
-                <span className={`text-[10px] ${active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-white/40' : 'text-gray-400')}`}>{item.label}</span>
+                <ItemIcon size={22} className={active ? (true ? 'text-blue-400' : 'text-gray-900') : (true ? 'text-white/35' : 'text-gray-300')} />
+                <span className={`text-[10px] ${active ? (true ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : (true ? 'text-white/40' : 'text-gray-400')}`}>{item.label}</span>
                 {!!item.badge && (
                   <span className="absolute top-1 right-1/4 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1">{item.badge > 99 ? '99+' : item.badge}</span>
                 )}
@@ -11608,9 +12200,9 @@ const App = () => {
             );
           })}
           <button onClick={() => setShowMoreSheet(true)} className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1">
-            <LayoutGrid size={22} className={isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-white/35' : 'text-gray-300')} />
+            <LayoutGrid size={22} className={isMoreActive ? (true ? 'text-blue-400' : 'text-gray-900') : (true ? 'text-white/35' : 'text-gray-300')} />
             {moreNavItems.some(i => i.badge) && <span className="absolute top-2 right-[28%] w-2.5 h-2.5 bg-red-500 rounded-full"></span>}
-            <span className={`text-[10px] ${isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-white/40' : 'text-gray-400')}`}>更多</span>
+            <span className={`text-[10px] ${isMoreActive ? (true ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : (true ? 'text-white/40' : 'text-gray-400')}`}>更多</span>
           </button>
         </div>
       </nav>
