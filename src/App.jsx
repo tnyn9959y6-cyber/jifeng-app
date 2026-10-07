@@ -2463,452 +2463,7 @@ const shadeHex = (hex, amt) => {
   return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
 };
 
-const orgLeafRings = (n) => {
-  const rings = [];
-  let left = n, k = 0;
-  while (left > 0) {
-    const r = 46 + k * 26;
-    const cap = Math.max(5, Math.floor((2 * Math.PI * r) / 30));
-    const take = Math.min(left, cap);
-    rings.push({ r, take });
-    left -= take;
-    k++;
-  }
-  return rings;
-};
-
-const buildOrgLayout = (team, focusId) => {
-  const byId = {};
-  team.forEach(m => { byId[String(m.id)] = m; });
-  const childrenOf = {};
-  const parentOf = {};
-  const roots = [];
-  team.forEach(m => {
-    const pid = m.parentId ? String(m.parentId) : '';
-    if (pid && pid !== '0' && pid !== String(m.id) && byId[pid]) {
-      if (!childrenOf[pid]) childrenOf[pid] = [];
-      childrenOf[pid].push(m);
-      parentOf[String(m.id)] = pid;
-    } else roots.push(m);
-  });
-  const sortMembers = (arr) => [...arr].sort((a, b) => orgRankIdx(a.role) - orgRankIdx(b.role) || String(a.name).localeCompare(String(b.name), 'zh-Hant'));
-
-  // 循環保護：如果資料裡有人互相當對方的主管，至少讓他們都出現在圖上
-  const reached = new Set();
-  const reach = (m) => { if (reached.has(String(m.id))) return; reached.add(String(m.id)); (childrenOf[String(m.id)] || []).forEach(reach); };
-  roots.forEach(reach);
-  team.forEach(m => { if (!reached.has(String(m.id))) { roots.push(m); reach(m); } });
-
-  const used = new Set();
-  const buildNode = (m, depth) => {
-    used.add(String(m.id));
-    const kids = sortMembers((childrenOf[String(m.id)] || []).filter(k => !used.has(String(k.id))));
-    const leaves = [];
-    const hubMembers = [];
-    kids.forEach(k => {
-      if ((childrenOf[String(k.id)] || []).length > 0) hubMembers.push(k);
-      else { leaves.push(k); used.add(String(k.id)); }
-    });
-    return { m, depth, leaves, hubs: hubMembers.filter(h => !used.has(String(h.id))).map(h => buildNode(h, depth + 1)) };
-  };
-
-  const focusM = focusId ? byId[String(focusId)] : null;
-  let top;
-  if (focusM) top = buildNode(focusM, 0);
-  else if (roots.length === 1) top = buildNode(roots[0], 0);
-  else {
-    const sortedRoots = sortMembers(roots);
-    const rootHubs = sortedRoots.filter(r => (childrenOf[String(r.id)] || []).length > 0);
-    const rootLeaves = sortedRoots.filter(r => !(childrenOf[String(r.id)] || []).length);
-    rootLeaves.forEach(r => used.add(String(r.id)));
-    top = { m: null, depth: 0, leaves: rootLeaves, hubs: rootHubs.map(r => buildNode(r, 1)) };
-  }
-
-  const footOf = (node) => {
-    const rings = orgLeafRings(node.leaves.length);
-    const last = rings.length ? rings[rings.length - 1].r : 0;
-    const own = node.m ? orgStyleOf(node.m.role).r : 40;
-    return Math.max(own + 18, last + 22, 34);
-  };
-  const computeSpan = (node) => {
-    node.foot = footOf(node);
-    node.hubs.forEach(computeSpan);
-    const own = node.foot * 2 + 16;
-    const sum = node.hubs.reduce((s, h) => s + h.span, 0);
-    node.span = Math.max(own, sum);
-  };
-  computeSpan(top);
-  const assignX = (node, start) => {
-    const sum = node.hubs.reduce((s, h) => s + h.span, 0);
-    let cursor = start + (node.span - sum) / 2;
-    node.hubs.forEach(h => { assignX(h, cursor); cursor += h.span; });
-    node.x = node.hubs.length ? (node.hubs[0].x + node.hubs[node.hubs.length - 1].x) / 2 : start + node.span / 2;
-  };
-  const W = Math.max(1, top.hubs.reduce((s, h) => s + h.span, 0));
-  let cursorX = 0;
-  top.hubs.forEach(h => { assignX(h, cursorX); cursorX += h.span; });
-
-  const maxFoot = {};
-  const walkFoot = (n) => { maxFoot[n.depth] = Math.max(maxFoot[n.depth] || 0, n.foot); n.hubs.forEach(walkFoot); };
-  walkFoot(top);
-  const maxDepth = Math.max(0, ...Object.keys(maxFoot).map(Number));
-  const R = [0];
-  for (let d = 1; d <= maxDepth; d++) {
-    R[d] = Math.max(W / (2 * Math.PI), R[d - 1] + (maxFoot[d - 1] || 40) + (maxFoot[d] || 40) + 30);
-  }
-
-  const hubNodes = [];
-  const leafNodes = [];
-  const links = [];
-  const place = (n, parent) => {
-    if (n.depth === 0) { n.px = 0; n.py = 0; n.angle = 0; }
-    else {
-      n.angle = (n.x / W) * Math.PI * 2 - Math.PI / 2;
-      n.px = R[n.depth] * Math.cos(n.angle);
-      n.py = R[n.depth] * Math.sin(n.angle);
-    }
-    hubNodes.push(n);
-    if (parent) links.push({ from: parent, to: n });
-    const rings = orgLeafRings(n.leaves.length);
-    n.rings = rings;
-    let idx = 0;
-    rings.forEach((ring, ri) => {
-      for (let j = 0; j < ring.take; j++) {
-        const a = (j / ring.take) * Math.PI * 2 + ri * 0.5 + (n.angle || 0);
-        leafNodes.push({ m: n.leaves[idx++], parent: n, px: n.px + ring.r * Math.cos(a), py: n.py + ring.r * Math.sin(a) });
-      }
-    });
-    n.hubs.forEach(h => place(h, n));
-  };
-  place(top, null);
-
-  const half = Math.max(260, ...hubNodes.map(n => Math.hypot(n.px, n.py) + n.foot)) + 70;
-  return { top, hubNodes, leafNodes, links, half, R, childrenOf, parentOf, byId };
-};
-
-const CountUp = ({ value, className }) => {
-  const [n, setN] = useState(0);
-  useEffect(() => {
-    let raf;
-    const start = performance.now();
-    const tick = (t) => {
-      const p = Math.min(1, (t - start) / 900);
-      setN(Math.round(value * (1 - Math.pow(1 - p, 3))));
-      if (p < 1) raf = requestAnimationFrame(tick);
-    };
-    raf = requestAnimationFrame(tick);
-    return () => cancelAnimationFrame(raf);
-  }, [value]);
-  return <span className={className}>{n}</span>;
-};
-
-const OrgGalaxy = ({ team, onGoManage }) => {
-  const [focusId, setFocusId] = useState(null);
-  const [selectedId, setSelectedId] = useState(null);
-  const [zoom, setZoom] = useState(() => (typeof window !== 'undefined' && window.innerWidth < 640 ? 2.2 : 1));
-  const [box, setBox] = useState({ w: 0, h: 0 });
-  const scrollRef = useRef(null);
-
-  const layout = useMemo(() => buildOrgLayout(team, focusId), [team, focusId]);
-  const { top, hubNodes, leafNodes, links, half, childrenOf, parentOf, byId } = layout;
-  const S = half * 2;
-
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el || typeof ResizeObserver === 'undefined') return;
-    const ro = new ResizeObserver(() => setBox({ w: el.clientWidth, h: el.clientHeight }));
-    ro.observe(el);
-    setBox({ w: el.clientWidth, h: el.clientHeight });
-    return () => ro.disconnect();
-  }, []);
-
-  const base = Math.max(280, Math.min(box.w || 600, box.h || 600));
-  const svgPx = Math.round(base * zoom);
-  const unit = S / svgPx; // 1 畫面像素 = 幾個圖上單位
-
-  // 縮放或換團隊時，把畫面捲到正中央
-  useEffect(() => {
-    const el = scrollRef.current;
-    if (!el) return;
-    requestAnimationFrame(() => {
-      el.scrollLeft = (el.scrollWidth - el.clientWidth) / 2;
-      el.scrollTop = (el.scrollHeight - el.clientHeight) / 2;
-    });
-  }, [zoom, focusId, svgPx]);
-
-  const stars = useMemo(() => {
-    let seed = 11;
-    const rnd = () => { seed = (seed * 16807) % 2147483647; return seed / 2147483647; };
-    return Array.from({ length: 120 }, (_, i) => ({
-      x: (rnd() * 2 - 1) * half,
-      y: (rnd() * 2 - 1) * half,
-      r: (0.5 + rnd() * 1.1) * (half / 600),
-      d: (i % 9) * 0.55,
-      t: 2.6 + (i % 5) * 0.7
-    }));
-  }, [half]);
-
-  const total = team.length;
-  const managerCount = team.filter(m => MANAGER_RANKS.includes(m.role)).length;
-  const groupCount = team.filter(m => (childrenOf[String(m.id)] || []).length > 0).length;
-
-  const selected = selectedId ? byId[selectedId] : null;
-  const chain = useMemo(() => {
-    const set = new Set();
-    let cur = selectedId;
-    let guard = 0;
-    while (cur && guard < 20) { set.add(cur); cur = parentOf[cur]; guard++; }
-    return set;
-  }, [selectedId, parentOf]);
-
-  const countDescendants = (id) => {
-    const seen = new Set([id]);
-    const stack = [...(childrenOf[id] || [])];
-    let c = 0;
-    while (stack.length) {
-      const x = stack.pop();
-      const xi = String(x.id);
-      if (seen.has(xi)) continue;
-      seen.add(xi);
-      c++;
-      (childrenOf[xi] || []).forEach(k => stack.push(k));
-    }
-    return c;
-  };
-
-  const isNewStar = (m) => {
-    const d = m?.promotionDates?.registered;
-    if (!d) return false;
-    const diff = (new Date() - new Date(d)) / 86400000;
-    return diff >= 0 && diff <= 365;
-  };
-
-  const labelSize = Math.min(30, Math.max(12, 12.5 * unit));
-  const showLeafNames = zoom >= 1.6;
-  const gradDefs = [...Object.keys(ORG_RANK_STYLE).map((k, i) => ({ id: `og-g-${i}`, color: ORG_RANK_STYLE[k].color })), { id: 'og-g-x', color: '#94a3b8' }];
-
-  const selectMember = (id) => setSelectedId(String(id));
-
-  const renderPlanetBody = (m, r, selectedNow) => {
-    const st = orgStyleOf(m.role);
-    return (
-      <>
-        <circle r={r + 9} fill={st.color} opacity="0.13" className="og-pulse" />
-        {st.ring && <ellipse rx={r * 1.95} ry={r * 0.52} transform="rotate(-18)" fill="none" stroke={st.color} strokeWidth="2.2" opacity="0.75" />}
-        <circle r={r} fill={`url(#${orgGradId(m.role)})`} stroke="rgba(255,255,255,0.6)" strokeWidth="1.2" />
-        <text textAnchor="middle" dy="0.35em" fontSize={Math.max(10, r * 0.95)} fontWeight="700" fill="#fff">{String(m.name).charAt(0)}</text>
-        {isNewStar(m) && <text x={r * 0.75} y={-r * 0.55} fontSize={r * 0.9} fill="#fde68a">✦</text>}
-        {selectedNow && <circle r={r + 8} fill="none" stroke="#fff" strokeWidth="2" strokeDasharray="5 5" className="og-spin" />}
-      </>
-    );
-  };
-
-  if (team.length === 0) {
-    return <Card className="p-10 text-center text-gray-400">還沒有任何成員</Card>;
-  }
-
-  return (
-    <div className="space-y-4">
-      <div>
-        <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">組織架構</h2>
-        <p className="text-sm text-gray-400 md:mt-1">吳政翰這一區的星圖：每一顆行星是一位主管，環繞的衛星是他帶的組員；點任何一顆看介紹</p>
-      </div>
-
-      <div className="relative rounded-3xl overflow-hidden border border-slate-800 shadow-lg" style={{ background: 'radial-gradient(ellipse at 25% 15%, rgba(99,102,241,0.30), transparent 52%), radial-gradient(ellipse at 80% 75%, rgba(168,85,247,0.24), transparent 55%), radial-gradient(ellipse at 50% 100%, rgba(251,146,60,0.10), transparent 50%), #050816' }}>
-        <style>{`
-          @keyframes ogTwinkle { 0%,100% { opacity: .2 } 50% { opacity: 1 } }
-          @keyframes ogPulse { 0%,100% { transform: scale(1); opacity: .16 } 50% { transform: scale(1.3); opacity: .04 } }
-          @keyframes ogDash { to { stroke-dashoffset: -48 } }
-          @keyframes ogSpin { to { transform: rotate(360deg) } }
-          .og-twinkle { animation: ogTwinkle 3.5s ease-in-out infinite }
-          .og-pulse { transform-box: fill-box; transform-origin: center; animation: ogPulse 3.4s ease-in-out infinite }
-          .og-flow { animation: ogDash 3.2s linear infinite }
-          .og-spin { transform-box: fill-box; transform-origin: center; animation: ogSpin 9s linear infinite }
-        `}</style>
-
-        <div ref={scrollRef} className="overflow-auto h-[68vh] min-h-[440px]" style={{ WebkitOverflowScrolling: 'touch' }}>
-          <svg width={svgPx} height={svgPx} viewBox={`${-half} ${-half} ${S} ${S}`} style={{ display: 'block', margin: '0 auto' }} onClick={() => setSelectedId(null)}>
-            <defs>
-              {gradDefs.map(g => (
-                <radialGradient key={g.id} id={g.id} cx="35%" cy="30%" r="75%">
-                  <stop offset="0%" stopColor={shadeHex(g.color, 70)} />
-                  <stop offset="55%" stopColor={g.color} />
-                  <stop offset="100%" stopColor={shadeHex(g.color, -70)} />
-                </radialGradient>
-              ))}
-              <radialGradient id="og-core" cx="50%" cy="50%" r="50%">
-                <stop offset="0%" stopColor="#fffbeb" />
-                <stop offset="45%" stopColor="#fbbf24" />
-                <stop offset="100%" stopColor="#b45309" />
-              </radialGradient>
-            </defs>
-
-            {stars.map((s, i) => (
-              <circle key={i} cx={s.x} cy={s.y} r={s.r} fill="#fff" className="og-twinkle" style={{ animationDelay: `${s.d}s`, animationDuration: `${s.t}s` }} />
-            ))}
-
-            {/* 軌道：每位主管身邊的衛星軌道 */}
-            {hubNodes.map((n, i) => (n.rings || []).map((ring, ri) => (
-              <circle key={`ring-${i}-${ri}`} cx={n.px} cy={n.py} r={ring.r} fill="none" stroke={n.m ? orgStyleOf(n.m.role).color : '#fbbf24'} strokeOpacity="0.2" strokeWidth="1" strokeDasharray="2 7" />
-            )))}
-
-            {/* 主管之間的連線 */}
-            {links.map((l, i) => {
-              const color = l.to.m ? orgStyleOf(l.to.m.role).color : '#94a3b8';
-              const lit = l.to.m && chain.has(String(l.to.m.id));
-              const pr = Math.hypot(l.from.px, l.from.py);
-              const cx = pr * Math.cos(l.to.angle);
-              const cy = pr * Math.sin(l.to.angle);
-              return (
-                <path key={`link-${i}`} d={`M ${l.from.px} ${l.from.py} Q ${cx} ${cy} ${l.to.px} ${l.to.py}`} fill="none" stroke={color} strokeOpacity={lit ? 0.95 : 0.4} strokeWidth={lit ? 2.6 : 1.5} strokeDasharray="7 7" className="og-flow" />
-              );
-            })}
-
-            {/* 衛星（組員） */}
-            {leafNodes.map(lf => {
-              const st = orgStyleOf(lf.m.role);
-              const r = Math.max(9, st.r * 0.62);
-              const on = selectedId === String(lf.m.id);
-              return (
-                <g key={`leaf-${lf.m.id}`} transform={`translate(${lf.px} ${lf.py})`} style={{ cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); selectMember(lf.m.id); }}>
-                  <line x1={lf.parent.px - lf.px} y1={lf.parent.py - lf.py} x2="0" y2="0" stroke={orgStyleOf(lf.parent.m?.role).color} strokeOpacity="0.14" strokeWidth="1" />
-                  <circle r={r + 7} fill="transparent" />
-                  <circle r={r} fill={`url(#${orgGradId(lf.m.role)})`} stroke={on ? '#fff' : 'rgba(255,255,255,0.45)'} strokeWidth={on ? 2 : 1} />
-                  <text textAnchor="middle" dy="0.35em" fontSize={Math.max(9, r * 0.95)} fontWeight="700" fill="#fff">{String(lf.m.name).charAt(0)}</text>
-                  {isNewStar(lf.m) && <text x={r * 0.7} y={-r * 0.5} fontSize={r * 0.9} fill="#fde68a">✦</text>}
-                  {(showLeafNames || on) && <text y={r + labelSize * 0.95} textAnchor="middle" fontSize={labelSize * 0.82} fill="#cbd5e1" style={{ paintOrder: 'stroke', stroke: '#050816', strokeWidth: labelSize * 0.3, strokeLinejoin: 'round' }}>{lf.m.name}</text>}
-                </g>
-              );
-            })}
-
-            {/* 行星（主管）與中央恆星 */}
-            {hubNodes.map((n) => {
-              if (n.depth === 0) {
-                const m = n.m;
-                const on = m && selectedId === String(m.id);
-                return (
-                  <g key="core" transform={`translate(${n.px} ${n.py})`} style={{ cursor: m ? 'pointer' : 'default' }} onClick={(e) => { e.stopPropagation(); if (m) selectMember(m.id); }}>
-                    <circle r="64" fill="#fbbf24" opacity="0.10" className="og-pulse" />
-                    <circle r="50" fill="#fbbf24" opacity="0.14" className="og-pulse" style={{ animationDelay: '1s' }} />
-                    <ellipse rx="66" ry="17" transform="rotate(-18)" fill="none" stroke="#fde68a" strokeWidth="2.4" opacity="0.7" />
-                    <circle r="38" fill="url(#og-core)" stroke="rgba(255,255,255,0.7)" strokeWidth="1.5" />
-                    <text textAnchor="middle" dy="0.35em" fontSize="30" fontWeight="800" fill="#7c2d12">{m ? String(m.name).charAt(0) : '極'}</text>
-                    {on && <circle r="48" fill="none" stroke="#fff" strokeWidth="2.4" strokeDasharray="6 6" className="og-spin" />}
-                    <text y={38 + labelSize * 1.15} textAnchor="middle" fontSize={labelSize * 1.1} fontWeight="700" fill="#fef3c7" style={{ paintOrder: 'stroke', stroke: '#050816', strokeWidth: labelSize * 0.35, strokeLinejoin: 'round' }}>{m ? m.name : '極豐通訊處'}</text>
-                  </g>
-                );
-              }
-              const m = n.m;
-              const st = orgStyleOf(m.role);
-              const on = selectedId === String(m.id);
-              return (
-                <g key={`hub-${m.id}`} transform={`translate(${n.px} ${n.py})`} style={{ cursor: 'pointer' }} onClick={(e) => { e.stopPropagation(); selectMember(m.id); }}>
-                  {renderPlanetBody(m, st.r, on)}
-                  <text y={st.r + labelSize * 1.05} textAnchor="middle" fontSize={labelSize} fontWeight="700" fill="#f1f5f9" style={{ paintOrder: 'stroke', stroke: '#050816', strokeWidth: labelSize * 0.32, strokeLinejoin: 'round' }}>{m.name}</text>
-                </g>
-              );
-            })}
-          </svg>
-        </div>
-
-        {/* 左上：會跳動的總數 */}
-        <div className="absolute top-3 left-3 flex flex-wrap gap-2 pointer-events-none max-w-[70%]">
-          {[['全隊', total, '人'], ['主管', managerCount, '位'], ['團隊', groupCount, '組']].map(([label, val, suffix]) => (
-            <div key={label} className="bg-white/10 backdrop-blur-md border border-white/15 rounded-xl px-3 py-1.5 text-white">
-              <p className="text-[10px] text-white/60 leading-none">{label}</p>
-              <p className="leading-tight"><CountUp value={val} className="text-lg font-bold" /><span className="text-xs text-white/70 ml-0.5">{suffix}</span></p>
-            </div>
-          ))}
-        </div>
-
-        {/* 右上：縮放 */}
-        <div className="absolute top-3 right-3 flex flex-col gap-2">
-          <button onClick={(e) => { e.stopPropagation(); setZoom(z => Math.min(5, +(z * 1.35).toFixed(2))); }} className="w-10 h-10 rounded-full bg-white/15 backdrop-blur-md border border-white/20 text-white text-xl font-bold flex items-center justify-center">+</button>
-          <button onClick={(e) => { e.stopPropagation(); setZoom(z => Math.max(0.6, +(z / 1.35).toFixed(2))); }} className="w-10 h-10 rounded-full bg-white/15 backdrop-blur-md border border-white/20 text-white text-xl font-bold flex items-center justify-center">−</button>
-          <button onClick={(e) => { e.stopPropagation(); setZoom(typeof window !== 'undefined' && window.innerWidth < 640 ? 2.2 : 1); setSelectedId(null); }} className="w-10 h-10 rounded-full bg-white/15 backdrop-blur-md border border-white/20 text-white text-[11px] font-bold flex items-center justify-center">重置</button>
-        </div>
-
-        {focusId && byId[focusId] && (
-          <button onClick={() => { setFocusId(null); setSelectedId(null); }} className="absolute bottom-3 left-3 bg-amber-400 text-amber-950 text-xs font-bold px-3 py-2 rounded-full shadow flex items-center gap-1.5">
-            只看 {byId[focusId].name} 的團隊　<X size={13} />
-          </button>
-        )}
-
-        {/* 介紹卡 */}
-        {selected && (() => {
-          const st = orgStyleOf(selected.role);
-          const pid = parentOf[String(selected.id)];
-          const parent = pid ? byId[pid] : null;
-          const kids = (childrenOf[String(selected.id)] || []).slice().sort((a, b) => orgRankIdx(a.role) - orgRankIdx(b.role));
-          const promos = Object.entries(PROMOTION_LABELS).filter(([k]) => selected.promotionDates && selected.promotionDates[k]).map(([k, label]) => ({ label, date: selected.promotionDates[k] })).sort((a, b) => String(a.date).localeCompare(String(b.date)));
-          return (
-            <div className="absolute left-3 right-3 bottom-3 md:left-auto md:right-4 md:bottom-4 md:w-80 bg-slate-900/90 backdrop-blur-xl border border-white/15 rounded-2xl p-4 text-white shadow-2xl max-h-[60%] overflow-y-auto" onClick={(e) => e.stopPropagation()}>
-              <div className="flex items-start gap-3">
-                <span className="w-12 h-12 rounded-full flex items-center justify-center text-xl font-bold text-white shrink-0" style={{ background: `radial-gradient(circle at 35% 30%, ${shadeHex(st.color, 70)}, ${st.color} 55%, ${shadeHex(st.color, -70)})` }}>{String(selected.name).charAt(0)}</span>
-                <div className="min-w-0 flex-1">
-                  <p className="font-bold text-lg leading-tight">{selected.name}{isNewStar(selected) && <span className="text-amber-300 ml-1">✦</span>}</p>
-                  <span className="inline-block text-xs font-bold mt-1 px-2 py-0.5 rounded-full" style={{ background: `${st.color}33`, color: st.color }}>{selected.role}</span>
-                </div>
-                <button onClick={() => setSelectedId(null)} className="w-8 h-8 -mr-1 rounded-full hover:bg-white/10 flex items-center justify-center shrink-0"><X size={18} /></button>
-              </div>
-              <div className="grid grid-cols-3 gap-2 mt-4 text-center">
-                <div className="bg-white/5 rounded-xl py-2"><p className="text-lg font-bold">{kids.length}</p><p className="text-[10px] text-white/60">直屬人數</p></div>
-                <div className="bg-white/5 rounded-xl py-2"><p className="text-lg font-bold">{countDescendants(String(selected.id))}</p><p className="text-[10px] text-white/60">團隊總人數</p></div>
-                <div className="bg-white/5 rounded-xl py-2"><p className="text-lg font-bold">{chain.size}</p><p className="text-[10px] text-white/60">傳承層級</p></div>
-              </div>
-              <div className="mt-4 text-sm space-y-2">
-                <p className="flex gap-2"><span className="text-white/50 shrink-0">直屬主管</span>{parent ? <button onClick={() => selectMember(parent.id)} className="font-bold text-amber-300 underline underline-offset-2">{parent.name}（{parent.role}）</button> : <span className="text-white/70">最上層</span>}</p>
-                {promos.length > 0 && (
-                  <div>
-                    <p className="text-white/50 mb-1">晉升紀錄</p>
-                    <div className="space-y-1">
-                      {promos.map((p, i) => <p key={i} className="flex justify-between text-white/85"><span>{p.label}</span><span className="text-white/50">{p.date}</span></p>)}
-                    </div>
-                  </div>
-                )}
-                {kids.length > 0 && (
-                  <div>
-                    <p className="text-white/50 mb-1.5">帶領的夥伴</p>
-                    <div className="flex flex-wrap gap-1.5">
-                      {kids.map(k => <button key={k.id} onClick={() => selectMember(k.id)} className="text-xs font-bold px-2.5 py-1 rounded-full bg-white/10 hover:bg-white/20">{k.name}</button>)}
-                    </div>
-                  </div>
-                )}
-              </div>
-              <div className="flex gap-2 mt-4">
-                {kids.length > 0 && focusId !== String(selected.id) && (
-                  <button onClick={() => { setFocusId(String(selected.id)); setSelectedId(null); }} className="flex-1 bg-amber-400 hover:bg-amber-300 text-amber-950 font-bold text-sm py-2.5 rounded-xl">只看他的團隊</button>
-                )}
-                {onGoManage && <button onClick={onGoManage} className="flex-1 bg-white/10 hover:bg-white/20 text-white font-bold text-sm py-2.5 rounded-xl">到管理頁編輯</button>}
-              </div>
-            </div>
-          );
-        })()}
-      </div>
-
-      <div className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-gray-500 justify-center">
-        {Object.entries(ORG_RANK_STYLE).map(([role, st]) => (
-          <span key={role} className="flex items-center gap-1.5"><span className="w-3 h-3 rounded-full" style={{ background: st.color }}></span>{role}</span>
-        ))}
-        <span className="flex items-center gap-1.5"><span className="text-amber-400">✦</span>登錄一年內的新星</span>
-      </div>
-    </div>
-  );
-};
-
-const OrgChart = ({ team, recruits }) => {
-  const [view, setView] = useState('galaxy');
-  const districtTeam = useMemo(() => getDistrictMembers(team, '吳政翰'), [team]);
-  return (
-    <div>
-      <div className="flex gap-1 bg-gray-100 p-0.5 rounded-lg w-fit mx-auto mb-5">
-        <button onClick={() => setView('galaxy')} className={`px-5 py-2 rounded-md text-sm font-bold transition ${view === 'galaxy' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>星圖</button>
-        <button onClick={() => setView('manage')} className={`px-5 py-2 rounded-md text-sm font-bold transition ${view === 'manage' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>成員管理</button>
-      </div>
-      {view === 'galaxy' ? <OrgGalaxy team={districtTeam} onGoManage={() => setView('manage')} /> : <OrgChartManage team={team} recruits={recruits} />}
-    </div>
-  );
-};
+const OrgChart = ({ team, recruits }) => <OrgChartManage team={team} recruits={recruits} />;
 
 const OrgChartManage = ({ team, recruits }) => {
   const [editMember, setEditMember] = useState(null);
@@ -7231,7 +6786,7 @@ const BatchScheduleModal = ({ isOpen, onClose, loggedInUser, team }) => {
                   </select>
                 </div>
               </div>
-              <ParticipantChecklist team={team} selectedIds={participantIds} onToggle={toggleParticipant} label="參與人員（每個人各自獨立在自己的今日待辦中看到）" />
+              <ParticipantChecklist team={team} selectedIds={participantIds} onToggle={toggleParticipant} label="參與人員（可複選）" />
               <p className="text-right text-xs text-gray-400">共 {validRows.length} 筆有效資料 × {participantIds.length} 人 = {validRows.length * participantIds.length} 筆提醒</p>
             </>
           )}
@@ -8480,6 +8035,7 @@ const JfTechStyle = () => (
   <style>{`
     .jf-tech { background: #f5f5f7; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang TC", "Noto Sans TC", "Helvetica Neue", sans-serif; -webkit-font-smoothing: antialiased; letter-spacing: -0.005em; }
     .jf-tech h1, .jf-tech h2, .jf-tech h3 { letter-spacing: -0.02em; }
+    html, body { touch-action: manipulation; -webkit-text-size-adjust: 100%; overscroll-behavior-y: none; }
     .jf-tech.jf-dark { background: #05070f; }
     @media (max-width: 767px) { .jf-tech.jf-dark-m { background: #05070f; } }
     .jf-tech .bg-indigo-600, .jf-tech .bg-indigo-500 { background-color: #111114; }
@@ -8858,7 +8414,13 @@ const JfTechStyle = () => (
       .jf-tech.jf-dark-m .border-indigo-500, .jf-tech.jf-dark-m .border-t-indigo-500, .jf-tech.jf-dark-m .border-indigo-200 { border-color: #6d7cf7; }
       .jf-tech.jf-dark-m .text-indigo-600, .jf-tech.jf-dark-m .text-indigo-700, .jf-tech.jf-dark-m .text-indigo-500 { color: #a5b4fc; }
       .jf-tech.jf-dark-m .bg-indigo-50, .jf-tech.jf-dark-m .bg-indigo-100 { background-color: rgba(99,102,241,.16); }
-      .jf-tech.jf-dark-m input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), .jf-tech.jf-dark-m select, .jf-tech.jf-dark-m textarea { background-color: #0a0f1d; color: #eef1fa; border-color: rgba(255,255,255,.14); color-scheme: dark; }
+      .jf-tech.jf-dark-m input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]):not(.bg-transparent), .jf-tech.jf-dark-m select:not(.bg-transparent), .jf-tech.jf-dark-m textarea:not(.bg-transparent) { background-color: rgba(255,255,255,.09); color: #eef1fa; border: 1px solid rgba(255,255,255,.22); color-scheme: dark; }
+      .jf-tech.jf-dark-m input:not([type="checkbox"]):not([type="radio"]):not([type="range"]):not([type="file"]):not([type="color"]), .jf-tech.jf-dark-m select, .jf-tech.jf-dark-m textarea { font-size: 16px; }
+      .jf-tech.jf-dark-m input[type="date"], .jf-tech.jf-dark-m input[type="month"], .jf-tech.jf-dark-m input[type="time"], .jf-tech.jf-dark-m input[type="datetime-local"] { display: block; width: 100%; min-width: 0; max-width: 100%; box-sizing: border-box; -webkit-appearance: none; appearance: none; min-height: 44px; text-align: left; }
+      .jf-tech.jf-dark-m select { min-width: 0; max-width: 100%; min-height: 42px; text-overflow: ellipsis; }
+      .jf-tech.jf-dark-m .grid > * { min-width: 0; }
+      .jf-tech.jf-dark-m label { overflow-wrap: anywhere; }
+      .jf-tech.jf-dark-m option { color: #eef1fa; }
       .jf-tech.jf-dark-m input::placeholder, .jf-tech.jf-dark-m textarea::placeholder { color: #62708f; }
       .jf-tech.jf-dark-m option { background-color: #0d1220; color: #eef1fa; }
       .jf-tech.jf-dark-m input:focus, .jf-tech.jf-dark-m select:focus, .jf-tech.jf-dark-m textarea:focus { border-color: #6d8bff; box-shadow: 0 0 0 3px rgba(109,139,255,.18); }
@@ -9501,7 +9063,6 @@ const TodayHome = ({ loggedInUser, activities, team, records, isTeamScheduleView
         </div>
       </div>
 
-      {isTeamScheduleViewer && <TeamTargetBoard team={team} activities={activities} records={records} rootName="吳政翰" />}
     </div>
   );
 };
@@ -9818,7 +9379,7 @@ const calGroupKey = (e) => {
   return 'activity';
 };
 
-const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearch, onFilter, filterActive, addItemsFor, getEventLabel, teamToggle }) => {
+const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearch, onFilter, filterActive, addItemsFor, getEventLabel, teamToggle, teamMode }) => {
   const [mode, setMode] = useState('month');
   const [selectedDay, setSelectedDay] = useState(today);
   const [chip, setChip] = useState('all');
@@ -9965,7 +9526,11 @@ const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearc
                     {sub && <p className="text-[14px] text-white/70 mt-1 flex items-center gap-1.5 truncate"><Users size={14} className="shrink-0 text-white/50" />{sub}</p>}
                     {e.address && <p className="text-[13px] text-white/50 mt-1 flex items-center gap-1.5 truncate"><MapPin size={13} className="shrink-0" />{e.address}</p>}
                   </div>
-                  <span className="w-10 h-10 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-sm font-semibold shrink-0">{isDone ? '✓' : (e.customerName ? String(e.customerName).charAt(0) : <Users size={16} />)}</span>
+                  {teamMode ? (
+                    <span className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 border" style={e._creator ? { background: `${e._creatorColor}33`, borderColor: `${e._creatorColor}99`, color: e._creatorColor } : { background: 'rgba(255,255,255,.08)', borderColor: 'rgba(255,255,255,.12)' }} title={e._creator ? `${e._creator} 建檔` : ''}>{e._creator ? String(e._creator).charAt(0) : <Users size={16} />}</span>
+                  ) : (
+                    <span className="w-10 h-10 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-sm font-semibold shrink-0">{isDone ? '✓' : (e.customerName ? String(e.customerName).charAt(0) : <Users size={16} />)}</span>
+                  )}
                   <ChevronRight size={18} className="text-white/35 shrink-0" />
                 </div>
               </button>
@@ -10061,20 +9626,7 @@ const MobileCustomerList = ({ list, total, counts, quick, setQuick, search, setS
                   <div className="flex items-center gap-1.5">
                     <span className="text-[11px] text-white/50 whitespace-nowrap">上次聯繫 <b className={lc ? (lc.diff <= 0 ? 'text-emerald-300' : lc.diff <= 7 ? 'text-amber-300' : 'text-rose-300') : 'text-white/40'}>{lc ? lc.text : '無'}</b></span>
                     <button onClick={() => onToggleWatch(c)} aria-label="關注"><Star size={19} className={c.specialFocus ? 'fill-amber-400 text-amber-400' : 'text-white/35'} /></button>
-                    <div className="relative">
-                      <button onClick={() => setMenuId(menuId === c.id ? null : c.id)} aria-label="更多" className="p-0.5"><MoreVertical size={19} className="text-white/60" /></button>
-                      {menuId === c.id && (
-                        <>
-                          <div className="fixed inset-0 z-40" onClick={() => setMenuId(null)}></div>
-                          <div className="absolute right-0 mt-1 w-40 rounded-2xl bg-[#0d1124]/95 backdrop-blur-2xl border border-white/10 py-1.5 z-50 shadow-2xl">
-                            <button onClick={() => { onNetwork(c.id); setMenuId(null); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left text-sm"><GitBranch size={15} className="text-violet-300" />關聯網</button>
-                            <button onClick={() => { onMerge(c.id); setMenuId(null); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left text-sm"><Users size={15} className="text-teal-300" />合併客戶</button>
-                            <button onClick={() => { onOpenEdit(c); setMenuId(null); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left text-sm"><Edit3 size={15} className="text-sky-300" />編輯</button>
-                            <button onClick={() => { onDelete(c.id); setMenuId(null); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left text-sm text-rose-300"><Trash2 size={15} />刪除</button>
-                          </div>
-                        </>
-                      )}
-                    </div>
+                    <button onClick={() => setMenuId(c.id)} aria-label="更多" className="p-0.5"><MoreVertical size={19} className="text-white/60" /></button>
                   </div>
                   <div className="flex items-center gap-1.5">
                     {c.phone ? <a href={`tel:${c.phone}`} aria-label="撥打電話" className={circ}><Phone size={16} /></a> : <span className={`${circ} opacity-30`}><Phone size={16} /></span>}
@@ -10091,6 +9643,30 @@ const MobileCustomerList = ({ list, total, counts, quick, setQuick, search, setS
         {list.length === 0 && <p className="text-center text-white/45 py-14 text-sm">{total === 0 ? '還沒有客戶資料，點右下角「＋」開始建立' : '沒有符合條件的客戶'}</p>}
         {list.length > visible && <button onClick={() => setVisible(v => v + 40)} className={`${glass} w-full rounded-2xl py-3.5 text-sm font-semibold text-white/80`}>載入更多（還有 {list.length - visible} 位）</button>}
       </div>
+
+      {menuId && (() => {
+        const c = list.find(x => x.id === menuId);
+        if (!c) return null;
+        const items = [
+          { l: '關聯網', Icon: GitBranch, cls: 'text-violet-300', f: () => onNetwork(c.id) },
+          { l: '合併客戶', Icon: Users, cls: 'text-teal-300', f: () => onMerge(c.id) },
+          { l: '編輯', Icon: Edit3, cls: 'text-sky-300', f: () => onOpenEdit(c) },
+          { l: '刪除', Icon: Trash2, cls: 'text-rose-300', f: () => onDelete(c.id) },
+        ];
+        return (
+          <div className="fixed inset-0 z-[120] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setMenuId(null)}>
+            <div className="w-full max-w-md rounded-t-[28px] border-t border-white/10 bg-[#0c1020] text-white p-4" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.25rem)' }} onClick={e => e.stopPropagation()}>
+              <p className="text-center text-[15px] font-bold mb-3">{c.name}</p>
+              <div className="space-y-2">
+                {items.map(it => (
+                  <button key={it.l} onClick={() => { setMenuId(null); it.f(); }} className="w-full flex items-center gap-3 px-4 py-3.5 rounded-2xl bg-white/[0.07] text-left active:bg-white/15"><it.Icon size={18} className={it.cls} /><span className={`text-[15px] font-semibold ${it.l === '刪除' ? 'text-rose-300' : ''}`}>{it.l}</span></button>
+                ))}
+              </div>
+              <button onClick={() => setMenuId(null)} className="w-full mt-3 py-3.5 rounded-2xl bg-white/10 font-bold text-[15px]">取消</button>
+            </div>
+          </div>
+        );
+      })()}
 
       {fab && <div className="fixed inset-0 z-40" onClick={() => setFab(false)}></div>}
       {fab && (
@@ -10156,6 +9732,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   };
   const [filterPriority, setFilterPriority] = useState('');
   const [showTeamView, setShowTeamView] = useState(false);
+  const [mobTeam, setMobTeam] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showFilterPanel, setShowFilterPanel] = useState(false);
   const VIEW_MODE_ORDER = ['timeline', 'calendar', 'list'];
@@ -10297,6 +9874,29 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
     });
     return Object.entries(byDate).sort((a, b) => a[0].localeCompare(b[0]));
   }, [teamScheduleEvents, team, isTeamScheduleViewer, today]);
+
+  // 手機版「團隊」檢視：吳政翰看全部；其他人看「吳政翰的分類行程(去識別)」與自己的直屬業務員
+  const rootMember = useMemo(() => (team || []).find(m => m.name === '吳政翰'), [team]);
+  const CREATOR_COLORS = ['#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa', '#fb923c', '#22d3ee', '#f87171', '#a3e635', '#e879f9'];
+  const colorOfPerson = (id) => { let h = 0; String(id || '').split('').forEach(ch => { h = (h * 31 + ch.charCodeAt(0)) >>> 0; }); return CREATOR_COLORS[h % CREATOR_COLORS.length]; };
+  const teamDisplayEvents = useMemo(() => {
+    if (!loggedInUser) return [];
+    const directIds = new Set((team || []).filter(m => m.parentId && String(m.parentId) === String(loggedInUser.id)).map(m => m.id));
+    const out = [];
+    (teamScheduleEvents || []).forEach(e => {
+      if (e.status !== 'scheduled' && e.status !== 'completed') return;
+      const owner = (team || []).find(m => m.id === e.ownerId);
+      const creatorId = e.createdById || e.ownerId;
+      const creator = e.createdByName || (team || []).find(m => m.id === creatorId)?.name || (owner ? owner.name : '');
+      if (isTeamScheduleViewer || directIds.has(e.ownerId)) {
+        const who = owner ? owner.name : '未知同仁';
+        out.push({ ...e, customerName: e.customerName ? `${who} · ${e.customerName}` : who, _team: true, _creator: creator, _creatorColor: colorOfPerson(creatorId) });
+      } else if (rootMember && e.ownerId === rootMember.id) {
+        out.push({ id: e.id, status: e.status, date: e.date, endDate: e.endDate || '', time: e.time || '', endTime: e.endTime || '', type: e.type, isReminder: !!e.isReminder, category: e.category, priority: e.priority, title: e.isReminder ? (REMINDER_CATEGORIES[e.category]?.label || '提醒') : '', customerName: '', address: '', note: '', _team: true, _creator: '', _masked: true });
+      }
+    });
+    return out;
+  }, [teamScheduleEvents, team, loggedInUser, isTeamScheduleViewer, rootMember]);
 
   const completedRecent = useMemo(() => [...scheduleEvents].filter(e => e.status === 'completed').sort((a, b) => (b.completedAt || '').localeCompare(a.completedAt || '')).slice(0, 15), [scheduleEvents]);
 
@@ -10456,7 +10056,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
     return name && cid && cid !== (e.ownerId || loggedInUser?.id) ? `${name} 建檔` : '';
   };
 
-  const openEditEvent = (event) => { if (event.status === 'completed') return; setEditingEvent({ ...event }); };
+  const openEditEvent = (event) => { setEditingEvent({ ...event }); };
 
   // 拖移改日期：直接更新同一筆行程的日期欄位，不用刪除重建
   const handleDropOnDate = async (event, newDate) => {
@@ -10578,29 +10178,26 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
       <BatchActivityImportModal isOpen={showBatchActivity} onClose={() => setShowBatchActivity(false)} loggedInUser={loggedInUser} customers={customers} team={team} />
 
       <div className="md:hidden">
-        {isTeamScheduleViewer && showTeamView ? (
-          <div className="space-y-3 text-gray-900">
-            <button onClick={() => setShowTeamView(false)} className="text-sm font-semibold text-white/80 bg-white/10 border border-white/15 rounded-full px-4 py-2">← 回到我的行事曆</button>
-            {teamGroupedByDate.length > 0 ? teamGroupedByDate.map(([date, events]) => {
-              const displayEvents = events.map(e => ({ ...e, customerName: e.customerName ? `${e.ownerName} · ${e.customerName}` : e.ownerName }));
-              return (
-                <Card key={date} className="p-5">
-                  <h4 className="text-sm font-bold text-gray-500 mb-3">{date}（{getWeekdayLabel(date)}）</h4>
-                  <DayTimelineView events={displayEvents} isToday={date === today} onEventClick={() => {}} getEventLabel={getEventLabel} getEventPriority={getEventPriority} />
-                </Card>
-              );
-            }) : <Card className="p-8 text-center text-gray-400">團隊未來14天沒有排定行程</Card>}
-          </div>
-        ) : (
+        {(
           <MobileCalendarView
-            events={calendarEvents.filter(matchesFilter)}
+            events={mobTeam ? teamDisplayEvents.filter(matchesFilter) : calendarEvents.filter(matchesFilter)}
+            teamMode={mobTeam}
             today={today}
             getEventLabel={getEventLabel}
-            onEventClick={handleEventTap}
+            onEventClick={mobTeam ? (() => {}) : handleEventTap}
             onSearch={onSearch}
             onFilter={() => setShowFilterPanel(v => !v)}
             filterActive={!!(filterCategory || filterPriority)}
-            teamToggle={isTeamScheduleViewer ? <button onClick={() => setShowTeamView(true)} className="text-xs font-semibold text-white/75 bg-white/10 border border-white/15 rounded-full px-3.5 py-1.5 ml-1">查看團隊行程 →</button> : null}
+            teamToggle={(
+              <div className="flex items-center gap-2 px-1">
+                <div className="flex rounded-full border border-white/10 bg-white/[0.07] p-1">
+                  {[[false, '個人'], [true, '團隊']].map(([k, l]) => (
+                    <button key={l} onClick={() => setMobTeam(k)} className={`px-5 py-1.5 rounded-full text-[14px] font-bold transition ${mobTeam === k ? 'bg-blue-600 text-white shadow-[0_0_14px_rgba(37,99,235,.5)]' : 'text-white/55'}`}>{l}</button>
+                  ))}
+                </div>
+                {mobTeam && <span className="text-[12px] text-white/45">{isTeamScheduleViewer ? '全員行程・圈圈＝建檔人' : '吳政翰的分類行程＋直屬業務'}</span>}
+              </div>
+            )}
             addItemsFor={(d) => [
               { label: '新增行程', icon: CalendarPlus, onClick: () => { setForm({ ...emptyForm, date: d }); setShowForm(true); } },
               { label: '純提醒', icon: Bell, onClick: () => { setReminderDate(d); setShowReminderForm(true); } },
@@ -10902,7 +10499,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                 </select>
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">關聯客戶（選填，一次會面見多人可以複選，每人各自算一筆）</label>
+                <label className="text-xs font-bold text-gray-500 block mb-1">關聯客戶（選填，可複選）</label>
                 <CustomerPicker
                   key={form.customerIds.length}
                   customers={customers.filter(c => !form.customerIds.includes(c.id))}
@@ -10939,7 +10536,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                 </select>
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">地點（選填，可開啟地圖）</label>
+                <label className="text-xs font-bold text-gray-500 block mb-1">地點（選填）</label>
                 <input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.address} onChange={e => setForm({ ...form, address: e.target.value })} />
                 {(() => { const c = customers.find(x => x.id === form.customerIds[0]); return c && c.address && form.address !== c.address ? (
                   <button type="button" onClick={() => setForm({ ...form, address: c.address })} className="text-[10px] text-indigo-600 hover:underline mt-1">帶入 {c.name} 的地址</button>
@@ -10947,7 +10544,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
               </div>
               <div><label className="text-xs font-bold text-gray-500 block mb-1">備註</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-20 resize-none" value={form.note} onChange={e => setForm({ ...form, note: e.target.value })} /></div>
               <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">參與人員（同一個場合有多人，一次勾選就好，每人各自獨立記一筆）</label>
+                <label className="text-xs font-bold text-gray-500 block mb-1">參與人員（可複選）</label>
                 <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto border border-gray-100 rounded-lg p-2">
                   {(team || []).map(m => (
                     <label key={m.id} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
@@ -10982,7 +10579,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
               <div><label className="text-xs font-bold text-gray-500 block mb-1">提醒內容</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" placeholder="例如：交報表給總公司" value={reminderTitle} onChange={e => setReminderTitle(e.target.value)} /></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">開始日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderDate} onChange={e => setReminderDate(e.target.value)} /></div>
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填，出差等多天的事可以填）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" min={reminderDate} value={reminderEndDate} onChange={e => setReminderEndDate(e.target.value)} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" min={reminderDate} value={reminderEndDate} onChange={e => setReminderEndDate(e.target.value)} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">開始時間</label><TimeSelect value={reminderTime} onChange={setReminderTime} /></div>
@@ -11054,15 +10651,24 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                 {creator && <p className="text-xs text-gray-400">建檔人：{creator}</p>}
               </div>
               {done ? (
-                <button onClick={() => { setActionEvent(null); handleUndoComplete(e); }} className="w-full py-3.5 rounded-xl bg-indigo-50 text-indigo-600 font-bold">取消完成（復原成未完成）</button>
+                <div className="space-y-2">
+                  {!e.isVirtual && <button onClick={() => { setActionEvent(null); openEditEvent(e); }} className="w-full py-3.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2"><Edit3 size={17} /> 修改</button>}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button onClick={() => { setActionEvent(null); handleUndoComplete(e); }} className="py-3 rounded-xl bg-indigo-50 text-indigo-600 font-bold text-sm">取消完成</button>
+                    {!e.isVirtual && <button onClick={() => { setActionEvent(null); setDeleteTarget(e.id); }} className="py-3 rounded-xl bg-red-50 text-red-600 font-bold text-sm flex items-center justify-center gap-1.5"><Trash2 size={15} /> 刪除</button>}
+                  </div>
+                </div>
               ) : (
                 <div className="space-y-2">
                   <button onClick={() => { setActionEvent(null); handleCompleteEvent(e); }} className="w-full py-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold flex items-center justify-center gap-2"><CheckCircle2 size={18} /> 完成</button>
                   {e.isVirtual ? (
-                    <p className="text-xs text-gray-400 text-center pt-1">這是固定行程自動產生的場次，要修改或刪除請到「＋」→「固定行程管理」</p>
+                    <>
+                      <button onClick={() => { setActionEvent(null); const rule = (recurringRules || []).find(r => r.id === e.ruleId); if (rule) openEditRecurring(rule); else setShowRecurringManage(true); }} className="w-full py-3.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2"><Edit3 size={17} /> 修改這個固定行程</button>
+                      <p className="text-xs text-gray-400 text-center pt-1">這是固定行程自動產生的場次，修改會套用到整個固定行程</p>
+                    </>
                   ) : (
                     <div className={`grid gap-2 ${e.isReminder ? 'grid-cols-2' : 'grid-cols-3'}`}>
-                      <button onClick={() => { setActionEvent(null); openEditEvent(e); }} className="py-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-sm flex items-center justify-center gap-1.5"><Edit3 size={15} /> 編輯</button>
+                      <button onClick={() => { setActionEvent(null); openEditEvent(e); }} className="py-3 rounded-xl bg-blue-600 text-white font-bold text-sm flex items-center justify-center gap-1.5"><Edit3 size={15} /> 修改</button>
                       {!e.isReminder && <button onClick={() => { setActionEvent(null); handleDuplicateEvent(e); }} className="py-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-sm flex items-center justify-center gap-1.5"><Copy size={15} /> 複製</button>}
                       <button onClick={() => { setActionEvent(null); setDeleteTarget(e.id); }} className="py-3 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-sm flex items-center justify-center gap-1.5"><Trash2 size={15} /> 刪除</button>
                     </div>
@@ -11740,6 +11346,31 @@ const LoginScreen = ({ team, onLogin }) => {
 // --- Main App ---
 const App = () => {
   const [activeTab, setActiveTab] = useState('todo');
+
+  // 鎖定畫面：禁止雙指縮放、雙擊放大，輸入框聚焦時也不會自動放大
+  useEffect(() => {
+    let meta = document.querySelector('meta[name="viewport"]');
+    if (!meta) { meta = document.createElement('meta'); meta.name = 'viewport'; document.head.appendChild(meta); }
+    meta.setAttribute('content', 'width=device-width, initial-scale=1, minimum-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover');
+    let st = document.getElementById('jf-lock-style');
+    if (!st) {
+      st = document.createElement('style'); st.id = 'jf-lock-style';
+      st.textContent = 'html,body{touch-action:manipulation;-webkit-text-size-adjust:100%;} @media (max-width:767px){input:not([type="checkbox"]):not([type="radio"]):not([type="range"]),select,textarea{font-size:16px !important;}}';
+      document.head.appendChild(st);
+    }
+    const stop = (e) => e.preventDefault();
+    const onTouchMove = (e) => { if (e.touches && e.touches.length > 1) e.preventDefault(); };
+    document.addEventListener('gesturestart', stop);
+    document.addEventListener('gesturechange', stop);
+    document.addEventListener('gestureend', stop);
+    document.addEventListener('touchmove', onTouchMove, { passive: false });
+    return () => {
+      document.removeEventListener('gesturestart', stop);
+      document.removeEventListener('gesturechange', stop);
+      document.removeEventListener('gestureend', stop);
+      document.removeEventListener('touchmove', onTouchMove);
+    };
+  }, []);
   const [showGlobalSearch, setShowGlobalSearch] = useState(false);
   const [showMoreSheet, setShowMoreSheet] = useState(false);
   const [season, setSeason] = useState('H2'); 
@@ -11812,13 +11443,35 @@ const App = () => {
   }, [user]);
 
   const isTeamScheduleViewer = loggedInUser?.name === '吳政翰';
+  // 團隊行程要讀取的對象：吳政翰讀全部；其他人只讀「吳政翰」與「自己的直屬業務員」
+  const teamViewOwnerKey = useMemo(() => {
+    if (!loggedInUser || isTeamScheduleViewer) return '';
+    const root = team.find(m => m.name === '吳政翰');
+    const ids = new Set();
+    if (root) ids.add(root.id);
+    team.forEach(m => { if (m.parentId && String(m.parentId) === String(loggedInUser.id)) ids.add(m.id); });
+    ids.delete(loggedInUser.id);
+    return Array.from(ids).sort().join(',');
+  }, [team, loggedInUser, isTeamScheduleViewer]);
   useEffect(() => {
-    if (!user || !isTeamScheduleViewer) { setTeamScheduleEvents([]); return; }
-    const unsubTeamSchedule = onSnapshot(collection(db, 'schedule_events'), (snap) => {
-      setTeamScheduleEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
-    });
-    return () => unsubTeamSchedule();
-  }, [user, isTeamScheduleViewer]);
+    if (!user || !loggedInUser) { setTeamScheduleEvents([]); return; }
+    if (isTeamScheduleViewer) {
+      const unsubTeamSchedule = onSnapshot(collection(db, 'schedule_events'), (snap) => {
+        setTeamScheduleEvents(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      });
+      return () => unsubTeamSchedule();
+    }
+    const ids = teamViewOwnerKey ? teamViewOwnerKey.split(',') : [];
+    if (ids.length === 0) { setTeamScheduleEvents([]); return; }
+    const chunks = [];
+    for (let i = 0; i < ids.length; i += 10) chunks.push(ids.slice(i, i + 10));
+    const parts = chunks.map(() => []);
+    const unsubs = chunks.map((chunk, idx) => onSnapshot(query(collection(db, 'schedule_events'), where('ownerId', 'in', chunk)), (snap) => {
+      parts[idx] = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      setTeamScheduleEvents(parts.flat());
+    }, (err) => console.error(err)));
+    return () => unsubs.forEach(u => u());
+  }, [user, loggedInUser?.id, isTeamScheduleViewer, teamViewOwnerKey]);
 
   // 客戶資料與行程：只讀取「目前登入者自己」擁有的資料，做到隱私區隔
   useEffect(() => {
