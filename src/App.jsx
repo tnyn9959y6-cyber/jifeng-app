@@ -4711,7 +4711,208 @@ const getVisibleTeamIds = (loggedInUser, team) => {
 
 const PIPELINE_STAGES = ['待約訪', '洽談中', '已送建議書', '待簽約'];
 
-const SalesWarRoomPage = ({ loggedInUser, team, customers, records }) => {
+// --- 手機版：業務戰情室（深色底圖＋白色清單面板）---
+const WAR_AGE_BUCKETS = [
+  { key: 'b1', label: '3 天內', max: 3, color: '#34d399' },
+  { key: 'b2', label: '4–7 天', max: 7, color: '#60a5fa' },
+  { key: 'b3', label: '8–14 天', max: 14, color: '#fbbf24' },
+  { key: 'b4', label: '15 天以上', max: Infinity, color: '#fb7185' },
+];
+const WarDonut = ({ title, centerTop, centerBottom, parts }) => {
+  const R = 40, C = 2 * Math.PI * R;
+  const total = parts.reduce((s, p) => s + p.v, 0);
+  let acc = 0;
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl p-3.5 min-w-0">
+      <p className="text-[13px] font-bold mb-2">{title}</p>
+      <div className="relative w-[104px] h-[104px] mx-auto">
+        <svg viewBox="0 0 100 100" className="w-full h-full -rotate-90">
+          <circle cx="50" cy="50" r={R} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth="13" />
+          {total > 0 && parts.map(p => {
+            const len = (p.v / total) * C;
+            const el = <circle key={p.label} cx="50" cy="50" r={R} fill="none" stroke={p.color} strokeWidth="13" strokeDasharray={`${Math.max(0, len - 1.5)} ${C}`} strokeDashoffset={-acc} />;
+            acc += len;
+            return el;
+          })}
+        </svg>
+        <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+          <span className="text-[17px] font-bold leading-tight tabular-nums">{centerTop}</span>
+          <span className="text-[10px] text-white/50">{centerBottom}</span>
+        </div>
+      </div>
+      <div className="mt-3 space-y-1.5">
+        {parts.map(p => (
+          <div key={p.label} className="flex items-center justify-between text-[11px] gap-1">
+            <span className="flex items-center gap-1.5 text-white/65 min-w-0"><i className="w-2 h-2 rounded-full shrink-0" style={{ background: p.color }}></i><span className="truncate">{p.label}</span></span>
+            <span className="tabular-nums text-white/90 shrink-0">{p.text}</span>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
+const MobileWarRoom = ({ summary, deals, visibleIds, today, onSelect, onSearch }) => {
+  const [tab, setTab] = useState('overview');
+  const [sortKey, setSortKey] = useState('premium');
+
+  const ageDays = (r) => Math.max(0, Math.floor((new Date(today) - new Date(r.date)) / 86400000));
+  const allCases = useMemo(() => summary.flatMap(s => s.pendingCases.map(r => ({ r, member: s.member, days: ageDays(r) }))).sort((a, b) => b.days - a.days), [summary, today]);
+  const totalPremium = allCases.reduce((s, x) => s + (x.r.premium || 0), 0);
+  const stuckTotal = summary.reduce((s, x) => s + x.stuckCustomers.length, 0);
+  const visibleDeals = useMemo(() => deals.filter(d => visibleIds.has(d.ownerId)), [deals, visibleIds]);
+  const withCases = summary.filter(s => s.pendingCases.length > 0).length;
+  const avgDays = allCases.length ? Math.round(allCases.reduce((s, x) => s + x.days, 0) / allCases.length) : 0;
+
+  const buckets = WAR_AGE_BUCKETS.map((b, i) => {
+    const prev = i === 0 ? -1 : WAR_AGE_BUCKETS[i - 1].max;
+    const list = allCases.filter(x => x.days > prev && x.days <= b.max);
+    return { ...b, n: list.length, prem: list.reduce((s, x) => s + (x.r.premium || 0), 0) };
+  });
+  const money = (n) => n >= 1000000 ? '$' + (n / 1000000).toFixed(2) + 'M' : n >= 10000 ? '$' + (n / 10000).toFixed(1) + '萬' : '$' + Math.round(n);
+
+  const sorted = useMemo(() => [...summary].sort((a, b) => sortKey === 'premium' ? b.pendingTotal - a.pendingTotal : sortKey === 'cases' ? b.pendingCases.length - a.pendingCases.length : b.stuckCustomers.length - a.stuckCustomers.length), [summary, sortKey]);
+  const crown = ['text-amber-400', 'text-slate-400', 'text-orange-500'];
+  const tone = (d) => d >= 15 ? 'text-rose-500' : d >= 8 ? 'text-amber-500' : 'text-emerald-500';
+
+  const tiles = [
+    { l: '受理中案件', v: allCases.length, u: '件', s: allCases.length ? `平均卡 ${avgDays} 天` : '目前沒有', icon: FileText, c: 'bg-blue-500/25 text-blue-300' },
+    { l: '受理中保費', v: money(totalPremium), s: allCases.length ? `件均 ${money(totalPremium / allCases.length)}` : '', icon: TrendingUp, c: 'bg-emerald-500/25 text-emerald-300' },
+    { l: '卡關客戶', v: stuckTotal, u: '位', s: '已過追蹤日未處理', icon: AlertTriangle, c: 'bg-amber-500/25 text-amber-300' },
+    { l: '團隊人數', v: summary.length, u: '人', s: `${withCases} 人有案件`, icon: Users, c: 'bg-violet-500/25 text-violet-300', bar: summary.length ? Math.round(withCases / summary.length * 100) : 0 },
+  ];
+
+  return (
+    <div className="md:hidden text-white -mx-1">
+      <div className="flex items-start justify-between pt-1 pb-4">
+        <div className="min-w-0">
+          <h1 className="text-[28px] font-bold tracking-tight leading-none">業務戰情室</h1>
+          <p className="text-[12px] text-white/55 mt-2">團隊受理中案件、客戶追蹤狀況與商機總覽</p>
+        </div>
+        <button onClick={onSearch} aria-label="搜尋" className="w-10 h-10 rounded-full bg-white/[0.08] border border-white/10 flex items-center justify-center shrink-0 active:scale-95 transition"><Search size={18} /></button>
+      </div>
+
+      <div className="flex rounded-full border border-white/10 bg-white/[0.06] backdrop-blur-xl p-1 mb-3.5">
+        {[['overview', '團隊總覽'], ['cases', '案件進度'], ['deals', '商機追蹤']].map(([k, l]) => (
+          <button key={k} onClick={() => setTab(k)} className={`flex-1 py-2.5 text-[13px] font-bold rounded-full transition ${tab === k ? 'bg-blue-500 shadow-lg shadow-blue-500/30' : 'text-white/60'}`}>{l}</button>
+        ))}
+      </div>
+
+      {tab === 'overview' && (
+        <>
+          <div className="grid grid-cols-2 gap-2.5 mb-3">
+            {tiles.map(t => { const Icon = t.icon; return (
+              <div key={t.l} className="rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl px-3.5 py-3">
+                <div className="flex items-center gap-2"><span className={`w-7 h-7 rounded-full flex items-center justify-center ${t.c}`}><Icon size={14} /></span><span className="text-[12px] text-white/70">{t.l}</span></div>
+                <p className="mt-2 leading-none"><b className="text-[26px] font-bold tabular-nums">{t.v}</b>{t.u && <span className="text-[13px] text-white/60 ml-1">{t.u}</span>}</p>
+                <p className="text-[11px] text-white/45 mt-1.5">{t.s}</p>
+                {t.bar !== undefined && <div className="h-1.5 rounded-full bg-white/10 mt-1.5 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-violet-400" style={{ width: `${t.bar}%` }}></div></div>}
+              </div>
+            ); })}
+          </div>
+          <div className="grid grid-cols-2 gap-2.5 mb-3.5">
+            <WarDonut title="案件卡關天數" centerTop={allCases.length} centerBottom="受理中案件" parts={buckets.map(b => ({ label: b.label, color: b.color, v: b.n, text: `${b.n} 件` }))} />
+            <WarDonut title="保費金額分佈" centerTop={money(totalPremium)} centerBottom="受理中保費" parts={buckets.map(b => ({ label: b.label, color: b.color, v: b.prem, text: money(b.prem) }))} />
+          </div>
+        </>
+      )}
+
+      <div className="-mx-4 rounded-t-[28px] bg-[#f5f6fa] text-gray-900 px-4 pt-4 pb-6 min-h-[200px]">
+        {tab === 'overview' && (
+          <>
+            <div className="flex items-center justify-between mb-2.5">
+              <p className="text-[15px] font-bold">成員列表</p>
+              <select value={sortKey} onChange={e => setSortKey(e.target.value)} className="text-[12px] font-bold text-gray-600 bg-white border border-gray-200 rounded-full px-3 py-1.5 outline-none">
+                <option value="premium">排序：受理中保費</option><option value="cases">排序：案件數</option><option value="stuck">排序：卡關客戶</option>
+              </select>
+            </div>
+            <div className="rounded-2xl bg-white border border-gray-100 overflow-hidden">
+              <div className="grid grid-cols-[1fr_34px_72px_34px_34px_14px] gap-1.5 px-3 py-2 text-[10px] font-bold text-gray-400 bg-gray-50"><span>成員</span><span className="text-center">案件</span><span className="text-right">保費</span><span className="text-center">卡關</span><span className="text-center">商機</span><span></span></div>
+              {sorted.map((x, i) => (
+                <button key={x.member.id} onClick={() => onSelect(x.member.id)} className="w-full grid grid-cols-[1fr_34px_72px_34px_34px_14px] gap-1.5 items-center px-3 py-3 border-t border-gray-50 text-left active:bg-gray-50">
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className="w-5 shrink-0 text-center text-[12px] text-gray-400 font-bold">{i < 3 && x.pendingTotal > 0 ? <Crown size={15} className={crown[i]} /> : i + 1}</span>
+                    <span className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 text-white flex items-center justify-center text-[13px] font-bold shrink-0">{String(x.member.name).charAt(0)}</span>
+                    <span className="text-[14px] font-bold truncate">{x.member.name}</span>
+                  </span>
+                  <span className="text-center text-[14px] font-semibold tabular-nums">{x.pendingCases.length}</span>
+                  <span className="text-right text-[13px] font-semibold text-blue-600 tabular-nums">{money(x.pendingTotal)}</span>
+                  <span className={`text-center text-[14px] tabular-nums ${x.stuckCustomers.length ? 'text-amber-600 font-bold' : 'text-gray-500'}`}>{x.stuckCustomers.length}</span>
+                  <span className="text-center text-[14px] tabular-nums text-gray-600">{x.memberDeals.length}</span>
+                  <ChevronRight size={14} className="text-gray-300" />
+                </button>
+              ))}
+            </div>
+
+            <p className="text-[15px] font-bold mt-5 mb-2.5 flex items-center gap-2"><Target size={17} className="text-rose-500" />本日重點</p>
+            <div className="space-y-2">
+              {[
+                { l: '受理中案件', v: `${allCases.length} 件`, t: 'cases', c: 'text-emerald-500', Icon: CheckCircle2 },
+                { l: '卡關 15 天以上', v: `${buckets[3].n} 件`, t: 'cases', c: 'text-rose-500', Icon: AlertTriangle },
+                { l: '進行中商機', v: `${visibleDeals.length} 筆`, t: 'deals', c: 'text-sky-500', Icon: TrendingUp },
+              ].map(r => (
+                <button key={r.l} onClick={() => setTab(r.t)} className="w-full flex items-center gap-3 rounded-2xl bg-white border border-gray-100 px-3.5 py-3 text-left active:bg-gray-50">
+                  <r.Icon size={18} className={r.c} /><span className="flex-1 text-[14px] font-semibold">{r.l}</span><span className="text-[14px] font-bold tabular-nums">{r.v}</span><ChevronRight size={14} className="text-gray-300" />
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {tab === 'cases' && (
+          <>
+            <p className="text-[15px] font-bold mb-2.5">受理中案件 <span className="text-gray-400 font-normal text-[13px]">（卡最久的在最上面）</span></p>
+            {allCases.length === 0 && <p className="text-center text-gray-400 text-sm py-10">目前沒有受理中的案件 🎉</p>}
+            <div className="space-y-2">
+              {allCases.map(({ r, member, days }) => (
+                <div key={r.id} className="rounded-2xl bg-white border border-gray-100 px-3.5 py-3 flex items-center gap-3">
+                  <span className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 text-white flex items-center justify-center text-[13px] font-bold shrink-0">{String(member.name).charAt(0)}</span>
+                  <div className="min-w-0 flex-1">
+                    <p className="text-[14px] font-bold truncate">{r.insuredName || '（未填被保人）'}</p>
+                    <p className="text-[12px] text-gray-400 truncate">{member.name} · {r.product || '—'}</p>
+                  </div>
+                  <div className="text-right shrink-0"><p className="text-[14px] font-bold text-blue-600 tabular-nums">{money(r.premium || 0)}</p><p className={`text-[11px] font-bold ${tone(days)}`}>卡 {days} 天</p></div>
+                </div>
+              ))}
+            </div>
+          </>
+        )}
+
+        {tab === 'deals' && (
+          <>
+            <p className="text-[15px] font-bold mb-2.5">進行中商機 <span className="text-gray-400 font-normal text-[13px]">共 {visibleDeals.length} 筆</span></p>
+            {visibleDeals.length === 0 && <p className="text-center text-gray-400 text-sm py-10">目前沒有登記中的商機</p>}
+            {PIPELINE_STAGES.map(st => {
+              const list = visibleDeals.filter(d => d.stage === st);
+              if (list.length === 0) return null;
+              return (
+                <div key={st} className="mb-4">
+                  <p className="text-[12px] font-bold text-gray-500 mb-1.5">{st} · {list.length}</p>
+                  <div className="space-y-2">
+                    {list.map(d => {
+                      const owner = summary.find(s => s.member.id === d.ownerId)?.member;
+                      return (
+                        <div key={d.id} className="rounded-2xl bg-white border border-gray-100 px-3.5 py-3 flex items-center gap-3">
+                          <div className="min-w-0 flex-1">
+                            <p className="text-[14px] font-bold truncate">{d.customerName}<span className="text-gray-400 font-normal"> · {d.product}</span></p>
+                            <p className="text-[12px] text-gray-400 truncate">{owner?.name || ''}{d.expectedCloseDate ? ` · 預計 ${d.expectedCloseDate}` : ''}</p>
+                          </div>
+                          <p className="text-[14px] font-bold text-teal-600 tabular-nums shrink-0">{money(d.estimatedPremium || 0)}</p>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              );
+            })}
+          </>
+        )}
+      </div>
+    </div>
+  );
+};
+
+const SalesWarRoomPage = ({ loggedInUser, team, customers, records, onSearch }) => {
   const today = getTodayDate();
   const [selectedId, setSelectedId] = useState(null);
   const [deals, setDeals] = useState([]);
@@ -4779,44 +4980,7 @@ const SalesWarRoomPage = ({ loggedInUser, team, customers, records }) => {
 
   if (visibleMembers.length === 0) return null;
 
-  return (
-    <div className="max-w-5xl lg:max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
-      <ConfirmModal isOpen={!!dealDeleteTarget} onClose={() => setDealDeleteTarget(null)} onConfirm={handleDeleteDealConfirm} title="刪除商機" message="確定要刪除這筆商機紀錄嗎？" />
-
-      <div>
-        <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">業務戰情室</h2>
-        <p className="text-sm text-gray-400 md:mt-1">團隊受理中案件、客戶追蹤狀況與進行中商機總覽</p>
-      </div>
-
-      <Card className="p-5">
-        <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><ClipboardList size={18} className="text-indigo-500" /> 全隊總表</h3>
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead>
-              <tr className="text-left text-xs font-bold text-gray-400 border-b border-gray-100">
-                <th className="py-2 pr-4">姓名</th>
-                <th className="py-2 pr-4 text-right">受理中案件</th>
-                <th className="py-2 pr-4 text-right">受理中保費</th>
-                <th className="py-2 pr-4 text-right">卡關客戶</th>
-                <th className="py-2 pr-4 text-right">進行中商機</th>
-              </tr>
-            </thead>
-            <tbody>
-              {summary.map(({ member, pendingCases, stuckCustomers, pendingTotal, memberDeals }) => (
-                <tr key={member.id} onClick={() => setSelectedId(member.id)} className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
-                  <td className="py-3 pr-4 font-bold text-gray-800">{member.name}</td>
-                  <td className="py-3 pr-4 text-right">{pendingCases.length}</td>
-                  <td className="py-3 pr-4 text-right text-gray-500">{formatMoney(pendingTotal)}</td>
-                  <td className="py-3 pr-4 text-right">{stuckCustomers.length > 0 ? <span className="text-amber-600 font-bold">{stuckCustomers.length}</span> : stuckCustomers.length}</td>
-                  <td className="py-3 pr-4 text-right">{memberDeals.length}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </Card>
-
-      {selectedEntry && (
+  const detailCard = selectedEntry ? (
         <Card className="p-5">
           <div className="flex items-center justify-between mb-4">
             <h3 className="font-bold text-gray-800">{selectedEntry.member.name} 的明細</h3>
@@ -4906,6 +5070,54 @@ const SalesWarRoomPage = ({ loggedInUser, team, customers, records }) => {
             </div>
           )}
         </Card>
+  ) : null;
+
+  return (
+    <div className="max-w-5xl lg:max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+      <MobileWarRoom summary={summary} deals={deals} visibleIds={visibleIds} today={today} onSelect={setSelectedId} onSearch={onSearch} />
+
+      <ConfirmModal isOpen={!!dealDeleteTarget} onClose={() => setDealDeleteTarget(null)} onConfirm={handleDeleteDealConfirm} title="刪除商機" message="確定要刪除這筆商機紀錄嗎？" />
+
+      <div className="hidden md:block space-y-6">
+      <div>
+        <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">業務戰情室</h2>
+        <p className="text-sm text-gray-400 md:mt-1">團隊受理中案件、客戶追蹤狀況與進行中商機總覽</p>
+      </div>
+
+      <Card className="p-5">
+        <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><ClipboardList size={18} className="text-indigo-500" /> 全隊總表</h3>
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="text-left text-xs font-bold text-gray-400 border-b border-gray-100">
+                <th className="py-2 pr-4">姓名</th>
+                <th className="py-2 pr-4 text-right">受理中案件</th>
+                <th className="py-2 pr-4 text-right">受理中保費</th>
+                <th className="py-2 pr-4 text-right">卡關客戶</th>
+                <th className="py-2 pr-4 text-right">進行中商機</th>
+              </tr>
+            </thead>
+            <tbody>
+              {summary.map(({ member, pendingCases, stuckCustomers, pendingTotal, memberDeals }) => (
+                <tr key={member.id} onClick={() => setSelectedId(member.id)} className="border-b border-gray-50 hover:bg-gray-50 cursor-pointer">
+                  <td className="py-3 pr-4 font-bold text-gray-800">{member.name}</td>
+                  <td className="py-3 pr-4 text-right">{pendingCases.length}</td>
+                  <td className="py-3 pr-4 text-right text-gray-500">{formatMoney(pendingTotal)}</td>
+                  <td className="py-3 pr-4 text-right">{stuckCustomers.length > 0 ? <span className="text-amber-600 font-bold">{stuckCustomers.length}</span> : stuckCustomers.length}</td>
+                  <td className="py-3 pr-4 text-right">{memberDeals.length}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      </Card>
+      </div>
+
+      <div className="hidden md:block">{detailCard}</div>
+      {selectedEntry && (
+        <div className="md:hidden fixed inset-0 z-[100] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setSelectedId(null)}>
+          <div className="w-full max-h-[88vh] overflow-y-auto rounded-t-[28px] bg-[#f5f5f7] p-3 pb-8" onClick={e => e.stopPropagation()}>{detailCard}</div>
+        </div>
       )}
 
       {(isAddingDeal || editingDeal) && (
@@ -8307,10 +8519,218 @@ const TeamTargetBoard = ({ team, activities, records, rootName }) => {
   );
 };
 
+// --- 首頁：個人目標 + 優培（直接放在主畫面）---
+const HomeGoalsQuality = ({ loggedInUser, records, activities }) => {
+  const month = getCurrentMonth();
+  const [goals, setGoals] = useState(PERSONAL_GOALS_DEFAULT);
+  const [form, setForm] = useState(PERSONAL_GOALS_DEFAULT);
+  const [editing, setEditing] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [qInput, setQInput] = useState('');
+  const [localStart, setLocalStart] = useState('');
+
+  useEffect(() => {
+    if (!loggedInUser) return;
+    const unsub = onSnapshot(doc(db, 'personal_goals', `${loggedInUser.id}_${month}`), (snap) => {
+      const data = snap.exists() ? { ...PERSONAL_GOALS_DEFAULT, ...snap.data() } : PERSONAL_GOALS_DEFAULT;
+      setGoals(data); setForm(data);
+    });
+    return () => unsub();
+  }, [loggedInUser?.id, month]);
+
+  const myRecords = useMemo(() => (records || []).filter(r => r.agentId === loggedInUser.id && (r.date || '').startsWith(month)), [records, loggedInUser.id, month]);
+  const sales = myRecords.reduce((s, r) => s + (goals.salesBasis === 'premium' ? (r.premium || 0) : (r.weighted || 0)), 0);
+  const income = myRecords.filter(r => (r.status || '已發單') === '已發單').reduce((s, r) => s + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0);
+  const recruit = (activities || []).filter(a => a.agentId === loggedInUser.id && a.month === month).reduce((s, a) => s + (a.recruitRegistered || 0), 0);
+  const pct = (a, t) => t > 0 ? Math.min(100, Math.round(a / t * 100)) : 0;
+
+  const rows = [
+    { key: 'sales', label: `業績（${goals.salesBasis === 'premium' ? '實收' : '加權'}）`, a: sales, t: goals.salesTarget, money: true, bar: 'from-sky-400 to-indigo-500', tone: 'text-sky-300', icon: TrendingUp },
+    { key: 'recruit', label: '增員人數', a: recruit, t: goals.recruitTarget, unit: '人', bar: 'from-teal-400 to-emerald-400', tone: 'text-teal-300', icon: Users },
+    { key: 'income', label: '預估收入', a: Math.round(income), t: goals.incomeTarget, money: true, bar: 'from-amber-400 to-orange-400', tone: 'text-amber-300', icon: Award },
+  ];
+
+  const q0 = getQualityInfo({ ...loggedInUser, qualityTalentStartMonth: localStart || loggedInUser.qualityTalentStartMonth }, records);
+  const startMonth = localStart || loggedInUser.qualityTalentStartMonth || '';
+  const stageRange = (q0 && q0.state === 'active' && startMonth) ? (() => {
+    const [sy, sm] = startMonth.split('-').map(Number);
+    const f = (i) => { const d = new Date(sy, sm - 1 + (q0.stage - 1) * 3 + i, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+    return `${f(0)} ~ ${f(2)}`;
+  })() : '';
+
+  const save = async () => {
+    setSaving(true);
+    try { await setDoc(doc(db, 'personal_goals', `${loggedInUser.id}_${month}`), { ...form, salesTarget: Number(form.salesTarget) || 0, recruitTarget: Number(form.recruitTarget) || 0, incomeTarget: Number(form.incomeTarget) || 0 }); setEditing(false); } catch (e) { console.error(e); } finally { setSaving(false); }
+  };
+  const saveQuality = async () => {
+    if (!qInput) return;
+    try { await updateDoc(doc(db, 'user', loggedInUser.id), { qualityTalentStartMonth: qInput }); setLocalStart(qInput); } catch (e) { console.error(e); }
+  };
+
+  const glass = 'bg-white/[0.06] backdrop-blur-xl border border-white/10';
+  const R = 34, C = 2 * Math.PI * R;
+  const fycPct = q0 && q0.state === 'active' ? Math.min(100, Math.round(q0.fyc / q0.fycTarget * 100)) : 0;
+  const insPct = q0 && q0.state === 'active' ? Math.min(100, Math.round(q0.insured / q0.insuredTarget * 100)) : 0;
+
+  return (
+    <>
+      <div className={`grid gap-3 ${q0 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+        <div className={`${glass} rounded-[24px] p-3.5 min-w-0`}>
+          <button onClick={() => { setForm(goals); setEditing(true); }} className="w-full flex items-center justify-between mb-2.5 text-left">
+            <span className="font-bold text-[15px] flex items-center gap-1.5 min-w-0"><Target size={17} className="text-fuchsia-300 shrink-0" /><span className="truncate">個人目標</span><span className="text-[11px] text-white/45 font-normal shrink-0">(本月)</span></span>
+            <ChevronRight size={16} className="text-white/40 shrink-0" />
+          </button>
+          <div className="space-y-2">
+            {rows.map(r => {
+              const p = pct(r.a, r.t);
+              const Icon = r.icon;
+              return (
+                <div key={r.key} className="rounded-2xl bg-white/[0.05] border border-white/10 px-3 py-2">
+                  <div className="flex items-center gap-2.5">
+                    <Icon size={18} className={`${r.tone} shrink-0`} />
+                    <div className="min-w-0 flex-1">
+                      <p className="text-[11px] text-white/50 truncate">{r.label}</p>
+                      <p className="leading-tight truncate"><b className="text-[15px] tabular-nums">{r.money ? formatMoney(r.a) : r.a}</b>{r.t > 0 ? <span className="text-[11px] text-white/45"> / {r.money ? formatMoney(r.t) : r.t}{r.unit ? ` ${r.unit}` : ''}</span> : <span className="text-[11px] text-white/35"> 尚未設定</span>}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-2 mt-1.5">
+                    <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden"><div className={`h-full rounded-full bg-gradient-to-r ${r.bar}`} style={{ width: `${p}%`, transition: 'width .7s ease' }}></div></div>
+                    <span className={`text-[11px] tabular-nums ${r.tone}`}>{p}%</span>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        {q0 && (
+          <div className={`${glass} rounded-[24px] p-3.5 min-w-0 flex flex-col`}>
+            <p className="font-bold text-[15px] flex items-center gap-1.5 min-w-0"><Award size={17} className="text-violet-300 shrink-0" /><span className="truncate leading-tight">優質人才培訓</span></p>
+            {q0.state === 'active' && (
+              <>
+                <p className="text-[11px] text-white/45 mt-0.5">第 {q0.stage} 階段 · {stageRange}</p>
+                <div className="flex items-center gap-3 mt-3">
+                  <div className="relative w-[78px] h-[78px] shrink-0">
+                    <svg viewBox="0 0 80 80" className="w-full h-full -rotate-90"><circle cx="40" cy="40" r={R} fill="none" stroke="rgba(255,255,255,.1)" strokeWidth="7" /><circle cx="40" cy="40" r={R} fill="none" stroke={fycPct >= 100 ? '#34d399' : '#a78bfa'} strokeWidth="7" strokeLinecap="round" strokeDasharray={`${C * fycPct / 100} ${C}`} style={{ transition: 'stroke-dasharray .8s ease' }} /></svg>
+                    <span className="absolute inset-0 flex items-center justify-center text-[17px] font-bold tabular-nums">{fycPct}%</span>
+                  </div>
+                  <div className="min-w-0">
+                    <p className="text-[10px] text-white/50 leading-tight">FYC + 行銷獎金 (估)</p>
+                    <p className="font-bold text-[15px] tabular-nums truncate">{formatMoney(q0.fyc)}</p>
+                    <p className="text-[11px] text-white/40 truncate">/ {formatMoney(q0.fycTarget)}</p>
+                  </div>
+                </div>
+                <div className="rounded-2xl bg-white/[0.05] border border-white/10 px-3 py-2 mt-3">
+                  <p className="text-[11px] text-white/50">不同被保險人數</p>
+                  <p className="leading-tight"><b className="text-[17px] tabular-nums">{q0.insured}</b><span className="text-[12px] text-white/45"> / {q0.insuredTarget} 人</span></p>
+                  <div className="flex items-center gap-2 mt-1"><div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full bg-violet-400" style={{ width: `${insPct}%` }}></div></div><span className="text-[11px] tabular-nums text-white/60">{insPct}%</span></div>
+                </div>
+              </>
+            )}
+            {q0.state === 'upcoming' && <p className="text-[13px] text-white/60 mt-4">優培 {q0.start} 開始，期間內才會顯示進度。</p>}
+            {q0.state === 'unset' && (
+              <div className="mt-3">
+                <p className="text-[12px] text-rose-300">優培期別尚未填寫</p>
+                <p className="text-[11px] text-white/40 mt-1 mb-2">填寫起始月後才會顯示進度</p>
+                <input type="month" value={qInput} onChange={e => setQInput(e.target.value)} className="w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-[13px] text-white outline-none" style={{ colorScheme: 'dark' }} />
+                <button onClick={saveQuality} disabled={!qInput} className="w-full mt-2 py-2 rounded-xl bg-violet-500 text-[13px] font-bold disabled:opacity-40">設定</button>
+              </div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {editing && (
+        <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditing(false)}>
+          <div className="w-full max-w-md rounded-t-[28px] border-t border-white/10 bg-[#0c1020] text-white p-5 pb-8" onClick={e => e.stopPropagation()}>
+            <p className="text-[16px] font-bold mb-4">設定本月目標</p>
+            <div className="flex rounded-2xl bg-white/[0.07] p-0.5 mb-3">
+              {[['weighted', '業績算加權'], ['premium', '業績算實收']].map(([k, l]) => (
+                <button key={k} onClick={() => setForm({ ...form, salesBasis: k })} className={`flex-1 py-2 text-[12px] font-bold rounded-[14px] ${form.salesBasis === k ? 'bg-white text-gray-900' : 'text-white/55'}`}>{l}</button>
+              ))}
+            </div>
+            {[['salesTarget', '業績目標 ($)'], ['recruitTarget', '增員人數目標 (人)'], ['incomeTarget', '預估收入目標 ($)']].map(([k, l]) => (
+              <div key={k} className="mb-3">
+                <label className="text-[11px] text-white/50 block mb-1">{l}</label>
+                <input type="number" inputMode="numeric" value={form[k] || ''} onChange={e => setForm({ ...form, [k]: e.target.value })} className="w-full rounded-2xl border border-white/10 bg-white/[0.07] px-4 py-3 text-[16px] font-bold text-white outline-none" />
+              </div>
+            ))}
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => setEditing(false)} className="flex-1 py-3 rounded-2xl bg-white/10 font-bold text-[14px]">取消</button>
+              <button onClick={save} disabled={saving} className="flex-1 py-3 rounded-2xl bg-blue-500 font-bold text-[14px] disabled:opacity-50">{saving ? '儲存中…' : '儲存'}</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+};
+
+// --- 首頁：我的待辦事項（深色版，資料同 personal_todos）---
+const HomeTodoCard = ({ loggedInUser }) => {
+  const [items, setItems] = useState([]);
+  const [adding, setAdding] = useState(false);
+  const [text, setText] = useState('');
+  const [menuId, setMenuId] = useState(null);
+  const [showAll, setShowAll] = useState(false);
+
+  useEffect(() => {
+    if (!loggedInUser) return;
+    const unsub = onSnapshot(query(collection(db, 'personal_todos'), where('ownerId', '==', loggedInUser.id)), (snap) => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      list.sort((a, b) => (a.createdAt || '').localeCompare(b.createdAt || ''));
+      setItems(list);
+    });
+    return () => unsub();
+  }, [loggedInUser?.id]);
+
+  const add = async () => {
+    const t = text.trim();
+    if (!t) return;
+    try { await addDoc(collection(db, 'personal_todos'), { ownerId: loggedInUser.id, text: t, done: false, createdAt: new Date().toISOString() }); setText(''); setAdding(false); } catch (e) { console.error(e); }
+  };
+  const toggle = async (it) => { try { await updateDoc(doc(db, 'personal_todos', it.id), { done: !it.done }); } catch (e) { console.error(e); } };
+  const remove = async (id) => { try { await deleteDoc(doc(db, 'personal_todos', id)); setMenuId(null); } catch (e) { console.error(e); } };
+
+  const pending = items.filter(i => !i.done);
+  const done = items.filter(i => i.done);
+  const ordered = [...pending, ...done];
+  const shown = showAll ? ordered : ordered.slice(0, 5);
+  const fmt = (iso) => { if (!iso) return ''; const d = new Date(iso); return isNaN(d) ? '' : `${String(d.getMonth() + 1).padStart(2, '0')}/${String(d.getDate()).padStart(2, '0')} ${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`; };
+
+  return (
+    <div className="bg-white/[0.06] backdrop-blur-xl border border-white/10 rounded-[24px] p-4">
+      <div className="flex items-center justify-between gap-2">
+        <p className="font-bold text-[16px] flex items-center gap-2"><CheckSquare size={18} className="text-sky-300" />我的待辦事項 <span className="text-white/50 font-normal text-[14px]">({pending.length})</span></p>
+        <button onClick={() => setAdding(v => !v)} className="flex items-center gap-1 text-[13px] font-bold rounded-xl border border-blue-400/40 bg-blue-500/20 text-blue-100 px-3 py-2 active:scale-95 transition"><Plus size={15} />新增待辦</button>
+      </div>
+      {adding && (
+        <div className="flex gap-2 mt-3">
+          <input autoFocus value={text} onChange={e => setText(e.target.value)} onKeyDown={e => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) add(); }} placeholder="隨手記一件事…" className="flex-1 min-w-0 rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2.5 text-[14px] text-white placeholder-white/30 outline-none" />
+          <button onClick={add} disabled={!text.trim()} className="px-4 rounded-xl bg-blue-500 text-[13px] font-bold disabled:opacity-40">加入</button>
+        </div>
+      )}
+      <div className="mt-2">
+        {items.length === 0 && <p className="text-center text-[13px] text-white/40 py-5">還沒有待辦，點右上角新增一件</p>}
+        {shown.map((it, i) => (
+          <div key={it.id} className={`flex items-center gap-3 py-3 ${i < shown.length - 1 ? 'border-b border-white/10' : ''}`}>
+            <button onClick={() => toggle(it)} aria-label="完成" className={`w-[22px] h-[22px] rounded-md border flex items-center justify-center shrink-0 transition ${it.done ? 'bg-blue-500 border-blue-500' : 'border-white/35'}`}>{it.done && <CheckCircle2 size={14} className="text-white" />}</button>
+            <span className={`flex-1 min-w-0 text-[14px] truncate ${it.done ? 'line-through text-white/40' : ''}`}>{it.text}</span>
+            <span className={`text-[11px] tabular-nums shrink-0 ${it.done ? 'text-white/30 line-through' : 'text-white/45'}`}>{fmt(it.createdAt)}</span>
+            {menuId === it.id
+              ? <button onClick={() => remove(it.id)} className="text-[12px] font-bold text-rose-300 shrink-0">刪除</button>
+              : <button onClick={() => setMenuId(it.id)} aria-label="更多" className="text-white/40 shrink-0 px-1"><MoreVertical size={16} className="rotate-90" /></button>}
+          </div>
+        ))}
+      </div>
+      {ordered.length > 5 && <button onClick={() => setShowAll(v => !v)} className="w-full text-center text-[12px] text-white/50 pt-2">{showAll ? '收合' : `查看全部 ${ordered.length} 項`}</button>}
+    </div>
+  );
+};
+
 // ================= 今日待辦首頁（手機優先：深色單欄，只留最重要的資訊）=================
-const TodayHome = ({ loggedInUser, activities, team, scheduleEvents, recurringRules, onGo, bellCount, dueCount, onShowMore }) => {
+const TodayHome = ({ loggedInUser, activities, team, records, isTeamScheduleViewer, scheduleEvents, recurringRules, onGo, bellCount, dueCount, onShowMore }) => {
   const today = getTodayDate();
-  const [expanded, setExpanded] = useState(false);
   const pts = pointsOnDate(activities, loggedInUser.id, today);
   const pct = Math.min(1, pts / DAILY_TARGET);
   const done = pts >= DAILY_TARGET;
@@ -8399,24 +8819,10 @@ const TodayHome = ({ loggedInUser, activities, team, scheduleEvents, recurringRu
                   : <p className="leading-none mt-1"><b className="text-[52px] font-bold tabular-nums">{DAILY_TARGET - pts}</b><span className="text-xl font-bold ml-1">分</span></p>}
                 <p className="text-sm text-white/55 mt-1.5">{done ? '漂亮，保持這個節奏' : '今天達標，加油！'}</p>
               </div>
-              <button onClick={() => setExpanded(v => !v)} aria-label="展開明細" className="w-9 h-9 rounded-full bg-white/10 border border-white/10 flex items-center justify-center shrink-0 transition" style={{ transform: expanded ? 'rotate(180deg)' : 'none' }}>
-                <ChevronRight size={18} className="rotate-90" />
-              </button>
+
             </div>
           </div>
         </div>
-
-        {expanded && (
-          <div className="mt-4 pt-4 border-t border-white/10 space-y-3">
-            {breakdown.length > 0
-              ? <div className="flex flex-wrap gap-1.5">{breakdown.map(b => <span key={b.k} className="text-[11px] bg-white/10 border border-white/10 rounded-full px-2.5 py-1">{b.label} {b.v}</span>)}</div>
-              : <p className="text-xs text-white/45">今天還沒有活動紀錄</p>}
-            <div className="flex justify-between text-xs text-white/55">
-              <span>連續達標 <b className="text-white">{streak}</b> 天</span>
-              <span>全隊今天 <b className="text-white tabular-nums">{teamStats.total}</b> 分 · <b className="text-white">{teamStats.reached}</b>/{teamStats.n} 人達標</span>
-            </div>
-          </div>
-        )}
 
         <button onClick={() => onGo('calendar')} className="mt-4 w-full text-left rounded-2xl bg-white/[0.07] border border-white/10 p-3.5 active:scale-[0.99] transition">
           <p className="text-xs text-white/55 mb-2">下一步行動</p>
@@ -8441,9 +8847,9 @@ const TodayHome = ({ loggedInUser, activities, team, scheduleEvents, recurringRu
 
       <div className="grid grid-cols-4 gap-2.5">
         {[
-          { id: 'activity', label: '新增活動', icon: Plus, accent: true },
+          { id: 'activity', label: '建活動量', icon: Plus, accent: true },
           { id: 'customers', label: '新增客戶', icon: Users },
-          { id: 'entry', label: '新增案件', icon: FileText },
+          { id: 'entry', label: '回報業績', icon: FileText },
           { id: 'calendar', label: '查看行程', icon: Calendar }
         ].map(a => {
           const Icon = a.icon;
@@ -8455,6 +8861,10 @@ const TodayHome = ({ loggedInUser, activities, team, scheduleEvents, recurringRu
           );
         })}
       </div>
+
+      <HomeGoalsQuality loggedInUser={loggedInUser} records={records} activities={activities} />
+
+      <HomeTodoCard loggedInUser={loggedInUser} />
 
       <button onClick={() => onGo('activity')} className={`${glass} w-full rounded-[24px] p-4 text-left active:scale-[0.99] transition`}>
         <div className="flex items-center gap-3">
@@ -8499,40 +8909,7 @@ const TodayHome = ({ loggedInUser, activities, team, scheduleEvents, recurringRu
         </div>
       </div>
 
-      <div className={`${glass} rounded-[24px] p-4`}>
-        <div className="flex items-center justify-between mb-1">
-          <p className="font-bold text-base">今日行程 <span className="text-white/45 font-normal">({todayItems.length})</span></p>
-          <button onClick={() => onGo('calendar')} className="text-xs text-white/70 bg-white/10 border border-white/10 rounded-full px-3 py-1.5 flex items-center gap-0.5">查看完整行程<ChevronRight size={13} /></button>
-        </div>
-        {todayItems.length === 0 && <p className="text-sm text-white/45 py-6 text-center">今天沒有排定行程</p>}
-        <div>
-          {todayItems.slice(0, 5).map((e, i, arr) => {
-            const isDone = e.status === 'completed';
-            return (
-              <button key={e.id} onClick={() => onGo('calendar')} className={`w-full flex items-stretch gap-3 text-left py-3.5 ${i < arr.length - 1 ? 'border-b border-white/10' : ''} ${isDone ? 'opacity-50' : ''}`}>
-                <div className="w-[52px] shrink-0">
-                  <p className="font-semibold tabular-nums">{e.time || '全天'}</p>
-                  {e.endTime && <p className="text-xs text-white/45 tabular-nums">{e.endTime}</p>}
-                </div>
-                <div className="flex flex-col items-center shrink-0 pt-1.5">
-                  <span className={`w-3 h-3 rounded-full ${getEventColor(e)}`}></span>
-                  {i < arr.length - 1 && <span className="flex-1 w-px bg-white/15 mt-1.5"></span>}
-                </div>
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-center gap-2">
-                    <p className={`font-bold truncate ${isDone ? 'line-through' : ''}`}>{itemTitle(e)}</p>
-                    <span className="text-[10px] border border-white/20 bg-white/10 rounded-md px-1.5 py-0.5 shrink-0">{itemBadge(e)}</span>
-                  </div>
-                  {itemSub(e) && <p className="text-sm text-white/65 mt-0.5 truncate">{itemSub(e)}</p>}
-                  {e.address && <p className="text-xs text-white/45 mt-1 flex items-center gap-1 truncate"><MapPin size={12} className="shrink-0" />{e.address}</p>}
-                </div>
-                <ChevronRight size={18} className="text-white/35 shrink-0 self-center" />
-              </button>
-            );
-          })}
-        </div>
-        {todayItems.length > 5 && <p className="text-center text-xs text-white/45 pt-2">還有 {todayItems.length - 5} 個行程</p>}
-      </div>
+      {isTeamScheduleViewer && <TeamTargetBoard team={team} activities={activities} records={records} rootName="吳政翰" />}
     </div>
   );
 };
@@ -8540,6 +8917,8 @@ const TodayHome = ({ loggedInUser, activities, team, scheduleEvents, recurringRu
 const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, activities, team, onGo, isTeamScheduleViewer, recurringRules, bellCount }) => {
   const today = getTodayDate();
   const [showMore, setShowMore] = useState(false);
+  const dueRef = useRef(null);
+  const openDue = () => { setShowMore(true); setTimeout(() => { try { dueRef.current && dueRef.current.scrollIntoView({ behavior: 'smooth', block: 'start' }); } catch (e) {} }, 120); };
   const [busyId, setBusyId] = useState(null);
 
   const [completingContact, setCompletingContact] = useState(null);
@@ -8711,22 +9090,14 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
 
   return (
     <div className="max-w-xl mx-auto space-y-4 animate-fade-in pb-12">
-      <TodayHome loggedInUser={loggedInUser} activities={activities} team={team} scheduleEvents={scheduleEvents} recurringRules={recurringRules} onGo={onGo} bellCount={bellCount} dueCount={dueCustomers.length} onShowMore={() => setShowMore(true)} />
+      <TodayHome loggedInUser={loggedInUser} activities={activities} team={team} records={records} isTeamScheduleViewer={isTeamScheduleViewer} scheduleEvents={scheduleEvents} recurringRules={recurringRules} onGo={onGo} bellCount={bellCount} dueCount={dueCustomers.length} onShowMore={openDue} />
 
-      <button onClick={() => setShowMore(v => !v)} className="w-full flex items-center justify-center gap-1.5 py-3.5 rounded-2xl bg-white/[0.06] border border-white/10 text-sm font-semibold text-white/80 active:scale-[0.99] transition">
-        {showMore ? '收起' : '查看更多工作事項'}<ChevronRight size={16} className={showMore ? '-rotate-90' : 'rotate-90'} />
-      </button>
-
+      <div ref={dueRef}></div>
       {showMore && (
       <div className="rounded-[28px] bg-[#f5f5f7] text-gray-900 p-3 sm:p-4 space-y-6">
-      {isTeamScheduleViewer && <TeamTargetBoard team={team} activities={activities} records={records} rootName="吳政翰" />}
-
-      <PersonalGoalsCard loggedInUser={loggedInUser} records={records} activities={activities} />
-
-      <PersonalTodoList loggedInUser={loggedInUser} />
-
-      <div>
-        <p className="text-sm text-gray-400">{today} · 今天該聯繫、該留意的事</p>
+      <div className="flex items-center justify-between">
+        <p className="text-sm text-gray-500 font-bold">{today} · 今天該聯繫、該留意的事</p>
+        <button onClick={() => setShowMore(false)} className="text-xs font-bold text-gray-500 bg-white rounded-full px-3 py-1.5 border border-gray-200">收起</button>
       </div>
 
       {isTodayEmpty && <Card className="p-8 text-center text-gray-400">今天沒有待辦事項，太棒了 🎉</Card>}
@@ -11129,9 +11500,10 @@ const App = () => {
   }
 
   return (
-    <div className={`jf-tech ${activeTab === 'todo' ? 'jf-dark' : ''} ${(activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'jf-dark-m' : ''} min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8 relative`}>
+    <div className={`jf-tech ${activeTab === 'todo' ? 'jf-dark' : ''} ${(activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'jf-dark-m' : ''} min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8 relative`}>
       <JfTechStyle />
-      {(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') && <div className={`fixed inset-0 pointer-events-none ${activeTab === 'todo' ? '' : 'md:hidden'}`} style={{ background: 'radial-gradient(ellipse 70% 40% at 85% 6%, rgba(251,146,60,.34), transparent 60%), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%), radial-gradient(ellipse 90% 40% at 50% 100%, rgba(99,102,241,.14), transparent 60%)' }}></div>}
+      {(activeTab === 'todo' || activeTab === 'warroom') && <div className={`fixed inset-0 pointer-events-none ${activeTab === 'todo' ? '' : 'md:hidden'}`} style={{ backgroundColor: '#05070f', backgroundImage: 'linear-gradient(180deg, rgba(5,7,15,0) 0%, rgba(5,7,15,.35) 38%, rgba(5,7,15,.82) 100%), url(/bg-mountain.jpg), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%)', backgroundSize: 'cover, cover, auto', backgroundPosition: 'top center', backgroundRepeat: 'no-repeat' }}></div>}
+      {(activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') && <div className="fixed inset-0 pointer-events-none md:hidden" style={{ background: 'radial-gradient(ellipse 70% 40% at 85% 6%, rgba(251,146,60,.34), transparent 60%), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%), radial-gradient(ellipse 90% 40% at 50% 100%, rgba(99,102,241,.14), transparent 60%)' }}></div>}
       <DailyNudge loggedInUser={loggedInUser} activities={activities} onGo={setActiveTab} />
       {/* 桌機版：完整頂部導覽（Logo、置中分頁選單、使用者資訊） */}
       <nav className="hidden md:block sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-white/20 shadow-sm overflow-x-auto">
@@ -11184,7 +11556,7 @@ const App = () => {
       </nav>
 
       {/* 手機版：極簡頂部列，只有目前頁面標題＋搜尋＋登出，其餘導覽交給底部列 */}
-      <div className={`${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100`}>
+      <div className={`${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100`}>
         <div className="h-14 px-4 flex items-center justify-between">
           <h1 className="text-base font-bold text-gray-900">{currentNavItem?.label || '極豐通訊處'}</h1>
           <div className="flex items-center gap-1">
@@ -11197,12 +11569,12 @@ const App = () => {
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
-      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
+      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
-        {activeTab === 'warroom' && <SalesWarRoomPage loggedInUser={loggedInUser} team={team} customers={customers} records={enrichedRecords} />}
+        {activeTab === 'warroom' && <SalesWarRoomPage loggedInUser={loggedInUser} team={team} customers={customers} records={enrichedRecords} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'announce' && <AnnouncementsPage loggedInUser={loggedInUser} announcements={announcements} canPost={isTeamScheduleViewer} onSeen={handleMarkAnnouncementsSeen} />}
         {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} isManagerViewer={isTeamScheduleViewer} />}
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} loggedInUser={loggedInUser} onSearch={() => setShowGlobalSearch(true)} />}
@@ -11216,7 +11588,7 @@ const App = () => {
       </main>
 
       {/* 手機版底部導覽列：4個常用分頁＋更多，App感的核心 */}
-      <nav className={`md:hidden fixed bottom-0 left-0 right-0 z-50 backdrop-blur-2xl border-t ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'bg-[#070914]/85 border-white/10' : 'bg-white/80 border-black/[0.06]'}`} style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
+      <nav className={`md:hidden fixed bottom-0 left-0 right-0 z-50 backdrop-blur-2xl border-t ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'bg-[#070914]/85 border-white/10' : 'bg-white/80 border-black/[0.06]'}`} style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
         <div className="flex items-stretch">
           {primaryNavItems.map(item => {
             const ItemIcon = item.icon;
@@ -11227,8 +11599,8 @@ const App = () => {
                 onClick={() => setActiveTab(item.id)}
                 className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1"
               >
-                <ItemIcon size={22} className={active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-white/35' : 'text-gray-300')} />
-                <span className={`text-[10px] ${active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-white/40' : 'text-gray-400')}`}>{item.label}</span>
+                <ItemIcon size={22} className={active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-white/35' : 'text-gray-300')} />
+                <span className={`text-[10px] ${active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-white/40' : 'text-gray-400')}`}>{item.label}</span>
                 {!!item.badge && (
                   <span className="absolute top-1 right-1/4 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1">{item.badge > 99 ? '99+' : item.badge}</span>
                 )}
@@ -11236,9 +11608,9 @@ const App = () => {
             );
           })}
           <button onClick={() => setShowMoreSheet(true)} className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1">
-            <LayoutGrid size={22} className={isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-white/35' : 'text-gray-300')} />
+            <LayoutGrid size={22} className={isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-white/35' : 'text-gray-300')} />
             {moreNavItems.some(i => i.badge) && <span className="absolute top-2 right-[28%] w-2.5 h-2.5 bg-red-500 rounded-full"></span>}
-            <span className={`text-[10px] ${isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-white/40' : 'text-gray-400')}`}>更多</span>
+            <span className={`text-[10px] ${isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard' || activeTab === 'warroom') ? 'text-white/40' : 'text-gray-400')}`}>更多</span>
           </button>
         </div>
       </nav>
