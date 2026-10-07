@@ -41,6 +41,7 @@ import {
   Trophy,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   ShieldCheck,
   ClipboardCheck,
   ClipboardList,
@@ -2579,7 +2580,7 @@ const OrgChartManage = ({ team, recruits }) => {
             <div key={member.id} className="flex flex-col items-center relative">
                {(members.length + candidates.length) > 1 && <div className="absolute -top-8 w-px h-6 bg-gray-300"></div>}
                <Card className="w-48 p-4 text-center border-t-4 border-t-indigo-500 hover:-translate-y-1 transition-transform relative group z-10 cursor-pointer" onClick={() => setEditMember(member)}>
-                 <div className="w-12 h-12 bg-indigo-50 rounded-full flex items-center justify-center text-indigo-700 font-bold mx-auto mb-3 text-lg">{member.name[0]}</div>
+                 <Avatar name={member.name} size={48} className="mx-auto mb-3" />
                  <h4 className="font-bold text-gray-900">{member.name}</h4>
                  <p className="text-xs text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-full inline-block mt-2 font-medium">{member.role}</p>
                  <button onClick={(e) => { e.stopPropagation(); setDeleteInfo({ id: member.id, isRecruit: false }); }} className="absolute top-2 right-2 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"><Trash2 size={14} /></button>
@@ -2738,6 +2739,263 @@ const OrgChartManage = ({ team, recruits }) => {
   );
 };
 
+
+// --- 成員頭像：照片放在 public/avatars/，沒有照片的人顯示姓名首字 ---
+const AVATAR_FILES = { '吳政翰': 'wzh', '李冠葒': 'lgh', '陳鈺雯': 'cyw', '蘇暐翔': 'sww', '楊雅涵': 'yyh' };
+const Avatar = ({ name, size = 36, className = '', style = {}, title }) => {
+  const [broken, setBroken] = useState(false);
+  const key = AVATAR_FILES[String(name || '').trim()];
+  const base = { width: size, height: size, fontSize: Math.max(11, Math.round(size * 0.42)), ...style };
+  if (key && !broken) {
+    return <img src={`/avatars/${key}.jpg`} alt={name} title={title || name} onError={() => setBroken(true)} draggable={false}
+      className={`rounded-full object-cover shrink-0 ${className}`} style={base} />;
+  }
+  return (
+    <span title={title || name} className={`rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 text-white inline-flex items-center justify-center font-bold shrink-0 ${className}`} style={base}>
+      {String(name || '?').charAt(0)}
+    </span>
+  );
+};
+
+// --- 手機版：增員儀表板（深色玻璃風）---
+const RECRUIT_STAGE_TONE = {
+  '新名單': { c: '#60a5fa', g: 'from-blue-500 to-sky-400' },
+  '臨時帳號': { c: '#818cf8', g: 'from-indigo-500 to-blue-400' },
+  '內考': { c: '#22d3ee', g: 'from-cyan-500 to-teal-400' },
+  '外考': { c: '#a78bfa', g: 'from-violet-500 to-purple-400' },
+  '登錄': { c: '#34d399', g: 'from-emerald-500 to-green-400' },
+  '優培': { c: '#fbbf24', g: 'from-amber-500 to-orange-400' },
+};
+const RECRUIT_DATE_FIELDS = [
+  { label: '臨時帳號', key: 'tempAccountDate' }, { label: '內考日期', key: 'internalExamDate' },
+  { label: '外考日期', key: 'externalExamDate' }, { label: '預計登錄', key: 'registeredDate' }, { label: '優培開始', key: 'trainingDate' },
+];
+const MobileRecruitView = ({ recruits, team, status, updateRecruit, toggleDoc, onDelete, onPromote, loadingId, canEdit }) => {
+  const today = getTodayDate();
+  const [tab, setTab] = useState('overview');
+  const [month, setMonth] = useState(today.slice(0, 7));
+  const [stage, setStage] = useState('all');
+  const [detailId, setDetailId] = useState(null);
+  const [showAll, setShowAll] = useState(false);
+
+  const nameOf = (id) => team.find(m => m.id === id)?.name || '—';
+  const list = useMemo(() => recruits.map(r => ({ ...r, st: status(r) })), [recruits, status]);
+  const idxOf = (st) => RECRUIT_STATUSES.indexOf(st);
+  const isReg = (r) => idxOf(r.st) >= 4 || r.isPromoted;
+  const monthReg = list.filter(r => isReg(r) && (r.dates?.registeredDate || '').startsWith(month)).length;
+  const monthQual = list.filter(r => r.st === '優培' && (r.dates?.trainingDate || '').startsWith(month)).length;
+  const yearReg = list.filter(isReg).length;
+  const yearQual = list.filter(r => r.st === '優培').length;
+  const examing = list.filter(r => !r.isPromoted && ['臨時帳號', '內考', '外考'].includes(r.st)).length;
+  const pct = (a, b) => b ? Math.min(100, Math.round(a / b * 100)) : 0;
+
+  const reach = RECRUIT_STATUSES.map((s, i) => list.filter(r => (r.isPromoted ? 4 : idxOf(r.st)) >= i).length);
+  const stageCount = RECRUIT_STATUSES.map(s => list.filter(r => r.st === s).length);
+  const maxStage = Math.max(1, ...stageCount);
+
+  const nextDate = (r) => {
+    const c = RECRUIT_DATE_FIELDS.map(f => ({ label: f.label, d: r.dates?.[f.key] })).filter(x => x.d && x.d >= today).sort((a, b) => a.d.localeCompare(b.d))[0];
+    return c ? { label: c.label, d: c.d.slice(5).replace('-', '/') } : null;
+  };
+  const sortedList = useMemo(() => [...list].sort((a, b) => (b.isPromoted ? -1 : 0) - (a.isPromoted ? -1 : 0) || idxOf(b.st) - idxOf(a.st)), [list]);
+  const shown = (tab === 'track' ? sortedList.filter(r => stage === 'all' || r.st === stage) : (showAll ? sortedList : sortedList.slice(0, 5)));
+
+  const owners = team.map(m => ({ m, n: list.filter(r => r.recruiterId === m.id).length, reg: list.filter(r => r.recruiterId === m.id && isReg(r)).length, qual: list.filter(r => r.recruiterId === m.id && r.st === '優培').length, mReg: list.filter(r => r.recruiterId === m.id && isReg(r) && (r.dates?.registeredDate || '').startsWith(month)).length, mQual: list.filter(r => r.recruiterId === m.id && r.st === '優培' && (r.dates?.trainingDate || '').startsWith(month)).length })).filter(o => o.n > 0 || o.reg > 0).sort((a, b) => b.n - a.n);
+  const donutColors = ['#a78bfa', '#60a5fa', '#22d3ee', '#34d399', '#fbbf24', '#fb7185'];
+  const donutTotal = owners.reduce((s, o) => s + o.n, 0) || 1;
+  let acc = 0;
+  const donutStops = owners.map((o, i) => { const a = acc / donutTotal * 100; acc += o.n; return `${donutColors[i % 6]} ${a}% ${acc / donutTotal * 100}%`; }).join(', ');
+
+  const detail = list.find(r => r.id === detailId);
+  const card = 'rounded-2xl border border-white/10 bg-white/[0.05] backdrop-blur-xl';
+  const StagePill = ({ s }) => <span className="px-2 py-0.5 rounded-md text-[11px] font-bold border whitespace-nowrap" style={{ color: RECRUIT_STAGE_TONE[s].c, borderColor: RECRUIT_STAGE_TONE[s].c + '66', background: RECRUIT_STAGE_TONE[s].c + '1a' }}>{s}</span>;
+
+  const Row = ({ r }) => {
+    const nx = nextDate(r);
+    return (
+      <button type="button" onClick={() => setDetailId(r.id)} className="w-full grid grid-cols-[1.2fr_78px_1fr_44px] items-center gap-2 py-3 border-t border-white/[0.07] text-left">
+        <div className="flex items-center gap-2 min-w-0"><Avatar name={r.name} size={34} /><span className="font-semibold text-[14px] truncate">{r.name}</span></div>
+        <div><StagePill s={r.st} /></div>
+        <div className="min-w-0 text-[12px] text-white/60 truncate">{nx ? <><span className="text-white/80">{nx.label}</span> {nx.d}</> : '—'}</div>
+        <div className="flex items-center gap-1.5"><Avatar name={nameOf(r.recruiterId)} size={22} /><ChevronRight size={14} className="text-white/35" /></div>
+      </button>
+    );
+  };
+
+  return (
+    <div className="md:hidden text-white pb-28 animate-fade-in">
+      <div className="flex items-start justify-between gap-3 pt-1">
+        <div className="min-w-0">
+          <h1 className="text-[27px] font-black tracking-tight leading-tight">增員儀表板</h1>
+          <p className="text-[12.5px] text-white/50 mt-1">打造更強的團隊，從今天開始。</p>
+        </div>
+        <label className="relative shrink-0 flex items-center gap-1.5 rounded-2xl border border-white/15 bg-white/[0.07] backdrop-blur px-3 py-2.5 text-[13.5px] font-semibold">
+          <Calendar size={16} className="text-white/70" />{month.replace('-', '年')}月<ChevronDown size={14} className="text-white/60" />
+          <input type="month" value={month} onChange={e => e.target.value && setMonth(e.target.value)} className="absolute inset-0 opacity-0 w-full h-full" />
+        </label>
+      </div>
+
+      <div className="mt-4 grid grid-cols-4 gap-1 p-1 rounded-2xl border border-white/10 bg-white/[0.05] backdrop-blur">
+        {[['overview', '總覽'], ['goal', '目標進度'], ['track', '準增員追蹤'], ['member', '成員表現']].map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setTab(k)} className={`py-2.5 rounded-xl text-[12.5px] font-bold transition ${tab === k ? 'bg-blue-500 text-white shadow-[0_0_18px_rgba(59,130,246,.55)]' : 'text-white/55'}`}>{l}</button>
+        ))}
+      </div>
+
+      {(tab === 'overview' || tab === 'goal') && (
+        <div className="mt-3 grid grid-cols-2 gap-3">
+          {[['本月登錄', monthReg, yearReg, GOAL_REGISTER, 'from-blue-500 to-indigo-400', Users, '#818cf8'], ['本月優培', monthQual, yearQual, GOAL_QUALITY, 'from-amber-500 to-orange-400', Star, '#fbbf24']].map(([l, v, y, g, grad, Ic, col]) => (
+            <div key={l} className={`${card} p-3.5`}>
+              <div className="flex items-center gap-3">
+                <span className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: col + '26', color: col }}><Ic size={22} /></span>
+                <div className="min-w-0"><p className="text-[12px] text-white/60">{l}</p><p className="leading-none mt-1"><span className="text-[28px] font-black">{v}</span><span className="text-[13px] text-white/50"> 人</span></p></div>
+              </div>
+              <div className="mt-3 h-1.5 rounded-full bg-white/10 overflow-hidden"><div className={`h-full rounded-full bg-gradient-to-r ${grad}`} style={{ width: `${pct(y, g)}%` }} /></div>
+              <p className="text-[11px] text-white/50 mt-1.5 flex justify-between"><span>年度 {y} / {g} 人</span><span>{pct(y, g)}%</span></p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === 'overview' && (
+        <>
+          <div className="mt-3 grid grid-cols-4 gap-2">
+            {[['名單總數', list.filter(r => !r.isPromoted).length, '#60a5fa', UserPlus], ['考試中', examing, '#34d399', FileText], ['優培', yearQual, '#a78bfa', Award], ['已登錄', yearReg, '#fbbf24', CheckCircle2]].map(([l, v, col, Ic]) => (
+              <div key={l} className={`${card} p-2.5`}>
+                <Ic size={18} style={{ color: col }} />
+                <p className="text-[11px] text-white/60 mt-1.5 truncate">{l}</p>
+                <p className="leading-none mt-1"><span className="text-[22px] font-black">{v}</span><span className="text-[11px] text-white/50"> 人</span></p>
+              </div>
+            ))}
+          </div>
+
+          <div className={`${card} mt-3 p-3.5`}>
+            <p className="font-bold text-[15px] flex items-center gap-2"><Filter size={16} className="text-blue-400" />準增員轉換漏斗</p>
+            <div className="mt-3 overflow-x-auto -mx-1 px-1">
+              <div className="grid grid-cols-6 gap-1 min-w-[330px]">
+                {RECRUIT_STATUSES.map((s, i) => (
+                  <div key={s} className="text-center">
+                    <div className={`h-9 flex items-center justify-center text-[11px] font-bold text-white bg-gradient-to-r ${RECRUIT_STAGE_TONE[s].g}`} style={{ clipPath: 'polygon(0 0, 82% 0, 100% 50%, 82% 100%, 0 100%, 18% 50%)' }}>{s === '臨時帳號' ? '臨時' : s}</div>
+                    <p className="text-[22px] font-black mt-2 leading-none">{reach[i]}</p>
+                    <p className="text-[11px] mt-1" style={{ color: RECRUIT_STAGE_TONE[s].c }}>{pct(reach[i], reach[0])}%</p>
+                    <p className="text-[10.5px] text-white/45 mt-1.5 pt-1.5 border-t border-white/10">{i === 0 ? '全部' : `轉換 ${pct(reach[i], reach[i - 1])}%`}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          <div className={`${card} mt-3 px-3.5 pt-3.5 pb-1`}>
+            <div className="flex items-center justify-between mb-1"><p className="font-bold text-[15px] flex items-center gap-2"><Users size={16} className="text-blue-400" />準增員名單<span className="text-white/50 font-medium">（{list.length}）</span></p>
+              <button type="button" onClick={() => setTab('track')} className="text-[12px] text-blue-300 font-semibold">查看全部</button></div>
+            <div className="grid grid-cols-[1.2fr_78px_1fr_44px] gap-2 text-[11px] text-white/40 pb-1.5"><span>姓名</span><span>階段</span><span>下一個日期</span><span>推薦人</span></div>
+            {shown.length === 0 && <p className="text-center text-white/40 text-sm py-6 border-t border-white/[0.07]">目前沒有準增員資料</p>}
+            {shown.map(r => <Row key={r.id} r={r} />)}
+          </div>
+
+          <div className="mt-3 grid grid-cols-2 gap-3">
+            <div className={`${card} p-3.5`}>
+              <p className="font-bold text-[14px]">推薦人分佈</p>
+              <div className="flex items-center gap-3 mt-3">
+                <div className="relative w-[84px] h-[84px] shrink-0 rounded-full" style={{ background: owners.length ? `conic-gradient(${donutStops})` : 'rgba(255,255,255,.1)' }}>
+                  <div className="absolute inset-[11px] rounded-full bg-[#0b1020] flex flex-col items-center justify-center"><span className="text-[20px] font-black leading-none">{list.length}</span><span className="text-[9px] text-white/50">準增員</span></div>
+                </div>
+                <div className="space-y-1.5 min-w-0">{owners.slice(0, 4).map((o, i) => <p key={o.m.id} className="text-[11.5px] flex items-center gap-1.5 truncate"><span className="w-2 h-2 rounded-full shrink-0" style={{ background: donutColors[i % 6] }} />{o.m.name}<span className="text-white/45">{o.n}</span></p>)}</div>
+              </div>
+            </div>
+            <div className={`${card} p-3.5`}>
+              <p className="font-bold text-[14px]">階段分佈</p>
+              <div className="flex items-end justify-between gap-1 h-[92px] mt-3">
+                {RECRUIT_STATUSES.map((s, i) => (
+                  <div key={s} className="flex-1 flex flex-col items-center justify-end h-full gap-1">
+                    <span className="text-[11px] font-bold" style={{ color: RECRUIT_STAGE_TONE[s].c }}>{stageCount[i]}</span>
+                    <div className="w-full rounded-t-md" style={{ height: `${Math.max(4, stageCount[i] / maxStage * 56)}px`, background: RECRUIT_STAGE_TONE[s].c }} />
+                    <span className="text-[9px] text-white/50 whitespace-nowrap">{s.length > 3 ? s.slice(0, 2) : s}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {tab === 'goal' && (
+        <div className="mt-3 space-y-3">
+          {[['年度登錄', yearReg, GOAL_REGISTER, 'from-blue-500 to-indigo-400'], ['年度優培', yearQual, GOAL_QUALITY, 'from-amber-500 to-orange-400']].map(([l, v, g, grad]) => (
+            <div key={l} className={`${card} p-4`}>
+              <div className="flex items-end justify-between"><p className="font-bold">{l}</p><p><span className="text-[26px] font-black">{v}</span><span className="text-white/50 text-sm"> / {g} 人</span></p></div>
+              <div className="mt-3 h-2.5 rounded-full bg-white/10 overflow-hidden"><div className={`h-full rounded-full bg-gradient-to-r ${grad}`} style={{ width: `${pct(v, g)}%` }} /></div>
+              <p className="text-[12px] text-white/55 mt-2">{pct(v, g)}%　還差 {Math.max(0, g - v)} 人</p>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {tab === 'track' && (
+        <div className="mt-3">
+          <div className="flex gap-2 overflow-x-auto pb-2 -mx-1 px-1">
+            {['all', ...RECRUIT_STATUSES].map(s => <button key={s} type="button" onClick={() => setStage(s)} className={`shrink-0 px-3.5 py-1.5 rounded-full text-[12.5px] font-semibold border ${stage === s ? 'bg-blue-500 border-blue-400 text-white' : 'border-white/15 bg-white/[0.05] text-white/65'}`}>{s === 'all' ? `全部 ${list.length}` : `${s} ${stageCount[idxOf(s)]}`}</button>)}
+          </div>
+          <div className={`${card} px-3.5 pt-1 pb-1 mt-1`}>
+            {shown.length === 0 && <p className="text-center text-white/40 text-sm py-8">沒有符合的準增員</p>}
+            {shown.map((r, i) => <div key={r.id} className={i === 0 ? '[&>button]:border-t-0' : ''}><Row r={r} /></div>)}
+          </div>
+        </div>
+      )}
+
+      {tab === 'member' && (
+        <div className="mt-3 space-y-2.5">
+          {owners.length === 0 && <p className="text-center text-white/40 text-sm py-8">目前沒有資料</p>}
+          {owners.map(o => (
+            <div key={o.m.id} className={`${card} p-3.5`}>
+              <div className="flex items-center gap-3"><Avatar name={o.m.name} size={44} /><div className="flex-1 min-w-0"><p className="font-bold">{o.m.name}</p><p className="text-[11.5px] text-white/50">準增員 {o.n} 人</p></div></div>
+              <div className="grid grid-cols-4 gap-2 mt-3 text-center">
+                {[['本月登錄', o.mReg, '#818cf8'], ['本月優培', o.mQual, '#fbbf24'], ['累積登錄', o.reg, '#34d399'], ['累積優培', o.qual, '#fbbf24']].map(([l, v, c]) => <div key={l} className="rounded-xl bg-white/[0.05] py-2"><p className="text-[18px] font-black" style={{ color: c }}>{v}</p><p className="text-[10.5px] text-white/50 mt-0.5">{l}</p></div>)}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {detail && (
+        <div className="fixed inset-0 z-[120] flex flex-col justify-end" onClick={() => setDetailId(null)}>
+          <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
+          <div className="relative rounded-t-3xl border-t border-white/15 bg-[#0c1020] max-h-[88vh] overflow-y-auto px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+20px)]" onClick={e => e.stopPropagation()}>
+            <div className="w-10 h-1 rounded-full bg-white/25 mx-auto mb-3" />
+            <div className="flex items-center gap-3">
+              <Avatar name={detail.name} size={52} />
+              <div className="flex-1 min-w-0"><p className="text-[18px] font-bold">{detail.name} {detail.isPromoted && <span className="text-[11px] text-emerald-300 ml-1">已轉正</span>}</p><div className="flex items-center gap-2 mt-1"><StagePill s={detail.st} /><span className="text-[12px] text-white/50 flex items-center gap-1">推薦人 <Avatar name={nameOf(detail.recruiterId)} size={18} />{nameOf(detail.recruiterId)}</span></div></div>
+              <button type="button" onClick={() => setDetailId(null)} className="p-2 text-white/60"><X size={20} /></button>
+            </div>
+            <p className="text-[12px] text-white/45 mt-4 mb-2">關鍵日期</p>
+            <div className="space-y-2">
+              {RECRUIT_DATE_FIELDS.map(f => (
+                <div key={f.key} className="flex items-center justify-between gap-3 rounded-xl bg-white/[0.05] px-3 py-2">
+                  <span className="text-[13px] text-white/75 shrink-0">{f.label}</span>
+                  {detail.isPromoted || !canEdit ? <span className="text-[13px] text-white/50">{detail.dates?.[f.key] || '-'}</span>
+                    : <DateSelect yearsBack={3} yearsForward={3} value={detail.dates?.[f.key] || ''} onChange={val => updateRecruit(detail.id, { dates: { ...(detail.dates || {}), [f.key]: val } })} />}
+                </div>
+              ))}
+            </div>
+            <p className="text-[12px] text-white/45 mt-4 mb-2">資料檢核</p>
+            <div className="grid grid-cols-2 gap-2">
+              {[['idCard', '身分證'], ['diploma', '畢業證書'], ['bankBook', '存摺影本'], ['credit', '聯徵報告']].map(([k, l]) => (
+                <button key={k} type="button" disabled={detail.isPromoted || !canEdit} onClick={() => toggleDoc(detail, k)} className={`flex items-center gap-2 px-3 py-2.5 rounded-xl border text-[13px] disabled:opacity-50 ${detail.docs?.[k] ? 'bg-emerald-500/15 border-emerald-400/40 text-emerald-300 font-bold' : 'bg-white/[0.04] border-white/12 text-white/55'}`}>{detail.docs?.[k] ? <CheckCircle2 size={16} /> : <Square size={16} />}{l}</button>
+              ))}
+            </div>
+            <p className="text-[12px] text-white/45 mt-4 mb-2">進度備註</p>
+            <input type="text" disabled={detail.isPromoted || !canEdit} className="w-full rounded-xl px-3 py-2.5 text-sm" placeholder="例如：進度正常、需補件…" value={detail.note || ''} onChange={e => updateRecruit(detail.id, { note: e.target.value })} />
+            {canEdit && (
+              <div className="grid grid-cols-2 gap-2 mt-5">
+                <button type="button" onClick={() => { onDelete(detail.id); setDetailId(null); }} className="py-3 rounded-xl border border-rose-400/40 text-rose-300 font-bold text-sm">刪除</button>
+                {!detail.isPromoted ? <button type="button" disabled={loadingId === detail.id} onClick={() => { onPromote(detail); setDetailId(null); }} className="py-3 rounded-xl bg-emerald-600 text-white font-bold text-sm disabled:opacity-50">手動建立帳號</button> : <span />}
+              </div>
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
 
 // --- Recruitment Dashboard (增員儀表板) ---
 const GOAL_REGISTER = 12;
@@ -2898,7 +3156,9 @@ const RecruitmentDashboard = ({ recruits, team, user }) => {
   };
 
   return (
-    <div className="space-y-12 animate-fade-in max-w-7xl mx-auto pb-12">
+    <>
+    <MobileRecruitView recruits={recruits} team={team} status={determineStatus} updateRecruit={updateRecruit} toggleDoc={toggleDoc} onDelete={(id) => setDeleteTarget(id)} onPromote={(r) => setConfirmPromoteTarget(r)} loadingId={loadingId} canEdit={!!user} />
+    <div className="hidden md:block space-y-12 animate-fade-in max-w-7xl mx-auto pb-12">
       <ConfirmModal
         isOpen={!!deleteTarget}
         onClose={() => setDeleteTarget(null)}
@@ -2986,6 +3246,11 @@ const RecruitmentDashboard = ({ recruits, team, user }) => {
         message={confirmPromoteTarget ? `確定要提前幫「${confirmPromoteTarget.name}」建立正式使用者帳號嗎？建立後她就能直接登入系統，之後就算走到預計登錄日期，系統也不會再重複建立第二個帳號。` : ''}
       />
     </div>
+    <div className="md:hidden">
+      <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除準增員" message="確定要刪除此準增員資料嗎？此動作無法復原。" />
+      <ConfirmModal isOpen={!!confirmPromoteTarget} onClose={() => setConfirmPromoteTarget(null)} onConfirm={() => handleManualCreateAccount(confirmPromoteTarget)} title="手動建立帳號" message={confirmPromoteTarget ? `確定要提前幫「${confirmPromoteTarget.name}」建立正式使用者帳號嗎？` : ''} />
+    </div>
+    </>
   );
 };
 
@@ -3119,7 +3384,7 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
             const st = STATE[stateOf(r)];
             return (
               <button key={r.id} onClick={() => setDetail(r)} className={`w-full flex items-center gap-3 py-3 text-left ${i < arr.length - 1 ? 'border-b border-white/10' : ''}`}>
-                <span className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 flex items-center justify-center text-[13px] font-bold shrink-0">{String(r.agentName || '?').charAt(0)}</span>
+                <Avatar name={r.agentName} size={36} />
                 <div className="min-w-0 flex-1">
                   <p className="text-[14px] font-bold truncate">{r.agentName}<span className="text-white/40 font-normal text-[12px]"> · {r.insuredName || '—'}</span></p>
                   <p className="text-[11px] text-white/45 truncate">{(r.date || '').slice(5)} · {r.product || '—'}</p>
@@ -4097,7 +4362,7 @@ const BulletinBlock = ({ block, accentKey }) => {
             {block.items.map((p, i) => (
               <div key={i} className="rounded-2xl border border-gray-100 p-4">
                 <div className="flex items-center gap-3 mb-3">
-                  <span className={`w-11 h-11 rounded-full bg-gradient-to-br ${accent.grad} text-white font-bold text-lg flex items-center justify-center`}>{p.name.charAt(0)}</span>
+                  <Avatar name={p.name} size={44} />
                   <div>
                     <p className="font-bold text-gray-900 text-base">{p.name}</p>
                     <p className="text-xs text-gray-400">{p.role}</p>
@@ -4600,7 +4865,7 @@ const MobileWarRoom = ({ summary, deals, visibleIds, today, onSelect, onSearch }
                 <button key={x.member.id} onClick={() => onSelect(x.member.id)} className="w-full grid grid-cols-[1fr_34px_72px_34px_34px_14px] gap-1.5 items-center px-3 py-3 border-t border-gray-50 text-left active:bg-gray-50">
                   <span className="flex items-center gap-2 min-w-0">
                     <span className="w-5 shrink-0 text-center text-[12px] text-gray-400 font-bold">{i < 3 && x.pendingTotal > 0 ? <Crown size={15} className={crown[i]} /> : i + 1}</span>
-                    <span className="w-8 h-8 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 text-white flex items-center justify-center text-[13px] font-bold shrink-0">{String(x.member.name).charAt(0)}</span>
+                    <Avatar name={x.member.name} size={32} />
                     <span className="text-[14px] font-bold truncate">{x.member.name}</span>
                   </span>
                   <span className="text-center text-[14px] font-semibold tabular-nums">{x.pendingCases.length}</span>
@@ -4634,7 +4899,7 @@ const MobileWarRoom = ({ summary, deals, visibleIds, today, onSelect, onSearch }
             <div className="space-y-2">
               {allCases.map(({ r, member, days }) => (
                 <div key={r.id} className="rounded-2xl bg-white border border-gray-100 px-3.5 py-3 flex items-center gap-3">
-                  <span className="w-9 h-9 rounded-full bg-gradient-to-br from-indigo-500 to-violet-500 text-white flex items-center justify-center text-[13px] font-bold shrink-0">{String(member.name).charAt(0)}</span>
+                  <Avatar name={member.name} size={36} />
                   <div className="min-w-0 flex-1">
                     <p className="text-[14px] font-bold truncate">{r.insuredName || '（未填被保人）'}</p>
                     <p className="text-[12px] text-gray-400 truncate">{member.name} · {r.product || '—'}</p>
@@ -8631,7 +8896,7 @@ const TeamTargetBoard = ({ team, activities, records, rootName }) => {
             return (
               <div key={m.id} className="bg-white/[0.05] border border-white/10 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-5">
                 <div className="flex items-center gap-3 sm:w-44 shrink-0">
-                  <span className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm" style={{ background: `${tone}22`, color: tone, border: `1px solid ${tone}55` }}>{String(m.name).charAt(0)}</span>
+                  <Avatar name={m.name} size={40} style={{ border: `2px solid ${tone}88` }} />
                   <div className="min-w-0">
                     <p className="font-semibold truncate">{m.name}</p>
                     <p className="text-[11px] text-white/45">{m.role}</p>
@@ -9527,7 +9792,7 @@ const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearc
                     {e.address && <p className="text-[13px] text-white/50 mt-1 flex items-center gap-1.5 truncate"><MapPin size={13} className="shrink-0" />{e.address}</p>}
                   </div>
                   {teamMode ? (
-                    <span className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 border" style={e._creator ? { background: `${e._creatorColor}33`, borderColor: `${e._creatorColor}99`, color: e._creatorColor } : { background: 'rgba(255,255,255,.08)', borderColor: 'rgba(255,255,255,.12)' }} title={e._creator ? `${e._creator} 建檔` : ''}>{e._creator ? String(e._creator).charAt(0) : <Users size={16} />}</span>
+                    <span className="w-10 h-10 rounded-full flex items-center justify-center text-sm font-bold shrink-0 border" style={e._creator ? { background: `${e._creatorColor}33`, borderColor: `${e._creatorColor}99`, color: e._creatorColor } : { background: 'rgba(255,255,255,.08)', borderColor: 'rgba(255,255,255,.12)' }} title={e._creator ? `${e._creator} 建檔` : ''}>{e._creator ? (AVATAR_FILES[e._creator] ? <img src={`/avatars/${AVATAR_FILES[e._creator]}.jpg`} alt={e._creator} className="w-full h-full rounded-full object-cover" /> : String(e._creator).charAt(0)) : <Users size={16} />}</span>
                   ) : (
                     <span className="w-10 h-10 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-sm font-semibold shrink-0">{isDone ? '✓' : (e.customerName ? String(e.customerName).charAt(0) : <Users size={16} />)}</span>
                   )}
@@ -11801,7 +12066,7 @@ const App = () => {
       </nav>
 
       {/* 手機版：極簡頂部列，只有目前頁面標題＋搜尋＋登出，其餘導覽交給底部列 */}
-      <div className={`${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry'].includes(activeTab) ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-[#070914]/90 backdrop-blur-xl border-b border-white/10`}>
+      <div className={`${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment'].includes(activeTab) ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-[#070914]/90 backdrop-blur-xl border-b border-white/10`}>
         <div className="h-14 px-4 flex items-center justify-between">
           <h1 className="text-base font-bold text-white">{currentNavItem?.label || '極豐通訊處'}</h1>
           <div className="flex items-center gap-1">
@@ -11814,7 +12079,7 @@ const App = () => {
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
-      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry'].includes(activeTab) ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
+      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment'].includes(activeTab) ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
