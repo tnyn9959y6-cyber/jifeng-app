@@ -5226,6 +5226,8 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   const [mergeSourceId, setMergeSourceId] = useState(null); // 發起合併的那張卡片
   const [networkFocusId, setNetworkFocusId] = useState(null);
   const [cardMenuOpenId, setCardMenuOpenId] = useState(null);
+  const [quick, setQuick] = useState('all');
+  const [visibleCount, setVisibleCount] = useState(40);
 
   const referralLeaderboard = useMemo(() => {
     const counts = {};
@@ -5396,6 +5398,15 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
     } catch (e) { console.error(e); } finally { setMerging(false); }
   };
 
+  const crmCounts = {
+    all: customers.length,
+    prospect: customers.filter(c => (c.tags || []).includes('準客戶')).length,
+    recruit: customers.filter(c => (c.tags || []).includes('準增員')).length,
+    ig: customers.filter(c => isIGListCustomer(c)).length
+  };
+  const mobileList = filteredCustomers.filter(c => quick === 'all' ? true : quick === 'prospect' ? (c.tags || []).includes('準客戶') : quick === 'recruit' ? (c.tags || []).includes('準增員') : isIGListCustomer(c));
+  const crmFilterActive = Object.values(filters).some(v => v && v !== false);
+
   return (
     <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除客戶" message="確定要刪除此客戶資料嗎？此動作無法復原。" />
@@ -5403,6 +5414,40 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
       <RelationshipNetworkModal isOpen={!!networkFocusId} onClose={() => setNetworkFocusId(null)} focusId={networkFocusId} setFocusId={setNetworkFocusId} customers={customers} relationships={relationships || []} loggedInUser={loggedInUser} />
       <NotionImportModal isOpen={isNotionOpen} onClose={() => setIsNotionOpen(false)} loggedInUser={loggedInUser} onImported={() => {}} />
 
+      <div className="md:hidden">
+        <MobileCustomerList
+          list={mobileList} total={customers.length} counts={crmCounts} quick={quick} setQuick={setQuick}
+          search={search} setSearch={setSearch} showFilter={showFilter} setShowFilter={setShowFilter} filterActive={crmFilterActive}
+          filterPanel={(
+            <div className="space-y-3">
+              <div className="grid grid-cols-2 gap-3">
+                <div><label className="text-[10px] font-bold text-gray-400 block mb-1">最小年齡</label><input type="number" className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none" value={filters.ageMin} onChange={e => setFilters({ ...filters, ageMin: e.target.value })} /></div>
+                <div><label className="text-[10px] font-bold text-gray-400 block mb-1">最大年齡</label><input type="number" className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none" value={filters.ageMax} onChange={e => setFilters({ ...filters, ageMax: e.target.value })} /></div>
+                <div><label className="text-[10px] font-bold text-gray-400 block mb-1">性別</label><select className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none" value={filters.gender} onChange={e => setFilters({ ...filters, gender: e.target.value })}><option value="">全部</option>{GENDER_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
+                <div><label className="text-[10px] font-bold text-gray-400 block mb-1">地區</label><select className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none" value={filters.region} onChange={e => setFilters({ ...filters, region: e.target.value })}><option value="">全部</option>{TAIWAN_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+                <div><label className="text-[10px] font-bold text-gray-400 block mb-1">年收入</label><select className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none" value={filters.incomeRange} onChange={e => setFilters({ ...filters, incomeRange: e.target.value })}><option value="">全部</option>{INCOME_RANGES.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+                <div><label className="text-[10px] font-bold text-gray-400 block mb-1">標籤</label><select className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none" value={filters.tag} onChange={e => setFilters({ ...filters, tag: e.target.value })}><option value="">全部</option>{CUSTOMER_TAGS.map(t => <option key={t} value={t}>{t}</option>)}</select></div>
+              </div>
+              <div className="flex flex-wrap gap-x-4 gap-y-2">
+                {[['vipOnly', '只看 VIP'], ['igOnly', '只看有 IG'], ['salesWatchOnly', '關注銷售'], ['recruitWatchOnly', '關注增員']].map(([k, label]) => (
+                  <label key={k} className="flex items-center gap-2 text-xs font-bold text-gray-600"><input type="checkbox" checked={filters[k]} onChange={e => setFilters({ ...filters, [k]: e.target.checked })} className="w-4 h-4" />{label}</label>
+                ))}
+              </div>
+            </div>
+          )}
+          visible={visibleCount} setVisible={setVisibleCount} today={getTodayDate()}
+          isVIP={(c) => isVIPCustomer(c, records)} isIG={isIGListCustomer} isDue={isFollowUpDue}
+          onToggleWatch={toggleSalesWatch} onOpenEdit={openEdit} onNetwork={setNetworkFocusId} onMerge={openMerge} onDelete={setDeleteTarget} onLine={openLineChat}
+          menuId={cardMenuOpenId} setMenuId={setCardMenuOpenId} getInstagramUrl={getInstagramUrl}
+          addItems={[
+            { label: '新增客戶', icon: UserPlus, onClick: openAdd },
+            { label: 'IG 匯入', icon: Upload, onClick: () => setIsIGOpen(true) },
+            { label: 'CSV 上傳', icon: Upload, onClick: () => setIsNotionOpen(true) }
+          ]}
+        />
+      </div>
+
+      <div className="hidden md:block space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div>
           <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">客戶管理</h2>
@@ -5642,6 +5687,8 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
             {customers.length === 0 ? '還沒有任何客戶資料，點右上角「新增客戶」開始建立' : '沒有符合篩選條件的客戶'}
           </div>
         )}
+      </div>
+
       </div>
 
       {(isAdding || editCustomer) && (
@@ -7478,6 +7525,7 @@ const JfTechStyle = () => (
     .jf-tech { background: #f5f5f7; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang TC", "Noto Sans TC", "Helvetica Neue", sans-serif; -webkit-font-smoothing: antialiased; letter-spacing: -0.005em; }
     .jf-tech h1, .jf-tech h2, .jf-tech h3 { letter-spacing: -0.02em; }
     .jf-tech.jf-dark { background: #05070f; }
+    @media (max-width: 767px) { .jf-tech.jf-dark-m { background: #05070f; } }
     .jf-tech .bg-indigo-600, .jf-tech .bg-indigo-500 { background-color: #111114; }
     .jf-tech .hover\\:bg-indigo-700:hover, .jf-tech .hover\\:bg-indigo-600:hover { background-color: #2a2a30; }
     .jf-tech .text-indigo-600, .jf-tech .text-indigo-700, .jf-tech .text-indigo-500 { color: #111114; }
@@ -8252,7 +8300,323 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
   );
 };
 
-const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurringRules, teamScheduleEvents, isTeamScheduleViewer }) => {
+// ================= 手機版：行事曆／客戶管理（深色、重點優先）=================
+const CAL_GROUPS = {
+  appt: { label: '約訪', color: '#3b82f6' },
+  interview: { label: '面談', color: '#38bdf8' },
+  submit: { label: '送件', color: '#34d399' },
+  recruit: { label: '增員', color: '#fb7185' },
+  meeting: { label: '會議', color: '#8b5cf6' },
+  activity: { label: '活動', color: '#fb923c' },
+  personal: { label: '私事', color: '#4ade80' },
+  claim: { label: '理賠', color: '#f59e0b' },
+  other: { label: '其他', color: '#94a3b8' }
+};
+const calGroupKey = (e) => {
+  if (e.isReminder) {
+    const c = e.category || 'other';
+    return (c === 'meeting' || c === 'paperwork') ? 'meeting' : c === 'personal' ? 'personal' : c === 'claim' ? 'claim' : 'other';
+  }
+  if (!ACTIVITY_WEIGHTS[e.type]) return 'recruit';
+  if (e.type === 'appointment') return 'appt';
+  if (e.type === 'interview') return 'interview';
+  if (['proposal', 'application', 'issue'].includes(e.type)) return 'submit';
+  return 'activity';
+};
+
+const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearch, onFilter, filterActive, addItemsFor, getEventLabel, teamToggle }) => {
+  const [mode, setMode] = useState('month');
+  const [selectedDay, setSelectedDay] = useState(today);
+  const [chip, setChip] = useState('all');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+
+  const eventsByDate = useMemo(() => {
+    const map = {};
+    events.forEach(e => {
+      const last = e.endDate && e.endDate > e.date ? e.endDate : e.date;
+      let cursor = e.date;
+      let guard = 0;
+      while (cursor <= last && guard < 62) {
+        if (!map[cursor]) map[cursor] = [];
+        map[cursor].push(e);
+        cursor = dateAdd(cursor, 1);
+        guard++;
+      }
+    });
+    return map;
+  }, [events]);
+
+  const [sy, sm] = selectedDay.split('-').map(Number);
+  const shift = (dir) => {
+    if (mode === 'month') {
+      const dim = new Date(sy, sm - 1 + dir + 1, 0).getDate();
+      const d = new Date(sy, sm - 1 + dir, Math.min(Number(selectedDay.slice(8)), dim));
+      setSelectedDay(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+    } else setSelectedDay(dateAdd(selectedDay, mode === 'week' ? dir * 7 : dir));
+    setChip('all');
+  };
+
+  const gridDays = useMemo(() => {
+    if (mode === 'day') return [];
+    if (mode === 'week') { const st = weekStartOf(selectedDay); return Array.from({ length: 7 }, (_, i) => dateAdd(st, i)); }
+    const first = `${sy}-${String(sm).padStart(2, '0')}-01`;
+    const start = dateAdd(first, -dayOfWeek(first));
+    const dim = new Date(sy, sm, 0).getDate();
+    const total = Math.ceil((dayOfWeek(first) + dim) / 7) * 7;
+    return Array.from({ length: total }, (_, i) => dateAdd(start, i));
+  }, [mode, selectedDay, sy, sm]);
+
+  const dayEvents = (eventsByDate[selectedDay] || []).slice().sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
+  const groupCounts = {};
+  dayEvents.forEach(e => { const k = calGroupKey(e); groupCounts[k] = (groupCounts[k] || 0) + 1; });
+  const shown = chip === 'all' ? dayEvents : dayEvents.filter(e => calGroupKey(e) === chip);
+  const [, selM, selD] = selectedDay.split('-').map(Number);
+  const holiday = TAIWAN_HOLIDAYS_2026[selectedDay];
+  const glass = 'bg-white/[0.06] backdrop-blur-xl border border-white/10';
+  const iconBtn = 'w-12 h-12 rounded-full bg-white/10 border border-white/15 flex items-center justify-center active:scale-95 transition';
+
+  return (
+    <div className="text-white space-y-4">
+      <div className="flex items-start justify-between gap-3 px-1">
+        <div>
+          <h1 className="text-[32px] font-bold leading-tight">行事曆</h1>
+          <p className="text-sm text-white/55 mt-1">掌握每一天，讓重要的事不漏接。</p>
+        </div>
+        <div className="flex items-center gap-2.5 shrink-0">
+          <button onClick={onSearch} aria-label="搜尋" className={iconBtn}><Search size={20} /></button>
+          <button onClick={onFilter} aria-label="篩選" className={`${iconBtn} relative`}><SlidersHorizontal size={20} />{filterActive && <span className="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-rose-500"></span>}</button>
+        </div>
+      </div>
+      {teamToggle}
+
+      <div className={`${glass} rounded-[28px] p-3`}>
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex bg-white/[0.06] border border-white/10 rounded-2xl p-1">
+            {[['month', '月'], ['week', '週'], ['day', '日']].map(([k, label]) => (
+              <button key={k} onClick={() => setMode(k)} className={`px-5 py-2 rounded-xl text-[15px] font-semibold transition ${mode === k ? 'bg-blue-600 text-white shadow-[0_0_18px_rgba(37,99,235,.55)]' : 'text-white/55'}`}>{label}</button>
+            ))}
+          </div>
+          <div className="flex items-center gap-1.5">
+            <button onClick={() => { setSelectedDay(today); setChip('all'); }} className="px-4 py-2 rounded-full bg-white/10 border border-white/15 text-sm font-semibold">今天</button>
+            <button onClick={() => shift(-1)} aria-label="上一個" className="w-9 h-9 rounded-full bg-white/10 border border-white/15 flex items-center justify-center"><ChevronLeft size={18} /></button>
+            <button onClick={() => shift(1)} aria-label="下一個" className="w-9 h-9 rounded-full bg-white/10 border border-white/15 flex items-center justify-center"><ChevronRight size={18} /></button>
+          </div>
+        </div>
+
+        <div className="mt-3 rounded-3xl bg-black/20 border border-white/10 p-3">
+          <p className="text-xl font-bold px-1 mb-2">{sy}年　{sm}月{mode === 'day' ? `　${selD}日` : ''}</p>
+          {mode !== 'day' && (
+            <>
+              <div className="grid grid-cols-7 text-center text-[13px] text-white/50 mb-1">{dayNames.map(w => <div key={w} className="py-1.5">{w}</div>)}</div>
+              <div className="grid grid-cols-7 border-t border-white/10">
+                {gridDays.map(d => {
+                  const evs = eventsByDate[d] || [];
+                  const keys = [...new Set(evs.map(calGroupKey))].slice(0, 3);
+                  const sel = d === selectedDay;
+                  const isToday = d === today;
+                  const inMonth = mode === 'week' || Number(d.slice(5, 7)) === sm;
+                  const hol = TAIWAN_HOLIDAYS_2026[d];
+                  return (
+                    <button key={d} onClick={() => { setSelectedDay(d); setChip('all'); }} className="h-[54px] flex flex-col items-center pt-1.5 border-b border-white/[0.06]">
+                      <span className={`w-10 h-8 rounded-xl flex items-center justify-center text-[17px] ${sel ? 'bg-blue-600 text-white font-semibold shadow-[0_0_20px_rgba(59,130,246,.6)]' : isToday ? 'ring-1 ring-blue-400/70 text-white' : hol ? 'text-rose-300' : inMonth ? 'text-white' : 'text-white/25'}`}>{Number(d.slice(8))}</span>
+                      <span className="flex gap-1 mt-1 h-1.5">{keys.map(k => <i key={k} className="w-1.5 h-1.5 rounded-full" style={{ background: CAL_GROUPS[k].color }}></i>)}</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </div>
+        <div className="flex flex-wrap justify-center gap-x-4 gap-y-1.5 mt-3 text-[13px] text-white/70">
+          {['appt', 'meeting', 'submit', 'recruit', 'activity', 'personal'].map(k => <span key={k} className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded-full" style={{ background: CAL_GROUPS[k].color }}></i>{CAL_GROUPS[k].label}</span>)}
+        </div>
+      </div>
+
+      <div className={`${glass} rounded-[28px] p-4`}>
+        <div className="flex items-baseline justify-between gap-2">
+          <p><span className="text-[26px] font-bold">{selM}月{selD}日</span><span className="text-white/60 ml-2 text-lg">週{dayNames[dayOfWeek(selectedDay)]}</span></p>
+          {holiday && <span className="text-xs text-rose-300">{holiday}</span>}
+        </div>
+        <div className="flex gap-2 overflow-x-auto mt-3 pb-1" style={{ scrollbarWidth: 'none' }}>
+          <button onClick={() => setChip('all')} className={`shrink-0 px-4 py-2 rounded-xl text-sm font-semibold border ${chip === 'all' ? 'bg-blue-600 border-blue-400/50 text-white' : 'bg-white/[0.06] border-white/10 text-white/70'}`}>全部 ({dayEvents.length})</button>
+          {Object.keys(groupCounts).map(k => (
+            <button key={k} onClick={() => setChip(k)} className={`shrink-0 px-4 py-2 rounded-xl text-sm font-semibold border ${chip === k ? 'bg-blue-600 border-blue-400/50 text-white' : 'bg-white/[0.06] border-white/10 text-white/70'}`}>{CAL_GROUPS[k].label} ({groupCounts[k]})</button>
+          ))}
+        </div>
+
+        {shown.length === 0 && <p className="text-center text-white/45 text-sm py-10">這天沒有安排</p>}
+        <div className="mt-4">
+          {shown.map((e, i) => {
+            const g = CAL_GROUPS[calGroupKey(e)];
+            const isDone = e.status === 'completed';
+            const title = e.isReminder ? e.title : getEventLabel(e);
+            const sub = e.isReminder ? (e.note && !/^\d{1,2}:\d{2}/.test(e.note) ? e.note : '') : (e.customerName || '');
+            return (
+              <button key={e.id} onClick={() => onEventClick(e)} className={`w-full flex gap-2.5 text-left ${isDone ? 'opacity-55' : ''}`}>
+                <div className="w-[48px] shrink-0 pt-4">
+                  <p className="font-semibold tabular-nums leading-tight">{e.time || '全天'}</p>
+                  {e.endTime && <p className="text-xs text-white/45 tabular-nums">{e.endTime}</p>}
+                </div>
+                <div className="relative w-3 shrink-0">
+                  <span className="absolute left-1/2 -translate-x-1/2 top-[22px] w-3 h-3 rounded-full" style={{ background: g.color, boxShadow: `0 0 10px ${g.color}99` }}></span>
+                  {i < shown.length - 1 && <span className="absolute left-1/2 top-[38px] -bottom-3 w-px bg-white/15"></span>}
+                </div>
+                <div className="flex-1 min-w-0 rounded-2xl bg-white/[0.06] border border-white/10 p-3.5 mb-3 flex items-center gap-3">
+                  <div className="min-w-0 flex-1">
+                    <div className="flex items-center gap-2">
+                      <p className={`text-[17px] font-bold truncate ${isDone ? 'line-through' : ''}`}>{title}</p>
+                      <span className="text-[11px] rounded-md px-2 py-0.5 shrink-0 border" style={{ color: g.color, borderColor: `${g.color}88`, background: `${g.color}1f` }}>{g.label}</span>
+                    </div>
+                    {sub && <p className="text-[14px] text-white/70 mt-1 flex items-center gap-1.5 truncate"><Users size={14} className="shrink-0 text-white/50" />{sub}</p>}
+                    {e.address && <p className="text-[13px] text-white/50 mt-1 flex items-center gap-1.5 truncate"><MapPin size={13} className="shrink-0" />{e.address}</p>}
+                  </div>
+                  <span className="w-10 h-10 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-sm font-semibold shrink-0">{isDone ? '✓' : (e.customerName ? String(e.customerName).charAt(0) : <Users size={16} />)}</span>
+                  <ChevronRight size={18} className="text-white/35 shrink-0" />
+                </div>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {menuOpen && <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)}></div>}
+      {menuOpen && (
+        <div className="fixed right-4 z-40 w-60 rounded-2xl bg-[#0d1124]/95 backdrop-blur-2xl border border-white/10 py-2 shadow-2xl animate-scale-up origin-bottom-right" style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 160px)' }}>
+          {addItemsFor(selectedDay).map((it, idx) => {
+            const Icon = it.icon;
+            return (
+              <button key={idx} onClick={() => { setMenuOpen(false); it.onClick(); }} className="w-full flex items-center gap-3 px-4 py-3 text-left active:bg-white/10">
+                <span className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center shrink-0"><Icon size={17} /></span>
+                <span className="text-[15px] font-semibold">{it.label}</span>
+              </button>
+            );
+          })}
+        </div>
+      )}
+      <button onClick={() => setMenuOpen(v => !v)} aria-label="新增" className="fixed right-4 z-40 w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 shadow-[0_8px_30px_rgba(59,130,246,.55)] flex items-center justify-center active:scale-95 transition" style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 86px)' }}>
+        <Plus size={30} className={`transition-transform ${menuOpen ? 'rotate-45' : ''}`} />
+      </button>
+    </div>
+  );
+};
+
+const MobileCustomerList = ({ list, total, counts, quick, setQuick, search, setSearch, showFilter, setShowFilter, filterPanel, filterActive, visible, setVisible, today, isVIP, isIG, isDue, onToggleWatch, onOpenEdit, onNetwork, onMerge, onDelete, onLine, menuId, setMenuId, addItems, getInstagramUrl }) => {
+  const [fab, setFab] = useState(false);
+  const glass = 'bg-white/[0.06] backdrop-blur-xl border border-white/10';
+  const tagCls = (t) => t === '準客戶' ? 'text-sky-300 border-sky-400/40 bg-sky-500/10' : t === '準增員' ? 'text-violet-300 border-violet-400/40 bg-violet-500/10' : (t === '重點客戶' || t === 'VIP') ? 'text-amber-300 border-amber-400/40 bg-amber-500/10' : t === 'IG名單' ? 'text-pink-300 border-pink-400/40 bg-pink-500/10' : 'text-emerald-300 border-emerald-400/40 bg-emerald-500/10';
+  const lastContact = (c) => {
+    const last = (c.visitLog || []).reduce((m, v) => (v.date && v.date > m ? v.date : m), '');
+    if (!last) return null;
+    const diff = Math.round((new Date(today) - new Date(last)) / 86400000);
+    return { diff, text: diff <= 0 ? '今天' : `${diff} 天前` };
+  };
+  const tiles = [
+    { k: 'all', label: '全部客戶', n: counts.all, dot: null },
+    { k: 'prospect', label: '準客戶', n: counts.prospect, dot: '#3b82f6' },
+    { k: 'recruit', label: '準增員', n: counts.recruit, dot: '#a78bfa' },
+    { k: 'ig', label: 'IG名單', n: counts.ig, dot: '#f472b6' }
+  ];
+  const circ = 'w-9 h-9 rounded-full bg-white/[0.07] border border-white/10 flex items-center justify-center text-white/85';
+
+  return (
+    <div className="text-white space-y-4">
+      <div className="flex items-start justify-between gap-3 px-1">
+        <div className="min-w-0">
+          <h1 className="text-[32px] font-bold leading-tight">客戶管理</h1>
+          <p className="text-sm text-white/55 mt-1">共 {total.toLocaleString()} 位客戶．持續建立關係</p>
+        </div>
+        <button onClick={() => setFab(v => !v)} aria-label="更多" className="w-12 h-12 rounded-full bg-white/10 border border-white/15 flex items-center justify-center shrink-0"><MoreVertical size={20} className="rotate-90" /></button>
+      </div>
+
+      <div className="grid grid-cols-4 gap-2">
+        {tiles.map(t => (
+          <button key={t.k} onClick={() => { setQuick(t.k); setVisible(40); }} className={`${glass} rounded-2xl px-3 py-3 text-left transition ${quick === t.k ? '!border-blue-400/70 bg-blue-500/15 shadow-[0_0_20px_rgba(59,130,246,.3)]' : ''}`}>
+            <p className="text-[12px] text-white/60 truncate">{t.label}</p>
+            <p className="mt-1 flex items-center gap-1.5"><b className="text-[19px] font-semibold tabular-nums leading-none">{t.n.toLocaleString()}</b>{t.dot && <i className="w-2 h-2 rounded-full shrink-0" style={{ background: t.dot }}></i>}</p>
+          </button>
+        ))}
+      </div>
+
+      <div className="flex gap-2.5">
+        <div className={`${glass} flex-1 rounded-2xl flex items-center gap-2.5 px-4 h-[52px]`}>
+          <Search size={18} className="text-white/50 shrink-0" />
+          <input value={search} onChange={e => { setSearch(e.target.value); setVisible(40); }} placeholder="搜尋姓名、電話、IG 帳號" className="flex-1 bg-transparent outline-none text-[15px] placeholder:text-white/35 min-w-0" />
+        </div>
+        <button onClick={() => setShowFilter(!showFilter)} aria-label="篩選" className={`${glass} relative w-[52px] h-[52px] rounded-2xl flex items-center justify-center shrink-0`}><SlidersHorizontal size={19} />{filterActive && <span className="absolute top-2 right-2 w-2.5 h-2.5 rounded-full bg-rose-500"></span>}</button>
+      </div>
+      {showFilter && <div className="rounded-3xl bg-[#f5f5f7] text-gray-900 p-4">{filterPanel}</div>}
+
+      <div className="space-y-3">
+        {list.slice(0, visible).map(c => {
+          const lc = lastContact(c);
+          const tags = [...(c.tags || []), ...(isVIP(c) ? ['VIP'] : []), ...(isIG(c) ? ['IG名單'] : [])];
+          return (
+            <div key={c.id} className={`${glass} rounded-3xl p-3.5 ${isDue(c) ? '!border-amber-400/50' : ''}`}>
+              <div className="flex items-start gap-3">
+                <button onClick={() => onOpenEdit(c)} className="w-12 h-12 rounded-full bg-white/10 border border-white/10 flex items-center justify-center text-lg font-semibold shrink-0">{String(c.name || '?').charAt(0)}</button>
+                <button onClick={() => onOpenEdit(c)} className="min-w-0 flex-1 text-left">
+                  <p className="font-bold text-[17px] truncate">{c.name}</p>
+                  <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {tags.map(t => <span key={t} className={`text-[11px] rounded-full px-2.5 py-0.5 border ${tagCls(t)}`}>{t}</span>)}
+                  </div>
+                  {c.igHandle && <p className="text-[13px] text-pink-300/90 mt-1.5 truncate">IG: {c.igHandle}</p>}
+                  {(c.region || c.incomeRange) && <p className="text-[13px] text-white/50 mt-1 flex items-center gap-1 truncate"><MapPin size={12} className="shrink-0" />{[c.region, c.incomeRange].filter(Boolean).join('．')}</p>}
+                </button>
+                <div className="shrink-0 flex flex-col items-end gap-2.5">
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[11px] text-white/50 whitespace-nowrap">上次聯繫 <b className={lc ? (lc.diff <= 0 ? 'text-emerald-300' : lc.diff <= 7 ? 'text-amber-300' : 'text-rose-300') : 'text-white/40'}>{lc ? lc.text : '無'}</b></span>
+                    <button onClick={() => onToggleWatch(c)} aria-label="關注"><Star size={19} className={c.specialFocus ? 'fill-amber-400 text-amber-400' : 'text-white/35'} /></button>
+                    <div className="relative">
+                      <button onClick={() => setMenuId(menuId === c.id ? null : c.id)} aria-label="更多" className="p-0.5"><MoreVertical size={19} className="text-white/60" /></button>
+                      {menuId === c.id && (
+                        <>
+                          <div className="fixed inset-0 z-40" onClick={() => setMenuId(null)}></div>
+                          <div className="absolute right-0 mt-1 w-40 rounded-2xl bg-[#0d1124]/95 backdrop-blur-2xl border border-white/10 py-1.5 z-50 shadow-2xl">
+                            <button onClick={() => { onNetwork(c.id); setMenuId(null); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left text-sm"><GitBranch size={15} className="text-violet-300" />關聯網</button>
+                            <button onClick={() => { onMerge(c.id); setMenuId(null); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left text-sm"><Users size={15} className="text-teal-300" />合併客戶</button>
+                            <button onClick={() => { onOpenEdit(c); setMenuId(null); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left text-sm"><Edit3 size={15} className="text-sky-300" />編輯</button>
+                            <button onClick={() => { onDelete(c.id); setMenuId(null); }} className="w-full flex items-center gap-2.5 px-3.5 py-2.5 text-left text-sm text-rose-300"><Trash2 size={15} />刪除</button>
+                          </div>
+                        </>
+                      )}
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    {c.phone ? <a href={`tel:${c.phone}`} aria-label="撥打電話" className={circ}><Phone size={16} /></a> : <span className={`${circ} opacity-30`}><Phone size={16} /></span>}
+                    {c.lineId ? <button onClick={() => onLine(c.lineId)} aria-label="LINE" className={`${circ} text-[9px] font-extrabold text-emerald-300`}>LINE</button> : <span className={`${circ} opacity-30 text-[9px] font-extrabold`}>LINE</span>}
+                    {c.igHandle ? <a href={getInstagramUrl(c.igHandle)} target="_blank" rel="noopener noreferrer" aria-label="IG" className={`${circ} text-[11px] font-extrabold text-pink-300`}>IG</a> : <span className={`${circ} opacity-30 text-[11px] font-extrabold`}>IG</span>}
+                    <button onClick={() => onOpenEdit(c)} aria-label="查看" className="text-white/35"><ChevronRight size={20} /></button>
+                  </div>
+                </div>
+              </div>
+              {isDue(c) && <p className="text-[11px] font-semibold text-amber-300 mt-2.5">⚠ 追蹤日期已到：{c.nextFollowUpDate}</p>}
+            </div>
+          );
+        })}
+        {list.length === 0 && <p className="text-center text-white/45 py-14 text-sm">{total === 0 ? '還沒有客戶資料，點右下角「＋」開始建立' : '沒有符合條件的客戶'}</p>}
+        {list.length > visible && <button onClick={() => setVisible(v => v + 40)} className={`${glass} w-full rounded-2xl py-3.5 text-sm font-semibold text-white/80`}>載入更多（還有 {list.length - visible} 位）</button>}
+      </div>
+
+      {fab && <div className="fixed inset-0 z-40" onClick={() => setFab(false)}></div>}
+      {fab && (
+        <div className="fixed right-4 z-40 w-56 rounded-2xl bg-[#0d1124]/95 backdrop-blur-2xl border border-white/10 py-2 shadow-2xl animate-scale-up origin-bottom-right" style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 160px)' }}>
+          {addItems.map((it, idx) => { const Icon = it.icon; return (
+            <button key={idx} onClick={() => { setFab(false); it.onClick(); }} className="w-full flex items-center gap-3 px-4 py-3 text-left active:bg-white/10">
+              <span className="w-9 h-9 rounded-full bg-white/10 flex items-center justify-center shrink-0"><Icon size={17} /></span>
+              <span className="text-[15px] font-semibold">{it.label}</span>
+            </button>
+          ); })}
+        </div>
+      )}
+      <button onClick={() => setFab(v => !v)} aria-label="新增" className="fixed right-4 z-40 w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 shadow-[0_8px_30px_rgba(59,130,246,.55)] flex items-center justify-center active:scale-95 transition" style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 86px)' }}>
+        <Plus size={30} className={`transition-transform ${fab ? 'rotate-45' : ''}`} />
+      </button>
+    </div>
+  );
+};
+
+const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurringRules, teamScheduleEvents, isTeamScheduleViewer, onSearch }) => {
   const today = getTodayDate();
   const [busyId, setBusyId] = useState(null);
   const [deleteTarget, setDeleteTarget] = useState(null);
@@ -8719,6 +9083,62 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
       <BatchScheduleModal isOpen={showBatchSchedule} onClose={() => setShowBatchSchedule(false)} loggedInUser={loggedInUser} team={team} />
       <BatchActivityImportModal isOpen={showBatchActivity} onClose={() => setShowBatchActivity(false)} loggedInUser={loggedInUser} customers={customers} team={team} />
 
+      <div className="md:hidden">
+        {isTeamScheduleViewer && showTeamView ? (
+          <div className="space-y-3 text-gray-900">
+            <button onClick={() => setShowTeamView(false)} className="text-sm font-semibold text-white/80 bg-white/10 border border-white/15 rounded-full px-4 py-2">← 回到我的行事曆</button>
+            {teamGroupedByDate.length > 0 ? teamGroupedByDate.map(([date, events]) => {
+              const displayEvents = events.map(e => ({ ...e, customerName: e.customerName ? `${e.ownerName} · ${e.customerName}` : e.ownerName }));
+              return (
+                <Card key={date} className="p-5">
+                  <h4 className="text-sm font-bold text-gray-500 mb-3">{date}（{getWeekdayLabel(date)}）</h4>
+                  <DayTimelineView events={displayEvents} isToday={date === today} onEventClick={() => {}} getEventLabel={getEventLabel} getEventPriority={getEventPriority} />
+                </Card>
+              );
+            }) : <Card className="p-8 text-center text-gray-400">團隊未來14天沒有排定行程</Card>}
+          </div>
+        ) : (
+          <MobileCalendarView
+            events={calendarEvents.filter(matchesFilter)}
+            today={today}
+            getEventLabel={getEventLabel}
+            onEventClick={handleEventTap}
+            onSearch={onSearch}
+            onFilter={() => setShowFilterPanel(v => !v)}
+            filterActive={!!(filterCategory || filterPriority)}
+            teamToggle={isTeamScheduleViewer ? <button onClick={() => setShowTeamView(true)} className="text-xs font-semibold text-white/75 bg-white/10 border border-white/15 rounded-full px-3.5 py-1.5 ml-1">查看團隊行程 →</button> : null}
+            addItemsFor={(d) => [
+              { label: '新增行程', icon: CalendarPlus, onClick: () => { setForm({ ...emptyForm, date: d }); setShowForm(true); } },
+              { label: '純提醒', icon: Bell, onClick: () => { setReminderDate(d); setShowReminderForm(true); } },
+              { label: '批次新增行程', icon: ListPlus, onClick: () => setShowBatchActivity(true) },
+              { label: '批次新增提醒', icon: ListPlus, onClick: () => setShowBatchSchedule(true) },
+              { label: '固定行程管理', icon: Repeat, onClick: () => setShowRecurringManage(true) }
+            ]}
+          />
+        )}
+        {showFilterPanel && (
+          <>
+            <div className="fixed inset-0 z-[55] bg-black/50" onClick={() => setShowFilterPanel(false)}></div>
+            <div className="fixed left-3 right-3 z-[56] rounded-3xl bg-[#0d1124]/95 backdrop-blur-2xl border border-white/10 p-4 text-white space-y-3" style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 90px)' }}>
+              <p className="font-bold">篩選行程</p>
+              <select className="w-full p-3 bg-white/10 border border-white/15 rounded-xl text-sm font-semibold outline-none" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
+                <option value="" className="text-black">全部分類</option>
+                {EVENT_CATEGORY_OPTIONS.map(o => <option key={o.value} value={o.value} className="text-black">{o.label}</option>)}
+              </select>
+              <select className="w-full p-3 bg-white/10 border border-white/15 rounded-xl text-sm font-semibold outline-none" value={filterPriority} onChange={e => setFilterPriority(e.target.value)}>
+                <option value="" className="text-black">全部優先度</option>
+                {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k} className="text-black">{v.label}</option>)}
+              </select>
+              <div className="flex gap-2">
+                {(filterCategory || filterPriority) && <button onClick={() => { setFilterCategory(''); setFilterPriority(''); }} className="flex-1 py-3 rounded-xl bg-white/10 text-sm font-semibold">清除</button>}
+                <button onClick={() => setShowFilterPanel(false)} className="flex-1 py-3 rounded-xl bg-blue-600 text-sm font-bold">完成</button>
+              </div>
+            </div>
+          </>
+        )}
+      </div>
+
+      <div className="hidden md:block space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">行事曆</h2>
@@ -8965,6 +9385,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
       </div>
       </>
       )}
+      </div>
 
       {/* 新增行程 */}
       {showForm && (
@@ -10177,9 +10598,9 @@ const App = () => {
   }
 
   return (
-    <div className={`jf-tech ${activeTab === 'todo' ? 'jf-dark' : ''} min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8 relative`}>
+    <div className={`jf-tech ${activeTab === 'todo' ? 'jf-dark' : ''} ${(activeTab === 'calendar' || activeTab === 'customers') ? 'jf-dark-m' : ''} min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8 relative`}>
       <JfTechStyle />
-      {activeTab === 'todo' && <div className="fixed inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 70% 40% at 85% 6%, rgba(251,146,60,.34), transparent 60%), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%), radial-gradient(ellipse 90% 40% at 50% 100%, rgba(99,102,241,.14), transparent 60%)' }}></div>}
+      {(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') && <div className={`fixed inset-0 pointer-events-none ${activeTab === 'todo' ? '' : 'md:hidden'}`} style={{ background: 'radial-gradient(ellipse 70% 40% at 85% 6%, rgba(251,146,60,.34), transparent 60%), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%), radial-gradient(ellipse 90% 40% at 50% 100%, rgba(99,102,241,.14), transparent 60%)' }}></div>}
       <DailyNudge loggedInUser={loggedInUser} activities={activities} onGo={setActiveTab} />
       {/* 桌機版：完整頂部導覽（Logo、置中分頁選單、使用者資訊） */}
       <nav className="hidden md:block sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-white/20 shadow-sm overflow-x-auto">
@@ -10232,7 +10653,7 @@ const App = () => {
       </nav>
 
       {/* 手機版：極簡頂部列，只有目前頁面標題＋搜尋＋登出，其餘導覽交給底部列 */}
-      <div className={`${activeTab === 'todo' ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100`}>
+      <div className={`${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100`}>
         <div className="h-14 px-4 flex items-center justify-between">
           <h1 className="text-base font-bold text-gray-900">{currentNavItem?.label || '極豐通訊處'}</h1>
           <div className="flex items-center gap-1">
@@ -10245,9 +10666,9 @@ const App = () => {
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
-      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${activeTab === 'todo' ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
+      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
-        {activeTab === 'calendar' && <CalendarPage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
+        {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
         {activeTab === 'warroom' && <SalesWarRoomPage loggedInUser={loggedInUser} team={team} customers={customers} records={enrichedRecords} />}
@@ -10264,7 +10685,7 @@ const App = () => {
       </main>
 
       {/* 手機版底部導覽列：4個常用分頁＋更多，App感的核心 */}
-      <nav className={`md:hidden fixed bottom-0 left-0 right-0 z-50 backdrop-blur-2xl border-t ${activeTab === 'todo' ? 'bg-[#070914]/85 border-white/10' : 'bg-white/80 border-black/[0.06]'}`} style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
+      <nav className={`md:hidden fixed bottom-0 left-0 right-0 z-50 backdrop-blur-2xl border-t ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'bg-[#070914]/85 border-white/10' : 'bg-white/80 border-black/[0.06]'}`} style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
         <div className="flex items-stretch">
           {primaryNavItems.map(item => {
             const ItemIcon = item.icon;
@@ -10275,8 +10696,8 @@ const App = () => {
                 onClick={() => setActiveTab(item.id)}
                 className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1"
               >
-                <ItemIcon size={22} className={active ? (activeTab === 'todo' ? 'text-white' : 'text-gray-900') : (activeTab === 'todo' ? 'text-white/35' : 'text-gray-300')} />
-                <span className={`text-[10px] ${active ? (activeTab === 'todo' ? 'font-bold text-white' : 'font-bold text-gray-900') : (activeTab === 'todo' ? 'text-white/40' : 'text-gray-400')}`}>{item.label}</span>
+                <ItemIcon size={22} className={active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-white/35' : 'text-gray-300')} />
+                <span className={`text-[10px] ${active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-white/40' : 'text-gray-400')}`}>{item.label}</span>
                 {!!item.badge && (
                   <span className="absolute top-1 right-1/4 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1">{item.badge > 99 ? '99+' : item.badge}</span>
                 )}
@@ -10284,9 +10705,9 @@ const App = () => {
             );
           })}
           <button onClick={() => setShowMoreSheet(true)} className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1">
-            <LayoutGrid size={22} className={isMoreActive ? 'text-gray-900' : (activeTab === 'todo' ? 'text-white/35' : 'text-gray-300')} />
+            <LayoutGrid size={22} className={isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-white/35' : 'text-gray-300')} />
             {moreNavItems.some(i => i.badge) && <span className="absolute top-2 right-[28%] w-2.5 h-2.5 bg-red-500 rounded-full"></span>}
-            <span className={`text-[10px] ${isMoreActive ? 'font-bold text-gray-900' : (activeTab === 'todo' ? 'text-white/40' : 'text-gray-400')}`}>更多</span>
+            <span className={`text-[10px] ${isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-white/40' : 'text-gray-400')}`}>更多</span>
           </button>
         </div>
       </nav>
