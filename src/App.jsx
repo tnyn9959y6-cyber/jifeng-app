@@ -7375,7 +7375,7 @@ const dateAdd = (dateStr, n) => {
   return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
 };
 const dayOfWeek = (dateStr) => { const [y, m, d] = dateStr.split('-').map(Number); return new Date(y, m - 1, d).getDay(); };
-const weekStartOf = (dateStr) => { const dow = dayOfWeek(dateStr); return dateAdd(dateStr, dow === 0 ? -6 : 1 - dow); };
+const weekStartOf = (dateStr) => dateAdd(dateStr, -dayOfWeek(dateStr));
 const weekPoints = (activities, agentId, date) => {
   const start = weekStartOf(date);
   const end = dateAdd(start, 6);
@@ -7477,6 +7477,7 @@ const JfTechStyle = () => (
   <style>{`
     .jf-tech { background: #f5f5f7; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang TC", "Noto Sans TC", "Helvetica Neue", sans-serif; -webkit-font-smoothing: antialiased; letter-spacing: -0.005em; }
     .jf-tech h1, .jf-tech h2, .jf-tech h3 { letter-spacing: -0.02em; }
+    .jf-tech.jf-dark { background: #05070f; }
     .jf-tech .bg-indigo-600, .jf-tech .bg-indigo-500 { background-color: #111114; }
     .jf-tech .hover\\:bg-indigo-700:hover, .jf-tech .hover\\:bg-indigo-600:hover { background-color: #2a2a30; }
     .jf-tech .text-indigo-600, .jf-tech .text-indigo-700, .jf-tech .text-indigo-500 { color: #111114; }
@@ -7727,8 +7728,239 @@ const TeamTargetBoard = ({ team, activities, records, rootName }) => {
   );
 };
 
-const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, activities, team, onGo, isTeamScheduleViewer }) => {
+// ================= 今日待辦首頁（手機優先：深色單欄，只留最重要的資訊）=================
+const TodayHome = ({ loggedInUser, activities, team, scheduleEvents, recurringRules, onGo, bellCount, dueCount, onShowMore }) => {
   const today = getTodayDate();
+  const [expanded, setExpanded] = useState(false);
+  const pts = pointsOnDate(activities, loggedInUser.id, today);
+  const pct = Math.min(1, pts / DAILY_TARGET);
+  const done = pts >= DAILY_TARGET;
+  const streak = useMemo(() => streakDays(activities, loggedInUser.id, today), [activities, loggedInUser.id, today]);
+  const weekStart = weekStartOf(today);
+  const week = Array.from({ length: 7 }, (_, i) => { const d = dateAdd(weekStart, i); return { d, p: pointsOnDate(activities, loggedInUser.id, d), isToday: d === today, future: d > today }; });
+  const wkTotal = week.reduce((s, x) => s + x.p, 0);
+  const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+  const hour = new Date().getHours();
+  const greet = hour < 11 ? '早安' : hour < 18 ? '午安' : '晚安';
+
+  const todayItems = useMemo(() => {
+    const real = (scheduleEvents || []).filter(e => e.status !== 'cancelled' && (e.endDate ? (e.date <= today && today <= e.endDate) : e.date === today));
+    const virt = [];
+    (recurringRules || []).filter(r => (r.participantIds || []).includes(loggedInUser.id)).forEach(rule => {
+      try {
+        const dates = generateRecurringOccurrences(rule, new Date(today), new Date(today));
+        if (dates.includes(today) && !(scheduleEvents || []).some(e => e.ruleId === rule.id && e.date === today)) {
+          virt.push({ id: `v_${rule.id}`, isVirtual: true, isReminder: true, type: 'reminder', title: rule.title, category: rule.category || 'meeting', date: today, time: rule.startTime || '', endTime: rule.endTime || '', status: 'scheduled' });
+        }
+      } catch (e) {}
+    });
+    return [...real, ...virt].sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99'));
+  }, [scheduleEvents, recurringRules, loggedInUser.id, today]);
+
+  const pending = todayItems.filter(e => e.status !== 'completed');
+  const doneCount = todayItems.length - pending.length;
+  const nowHM = `${String(new Date().getHours()).padStart(2, '0')}:${String(new Date().getMinutes()).padStart(2, '0')}`;
+  const nextItem = pending.find(e => e.time && e.time >= nowHM) || pending.find(e => !e.time) || pending[0] || null;
+
+  const itemTitle = (e) => e.isReminder ? e.title : (ALL_ACTIVITY_WEIGHTS[e.type]?.label || e.type);
+  const itemSub = (e) => e.isReminder ? (e.note && !/^\d{1,2}:\d{2}/.test(e.note) ? e.note : '') : (e.customerName || '');
+  const itemBadge = (e) => e.isReminder ? (REMINDER_CATEGORIES[e.category]?.label || '提醒') : (/ecruit/i.test(e.type || '') ? '增員' : '銷售');
+  const fmtTime = (e) => e.time ? (e.endTime ? `${e.time}–${e.endTime}` : e.time) : '全天';
+
+  const teamStats = useMemo(() => {
+    const total = (activities || []).filter(a => a.date === today).reduce((s, a) => s + scoreOfActivity(a), 0);
+    const reached = (team || []).filter(m => pointsOnDate(activities, m.id, today) >= DAILY_TARGET).length;
+    return { total, reached, n: (team || []).length };
+  }, [activities, team, today]);
+  const todayRecords = (activities || []).filter(a => a.agentId === loggedInUser.id && a.date === today);
+  const breakdown = ACT_SCORE_KEYS.map(k => ({ k, label: ALL_ACTIVITY_WEIGHTS[k].label, v: todayRecords.reduce((s, a) => s + (Number(a[k]) || 0), 0) })).filter(x => x.v > 0);
+
+  const R = 58, C = 2 * Math.PI * R;
+  const glass = 'bg-white/[0.06] backdrop-blur-xl border border-white/10';
+
+  return (
+    <div className="text-white space-y-3.5">
+      <div className="flex items-start justify-between gap-3 px-1">
+        <div className="min-w-0">
+          <p className="text-[13px] tracking-[0.12em] text-white/55">{today.replace(/-/g, '.')}　週{dayNames[dayOfWeek(today)]}</p>
+          <h1 className="text-[28px] sm:text-3xl font-bold mt-1 leading-tight">{greet}，{loggedInUser.name}</h1>
+          <p className="text-sm text-white/55 mt-1.5">把今天做好，明天就會更輕鬆。</p>
+        </div>
+        <button onClick={() => onGo('announce')} className="relative w-11 h-11 rounded-full bg-white/10 border border-white/10 flex items-center justify-center shrink-0 active:scale-95 transition">
+          <Bell size={20} />
+          {!!bellCount && <span className="absolute -top-1 -right-1 bg-rose-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">{bellCount > 99 ? '99+' : bellCount}</span>}
+        </button>
+      </div>
+
+      <div className={`${glass} rounded-[28px] p-4 sm:p-5`}>
+        <div className="flex items-center gap-4">
+          <div className={`relative w-[132px] h-[132px] sm:w-36 sm:h-36 shrink-0 ${done ? 'jf-ring-done' : ''}`}>
+            <svg viewBox="0 0 140 140" className="w-full h-full -rotate-90">
+              <defs>
+                <linearGradient id="thRing" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stopColor={done ? '#34d399' : '#818cf8'} />
+                  <stop offset="100%" stopColor={done ? '#a7f3d0' : '#c084fc'} />
+                </linearGradient>
+              </defs>
+              <circle cx="70" cy="70" r={R} fill="none" stroke="rgba(255,255,255,.1)" strokeWidth="10" />
+              <circle cx="70" cy="70" r={R} fill="none" stroke="url(#thRing)" strokeWidth="10" strokeLinecap="round" strokeDasharray={`${C * pct} ${C}`} style={{ transition: 'stroke-dasharray .8s cubic-bezier(.2,.8,.2,1)' }} />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-[11px] text-white/55">今日進度</span>
+              <span className="leading-none mt-1"><b className="text-[40px] font-semibold tabular-nums">{pts}</b><span className="text-lg text-white/60"> / {DAILY_TARGET}</span></span>
+              <span className={`text-xs mt-1.5 ${done ? 'text-emerald-300' : 'text-indigo-300'}`}>{Math.round(pct * 100)}%</span>
+            </div>
+          </div>
+          <div className="min-w-0 flex-1 self-stretch flex flex-col justify-between">
+            <div className="flex items-start justify-between gap-2">
+              <div>
+                <p className="text-sm text-white/55">{done ? '今天' : '還差'}</p>
+                {done
+                  ? <p className="text-[34px] font-bold leading-tight text-emerald-300">達標 ✓</p>
+                  : <p className="leading-none mt-1"><b className="text-[52px] font-bold tabular-nums">{DAILY_TARGET - pts}</b><span className="text-xl font-bold ml-1">分</span></p>}
+                <p className="text-sm text-white/55 mt-1.5">{done ? '漂亮，保持這個節奏' : '今天達標，加油！'}</p>
+              </div>
+              <button onClick={() => setExpanded(v => !v)} aria-label="展開明細" className="w-9 h-9 rounded-full bg-white/10 border border-white/10 flex items-center justify-center shrink-0 transition" style={{ transform: expanded ? 'rotate(180deg)' : 'none' }}>
+                <ChevronRight size={18} className="rotate-90" />
+              </button>
+            </div>
+          </div>
+        </div>
+
+        {expanded && (
+          <div className="mt-4 pt-4 border-t border-white/10 space-y-3">
+            {breakdown.length > 0
+              ? <div className="flex flex-wrap gap-1.5">{breakdown.map(b => <span key={b.k} className="text-[11px] bg-white/10 border border-white/10 rounded-full px-2.5 py-1">{b.label} {b.v}</span>)}</div>
+              : <p className="text-xs text-white/45">今天還沒有活動紀錄</p>}
+            <div className="flex justify-between text-xs text-white/55">
+              <span>連續達標 <b className="text-white">{streak}</b> 天</span>
+              <span>全隊今天 <b className="text-white tabular-nums">{teamStats.total}</b> 分 · <b className="text-white">{teamStats.reached}</b>/{teamStats.n} 人達標</span>
+            </div>
+          </div>
+        )}
+
+        <button onClick={() => onGo('calendar')} className="mt-4 w-full text-left rounded-2xl bg-white/[0.07] border border-white/10 p-3.5 active:scale-[0.99] transition">
+          <p className="text-xs text-white/55 mb-2">下一步行動</p>
+          {nextItem ? (
+            <div className="flex items-center gap-3">
+              <span className="w-11 h-11 rounded-xl bg-gradient-to-br from-indigo-500 to-violet-600 flex items-center justify-center shrink-0"><Users size={20} /></span>
+              <div className="min-w-0 flex-1">
+                <p className="font-bold truncate">{itemTitle(nextItem)}</p>
+                <p className="text-xs text-white/55 truncate">{[itemSub(nextItem), fmtTime(nextItem)].filter(Boolean).join(' · ')}</p>
+              </div>
+              <ChevronRight size={18} className="text-white/40 shrink-0" />
+            </div>
+          ) : (
+            <div className="flex items-center gap-3">
+              <span className="w-11 h-11 rounded-xl bg-white/10 flex items-center justify-center shrink-0"><CalendarPlus size={20} /></span>
+              <p className="flex-1 text-sm text-white/70">今天沒有排定行程，先約一位客戶吧</p>
+              <ChevronRight size={18} className="text-white/40 shrink-0" />
+            </div>
+          )}
+        </button>
+      </div>
+
+      <div className="grid grid-cols-4 gap-2.5">
+        {[
+          { id: 'activity', label: '新增活動', icon: Plus, accent: true },
+          { id: 'customers', label: '新增客戶', icon: Users },
+          { id: 'entry', label: '新增案件', icon: FileText },
+          { id: 'calendar', label: '查看行程', icon: Calendar }
+        ].map(a => {
+          const Icon = a.icon;
+          return (
+            <button key={a.label} onClick={() => onGo(a.id)} className={`${glass} rounded-2xl py-3.5 flex flex-col items-center gap-2 active:scale-95 transition ${a.accent ? 'bg-indigo-500/20 border-indigo-400/30' : ''}`}>
+              <span className={`w-9 h-9 rounded-full flex items-center justify-center ${a.accent ? 'bg-indigo-500' : 'bg-white/10'}`}><Icon size={18} /></span>
+              <span className="text-[12px] font-medium">{a.label}</span>
+            </button>
+          );
+        })}
+      </div>
+
+      <button onClick={() => onGo('activity')} className={`${glass} w-full rounded-[24px] p-4 text-left active:scale-[0.99] transition`}>
+        <div className="flex items-center gap-3">
+          <p className="font-bold text-base shrink-0">本週活動量</p>
+          <div className="flex-1 h-2 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-violet-400 transition-all duration-700" style={{ width: `${Math.min(100, wkTotal / WEEKLY_TARGET * 100)}%` }}></div></div>
+          <p className="text-sm text-white/70 shrink-0 tabular-nums">{wkTotal} / {WEEKLY_TARGET} 分</p>
+        </div>
+        <div className="flex justify-between mt-4 px-1">
+          {week.map(w => {
+            const hit = w.p >= DAILY_TARGET;
+            return (
+              <div key={w.d} className="flex flex-col items-center gap-2">
+                <span className={`text-[12px] ${w.isToday ? 'text-white font-bold' : 'text-white/45'}`}>{dayNames[dayOfWeek(w.d)]}</span>
+                <span className={`rounded-full ${w.isToday ? 'w-[26px] h-[26px] ring-2 ring-indigo-300 ring-offset-2 ring-offset-[#0b1022]' : 'w-[18px] h-[18px]'}`} style={{ background: w.future ? 'rgba(255,255,255,.14)' : hit ? '#34d399' : w.p > 0 ? '#818cf8' : 'rgba(255,255,255,.22)' }}></span>
+              </div>
+            );
+          })}
+        </div>
+      </button>
+
+      <div className={`${glass} rounded-[24px] p-4`}>
+        <div className="flex items-center justify-between mb-3">
+          <p className="font-bold text-base">今日重點</p>
+          <button onClick={onShowMore} className="text-xs text-white/55 flex items-center gap-0.5">查看更多<ChevronRight size={14} /></button>
+        </div>
+        <div className="grid grid-cols-3 gap-2.5">
+          <div className="rounded-2xl bg-white/[0.06] border border-white/10 p-3">
+            <Target size={18} className="text-fuchsia-300" />
+            <p className="text-[11px] text-white/55 mt-2">今日行程</p>
+            <p className="mt-0.5"><b className="text-2xl font-semibold tabular-nums">{doneCount}</b><span className="text-white/50"> / {todayItems.length}</span></p>
+          </div>
+          <button onClick={onShowMore} className="rounded-2xl bg-white/[0.06] border border-white/10 p-3 text-left active:scale-95 transition">
+            <Phone size={18} className="text-sky-300" />
+            <p className="text-[11px] text-white/55 mt-2">待聯繫客戶</p>
+            <p className="mt-0.5"><b className="text-2xl font-semibold tabular-nums">{dueCount}</b></p>
+          </button>
+          <div className="rounded-2xl bg-white/[0.06] border border-white/10 p-3">
+            <span className="text-lg leading-none">🔥</span>
+            <p className="text-[11px] text-white/55 mt-2">連續達標</p>
+            <p className="mt-0.5"><b className="text-2xl font-semibold tabular-nums">{streak}</b><span className="text-white/50"> 天</span></p>
+          </div>
+        </div>
+      </div>
+
+      <div className={`${glass} rounded-[24px] p-4`}>
+        <div className="flex items-center justify-between mb-1">
+          <p className="font-bold text-base">今日行程 <span className="text-white/45 font-normal">({todayItems.length})</span></p>
+          <button onClick={() => onGo('calendar')} className="text-xs text-white/70 bg-white/10 border border-white/10 rounded-full px-3 py-1.5 flex items-center gap-0.5">查看完整行程<ChevronRight size={13} /></button>
+        </div>
+        {todayItems.length === 0 && <p className="text-sm text-white/45 py-6 text-center">今天沒有排定行程</p>}
+        <div>
+          {todayItems.slice(0, 5).map((e, i, arr) => {
+            const isDone = e.status === 'completed';
+            return (
+              <button key={e.id} onClick={() => onGo('calendar')} className={`w-full flex items-stretch gap-3 text-left py-3.5 ${i < arr.length - 1 ? 'border-b border-white/10' : ''} ${isDone ? 'opacity-50' : ''}`}>
+                <div className="w-[52px] shrink-0">
+                  <p className="font-semibold tabular-nums">{e.time || '全天'}</p>
+                  {e.endTime && <p className="text-xs text-white/45 tabular-nums">{e.endTime}</p>}
+                </div>
+                <div className="flex flex-col items-center shrink-0 pt-1.5">
+                  <span className={`w-3 h-3 rounded-full ${getEventColor(e)}`}></span>
+                  {i < arr.length - 1 && <span className="flex-1 w-px bg-white/15 mt-1.5"></span>}
+                </div>
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-center gap-2">
+                    <p className={`font-bold truncate ${isDone ? 'line-through' : ''}`}>{itemTitle(e)}</p>
+                    <span className="text-[10px] border border-white/20 bg-white/10 rounded-md px-1.5 py-0.5 shrink-0">{itemBadge(e)}</span>
+                  </div>
+                  {itemSub(e) && <p className="text-sm text-white/65 mt-0.5 truncate">{itemSub(e)}</p>}
+                  {e.address && <p className="text-xs text-white/45 mt-1 flex items-center gap-1 truncate"><MapPin size={12} className="shrink-0" />{e.address}</p>}
+                </div>
+                <ChevronRight size={18} className="text-white/35 shrink-0 self-center" />
+              </button>
+            );
+          })}
+        </div>
+        {todayItems.length > 5 && <p className="text-center text-xs text-white/45 pt-2">還有 {todayItems.length - 5} 個行程</p>}
+      </div>
+    </div>
+  );
+};
+
+const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, activities, team, onGo, isTeamScheduleViewer, recurringRules, bellCount }) => {
+  const today = getTodayDate();
+  const [showMore, setShowMore] = useState(false);
   const [busyId, setBusyId] = useState(null);
 
   const [completingContact, setCompletingContact] = useState(null);
@@ -7899,9 +8131,15 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
   const isTodayEmpty = dueCustomers.length === 0 && birthdayCustomers.length === 0 && autoSuggested.length === 0;
 
   return (
-    <div className="max-w-4xl lg:max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
-      <DailyActivityHero loggedInUser={loggedInUser} activities={activities} team={team} onGo={onGo} />
+    <div className="max-w-xl mx-auto space-y-4 animate-fade-in pb-12">
+      <TodayHome loggedInUser={loggedInUser} activities={activities} team={team} scheduleEvents={scheduleEvents} recurringRules={recurringRules} onGo={onGo} bellCount={bellCount} dueCount={dueCustomers.length} onShowMore={() => setShowMore(true)} />
 
+      <button onClick={() => setShowMore(v => !v)} className="w-full flex items-center justify-center gap-1.5 py-3.5 rounded-2xl bg-white/[0.06] border border-white/10 text-sm font-semibold text-white/80 active:scale-[0.99] transition">
+        {showMore ? '收起' : '查看更多工作事項'}<ChevronRight size={16} className={showMore ? '-rotate-90' : 'rotate-90'} />
+      </button>
+
+      {showMore && (
+      <div className="rounded-[28px] bg-[#f5f5f7] text-gray-900 p-3 sm:p-4 space-y-6">
       {isTeamScheduleViewer && <TeamTargetBoard team={team} activities={activities} records={records} rootName="吳政翰" />}
 
       <PersonalGoalsCard loggedInUser={loggedInUser} records={records} activities={activities} />
@@ -7909,8 +8147,7 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
       <PersonalTodoList loggedInUser={loggedInUser} />
 
       <div>
-        <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">今日待辦</h2>
-        <p className="text-sm text-gray-400 md:mt-1">{today} · 今天該聯繫、該留意的事</p>
+        <p className="text-sm text-gray-400">{today} · 今天該聯繫、該留意的事</p>
       </div>
 
       {isTodayEmpty && <Card className="p-8 text-center text-gray-400">今天沒有待辦事項，太棒了 🎉</Card>}
@@ -7982,6 +8219,9 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
           </Card>
         )}
       </div>
+
+      </div>
+      )}
 
       {/* 標記聯繫客戶 (選擇 MEA 類別) */}
       {completingContact && (
@@ -9937,8 +10177,9 @@ const App = () => {
   }
 
   return (
-    <div className="jf-tech min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8">
+    <div className={`jf-tech ${activeTab === 'todo' ? 'jf-dark' : ''} min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8 relative`}>
       <JfTechStyle />
+      {activeTab === 'todo' && <div className="fixed inset-0 pointer-events-none" style={{ background: 'radial-gradient(ellipse 70% 40% at 85% 6%, rgba(251,146,60,.34), transparent 60%), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%), radial-gradient(ellipse 90% 40% at 50% 100%, rgba(99,102,241,.14), transparent 60%)' }}></div>}
       <DailyNudge loggedInUser={loggedInUser} activities={activities} onGo={setActiveTab} />
       {/* 桌機版：完整頂部導覽（Logo、置中分頁選單、使用者資訊） */}
       <nav className="hidden md:block sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-white/20 shadow-sm overflow-x-auto">
@@ -9991,7 +10232,7 @@ const App = () => {
       </nav>
 
       {/* 手機版：極簡頂部列，只有目前頁面標題＋搜尋＋登出，其餘導覽交給底部列 */}
-      <div className="md:hidden sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100">
+      <div className={`${activeTab === 'todo' ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100`}>
         <div className="h-14 px-4 flex items-center justify-between">
           <h1 className="text-base font-bold text-gray-900">{currentNavItem?.label || '極豐通訊處'}</h1>
           <div className="flex items-center gap-1">
@@ -10004,8 +10245,8 @@ const App = () => {
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
-      <main className="max-w-7xl mx-auto px-4 md:px-6 pt-4 md:pt-8">
-        {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} />}
+      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${activeTab === 'todo' ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
+        {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
@@ -10023,7 +10264,7 @@ const App = () => {
       </main>
 
       {/* 手機版底部導覽列：4個常用分頁＋更多，App感的核心 */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-2xl border-t border-black/[0.06]" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
+      <nav className={`md:hidden fixed bottom-0 left-0 right-0 z-50 backdrop-blur-2xl border-t ${activeTab === 'todo' ? 'bg-[#070914]/85 border-white/10' : 'bg-white/80 border-black/[0.06]'}`} style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
         <div className="flex items-stretch">
           {primaryNavItems.map(item => {
             const ItemIcon = item.icon;
@@ -10034,8 +10275,8 @@ const App = () => {
                 onClick={() => setActiveTab(item.id)}
                 className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1"
               >
-                <ItemIcon size={22} className={active ? 'text-gray-900' : 'text-gray-300'} />
-                <span className={`text-[10px] ${active ? 'font-bold text-gray-900' : 'text-gray-400'}`}>{item.label}</span>
+                <ItemIcon size={22} className={active ? (activeTab === 'todo' ? 'text-white' : 'text-gray-900') : (activeTab === 'todo' ? 'text-white/35' : 'text-gray-300')} />
+                <span className={`text-[10px] ${active ? (activeTab === 'todo' ? 'font-bold text-white' : 'font-bold text-gray-900') : (activeTab === 'todo' ? 'text-white/40' : 'text-gray-400')}`}>{item.label}</span>
                 {!!item.badge && (
                   <span className="absolute top-1 right-1/4 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1">{item.badge > 99 ? '99+' : item.badge}</span>
                 )}
@@ -10043,9 +10284,9 @@ const App = () => {
             );
           })}
           <button onClick={() => setShowMoreSheet(true)} className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1">
-            <LayoutGrid size={22} className={isMoreActive ? 'text-gray-900' : 'text-gray-300'} />
+            <LayoutGrid size={22} className={isMoreActive ? 'text-gray-900' : (activeTab === 'todo' ? 'text-white/35' : 'text-gray-300')} />
             {moreNavItems.some(i => i.badge) && <span className="absolute top-2 right-[28%] w-2.5 h-2.5 bg-red-500 rounded-full"></span>}
-            <span className={`text-[10px] ${isMoreActive ? 'font-bold text-gray-900' : 'text-gray-400'}`}>更多</span>
+            <span className={`text-[10px] ${isMoreActive ? 'font-bold text-gray-900' : (activeTab === 'todo' ? 'text-white/40' : 'text-gray-400')}`}>更多</span>
           </button>
         </div>
       </nav>
