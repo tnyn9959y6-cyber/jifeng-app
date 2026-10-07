@@ -427,8 +427,251 @@ const ConfirmModal = ({ isOpen, onClose, onConfirm, title, message, isLoading })
   );
 };
 
+// --- 手機版：業績儀表板（預設只看自己；右上角切換「組」「區」） ---
+const MobileDashboardView = ({ team, records, season, setSeason, activeTargets, currentMonths, currentStart, viewMonth, setViewMonth, loggedInUser, onSearch }) => {
+  const [scope, setScope] = useState('self');
+  const [showScope, setShowScope] = useState(false);
+  const [progTab, setProgTab] = useState('fyp');
+  const [trendMetric, setTrendMetric] = useState('weighted');
+  const [showMembers, setShowMembers] = useState(false);
+
+  const me = loggedInUser ? team.find(t => String(t.id) === String(loggedInUser.id)) : null;
+  const directs = me ? team.filter(t => t.parentId && String(t.parentId) === String(me.id)) : [];
+  const isRoot = loggedInUser?.name === '吳政翰';
+  const options = [{ key: 'self', label: '個人' }];
+  if (directs.length > 0) options.push({ key: 'group', label: `${me.name} 組` });
+  if (isRoot) options.push({ key: 'district', label: '政翰區' });
+  const curOpt = options.find(o => o.key === scope) || options[0];
+
+  const roleOf = (m) => (season === 'H2' && H2_ROLE_MAPPING[m.name]) ? H2_ROLE_MAPPING[m.name] : m.role;
+  const targetOf = (m) => activeTargets[roleOf(m)] || activeTargets['業務代表'];
+
+  const members = useMemo(() => {
+    if (!me) return [];
+    if (curOpt.key === 'group') return [me, ...directs];
+    if (curOpt.key === 'district') return getDistrictMembers(team, '吳政翰');
+    return [me];
+  }, [curOpt.key, team, me]);
+
+  const d = useMemo(() => {
+    const ids = new Set(members.map(m => String(m.id)));
+    const cases = { m: 0, a: 0 };
+    let weighted = 0, premium = 0, mWeighted = 0, mPremium = 0, mFYC = 0, ah = 0, rp = 0, sp = 0;
+    const per = {};
+    members.forEach(m => { per[String(m.id)] = { m, w: 0, mw: 0, p: 0 }; });
+    const trendMap = {};
+    currentMonths.forEach(mo => { if (mo.value <= viewMonth) trendMap[mo.value] = { month: mo.value.slice(5) + '月', weighted: 0, premium: 0, cases: 0 }; });
+    records.forEach(r => {
+      if (!r.agentId || !ids.has(String(r.agentId)) || !r.date) return;
+      const rm = r.date.substring(0, 7);
+      const w = r.weighted || 0, p = r.premium || 0;
+      if (trendMap[rm]) { trendMap[rm].weighted += w; trendMap[rm].premium += p; trendMap[rm].cases += 1; }
+      if (rm < currentStart || rm > viewMonth) return;
+      weighted += w; premium += p; cases.a += 1;
+      const pr = per[String(r.agentId)]; if (pr) { pr.w += w; pr.p += p; }
+      if (rm === viewMonth) {
+        cases.m += 1; mWeighted += w; mPremium += p;
+        mFYC += p * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0);
+        if (r.typeCode === 'one_off') sp += p; else if (r.isAH) ah += p; else rp += p;
+        if (pr) pr.mw += w;
+      }
+    });
+    // 目標：個人=自己職級；組=組長職級（沿用原本組績算法）；區=成員個別目標加總
+    const sum = (f) => members.reduce((s, m) => s + (f(targetOf(m)) || 0), 0);
+    let tgt;
+    if (curOpt.key === 'district') {
+      tgt = { peak: sum(t => t.peak.total), summit: sum(t => t.summit.total), peakAct: sum(t => t.peak.actualPremium), summitAct: sum(t => t.summit.actualPremium) };
+    } else {
+      const t = targetOf(me || members[0] || {}) || { peak: {}, summit: {} };
+      tgt = { peak: t.peak?.total || 0, summit: t.summit?.total || 0, peakAct: t.peak?.actualPremium || 0, summitAct: t.summit?.actualPremium || 0 };
+    }
+    const trend = Object.values(trendMap).slice(-6).map(x => ({ ...x, target: Math.round(tgt.peak / Math.max(1, currentMonths.length)) }));
+    return { weighted, premium, cases, mWeighted, mPremium, mFYC, ah, rp, sp, per: Object.values(per), tgt, trend };
+  }, [members, records, currentMonths, currentStart, viewMonth, activeTargets, season, curOpt.key]);
+
+  const hasAct = season === 'H2' && d.tgt.peakAct > 0;
+  const pctPeak = d.tgt.peak ? Math.min(100, (d.weighted / d.tgt.peak) * 100) : 0;
+  const pctSummit = d.tgt.summit ? Math.min(100, (d.weighted / d.tgt.summit) * 100) : 0;
+  const idx = currentMonths.findIndex(m => m.value === viewMonth);
+  const shift = (n) => { const t = currentMonths[idx + n]; if (t) setViewMonth(t.value); };
+  const wan = (n) => n >= 10000 ? (n / 10000).toFixed(n >= 100000 ? 0 : 1) + '萬' : String(Math.round(n));
+  const glass = 'rounded-3xl border border-white/10 bg-white/[0.045] backdrop-blur-xl';
+
+  // 達成進度（甜甜圈）
+  const prog = progTab === 'act' && hasAct
+    ? { got: d.premium, goal: d.tgt.peakAct, label: '實收保費' }
+    : { got: d.weighted, goal: d.tgt.peak, label: '加權保費 FYP' };
+  const R = 52, C = 2 * Math.PI * R;
+  const progPct = prog.goal ? Math.min(100, (prog.got / prog.goal) * 100) : 0;
+
+  const prodTotal = d.ah + d.rp + d.sp;
+  const prods = [
+    { l: 'AH 健康險', v: d.ah, c: 'bg-emerald-400' },
+    { l: 'RP 期繳', v: d.rp, c: 'bg-blue-400' },
+    { l: 'SP 躉繳', v: d.sp, c: 'bg-amber-400' },
+  ];
+  const trendCfg = { weighted: { label: 'FYP', color: '#60a5fa' }, premium: { label: '實收', color: '#34d399' }, cases: { label: '件數', color: '#fbbf24' } };
+
+  return (
+    <div className="md:hidden text-white pb-6 -mx-1">
+      <div className="flex items-center justify-between pt-1 pb-4 relative">
+        <div>
+          <h1 className="text-[26px] font-bold tracking-tight leading-none">業績儀表板</h1>
+          <p className="text-[12px] text-white/45 mt-1.5">{curOpt.key === 'self' ? (me?.name || '') + ' 個人' : curOpt.label + ` · ${members.length} 人`}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={onSearch} aria-label="搜尋" className="w-10 h-10 rounded-full bg-white/[0.07] border border-white/10 flex items-center justify-center active:scale-95 transition"><Search size={18} /></button>
+          <button onClick={() => setShowScope(v => !v)} className="h-10 px-3.5 rounded-full bg-white/[0.07] border border-white/10 flex items-center gap-1.5 text-[13px] font-bold active:scale-95 transition">{curOpt.label}<span className="text-white/50 text-[10px]">▾</span></button>
+        </div>
+        {showScope && (
+          <div className="absolute right-0 top-14 z-30 min-w-[150px] rounded-2xl border border-white/10 bg-[#0c1020]/95 backdrop-blur-2xl p-1.5 shadow-2xl">
+            {options.map(o => (
+              <button key={o.key} onClick={() => { setScope(o.key); setShowScope(false); }} className={`w-full text-left px-3 py-2.5 rounded-xl text-[13px] font-bold ${curOpt.key === o.key ? 'bg-blue-500/20 text-blue-300' : 'text-white/70'}`}>{o.label}</button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 月份 / 賽季 */}
+      <div className="flex items-center justify-between mb-4">
+        <div className="flex items-center rounded-2xl border border-white/10 bg-white/[0.07] px-1">
+          <button onClick={() => shift(-1)} disabled={idx <= 0} className="w-9 h-10 flex items-center justify-center text-white/70 disabled:opacity-25"><ChevronLeft size={16} /></button>
+          <span className="text-[13px] font-bold px-2 tabular-nums">{viewMonth.replace('-', ' 年 ')} 月</span>
+          <button onClick={() => shift(1)} disabled={idx >= currentMonths.length - 1} className="w-9 h-10 flex items-center justify-center text-white/70 disabled:opacity-25"><ChevronRight size={16} /></button>
+        </div>
+        <div className="flex rounded-2xl border border-white/10 bg-white/[0.07] p-0.5">
+          {[['H1', '上半年'], ['H2', '下半年']].map(([k, l]) => (
+            <button key={k} onClick={() => setSeason(k)} className={`px-3 py-2 text-[12px] font-bold rounded-[14px] transition ${season === k ? 'bg-white text-gray-900' : 'text-white/55'}`}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* UNIT FYP 主卡 */}
+      <div className={`${glass} p-5 mb-3 relative overflow-hidden`}>
+        <div className="absolute -top-20 -left-10 w-56 h-56 rounded-full bg-blue-500/25 blur-3xl pointer-events-none"></div>
+        <div className="relative">
+          <p className="text-[11px] tracking-[0.18em] text-white/45 font-bold">{curOpt.key === 'self' ? 'MY FYP' : 'UNIT FYP'}</p>
+          <p className="text-[36px] font-bold tracking-tight leading-tight tabular-nums mt-1">{formatMoney(d.weighted)}</p>
+          <div className="flex items-center justify-between text-[12px] text-white/55 mt-1">
+            <span>高峰目標 {d.tgt.peak ? formatMoney(d.tgt.peak) : '—'}</span>
+            <span className="font-bold text-white">{Math.round(pctPeak)}%</span>
+          </div>
+          <div className="h-2.5 rounded-full bg-white/10 overflow-hidden mt-2"><div className="h-full rounded-full bg-gradient-to-r from-sky-400 to-indigo-500" style={{ width: `${pctPeak}%`, transition: 'width .8s ease' }}></div></div>
+          <div className="flex items-center justify-between text-[11px] text-white/40 mt-2">
+            <span>極峰 {Math.round(pctSummit)}%</span>
+            <span>本月 {formatMoney(d.mWeighted)}</span>
+          </div>
+        </div>
+      </div>
+
+      {/* KPI */}
+      <div className="grid grid-cols-2 gap-2.5 mb-3">
+        {[
+          { l: '總實收保費', v: wan(d.premium), s: `本月 ${wan(d.mPremium)}` },
+          { l: '本月件數', v: d.cases.m, s: `累積 ${d.cases.a} 件` },
+          { l: '本月 FYC', v: wan(d.mFYC), s: '預估收入' },
+          { l: '極峰達成率', v: Math.round(pctSummit) + '%', s: d.tgt.summit ? `目標 ${wan(d.tgt.summit)}` : '' },
+        ].map(k => (
+          <div key={k.l} className={`${glass} px-4 py-3.5`}>
+            <p className="text-[11px] text-white/45">{k.l}</p>
+            <p className="text-[24px] font-bold tabular-nums leading-tight mt-0.5">{k.v}</p>
+            <p className="text-[11px] text-white/35 mt-0.5">{k.s}</p>
+          </div>
+        ))}
+      </div>
+
+      {/* 達成進度 */}
+      <div className={`${glass} p-4 mb-3`}>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[15px] font-bold">達成進度</p>
+          <div className="flex rounded-full bg-white/[0.07] p-0.5">
+            {[['fyp', 'FYP'], ...(hasAct ? [['act', '實收']] : [])].map(([k, l]) => (
+              <button key={k} onClick={() => setProgTab(k)} className={`px-3 py-1 text-[11px] font-bold rounded-full ${progTab === k || (k === 'fyp' && !hasAct) ? 'bg-white text-gray-900' : 'text-white/55'}`}>{l}</button>
+            ))}
+          </div>
+        </div>
+        <div className="flex items-center gap-5">
+          <div className="relative shrink-0" style={{ width: 128, height: 128 }}>
+            <svg width="128" height="128" viewBox="0 0 128 128" className="-rotate-90">
+              <circle cx="64" cy="64" r={R} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth="13" />
+              <circle cx="64" cy="64" r={R} fill="none" stroke={progPct >= 100 ? '#34d399' : '#60a5fa'} strokeWidth="13" strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C * (1 - progPct / 100)} style={{ transition: 'stroke-dashoffset .8s ease' }} />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center"><span className="text-[26px] font-bold tabular-nums leading-none">{Math.round(progPct)}<span className="text-xs text-white/50">%</span></span><span className="text-[10px] text-white/40 mt-1">{prog.label.slice(0, 2)}</span></div>
+          </div>
+          <div className="flex-1 min-w-0 space-y-2.5 text-[13px]">
+            {[['已達成', prog.got, 'bg-blue-400'], ['尚差', Math.max(0, prog.goal - prog.got), 'bg-white/25'], ['高峰目標', prog.goal, 'bg-amber-400']].map(([l, v, c]) => (
+              <div key={l} className="flex items-center justify-between gap-2"><span className="flex items-center gap-2 text-white/60"><i className={`w-2 h-2 rounded-full ${c}`}></i>{l}</span><b className="tabular-nums">{wan(v)}</b></div>
+            ))}
+          </div>
+        </div>
+      </div>
+
+      {/* 趨勢 */}
+      <div className={`${glass} p-4 mb-3`}>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[15px] font-bold">近 6 個月趨勢</p>
+          <div className="flex rounded-full bg-white/[0.07] p-0.5">
+            {Object.keys(trendCfg).map(k => (
+              <button key={k} onClick={() => setTrendMetric(k)} className={`px-2.5 py-1 text-[11px] font-bold rounded-full ${trendMetric === k ? 'bg-white text-gray-900' : 'text-white/55'}`}>{trendCfg[k].label}</button>
+            ))}
+          </div>
+        </div>
+        <div style={{ width: '100%', height: 170 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={d.trend} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,.08)" />
+              <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,.45)', fontSize: 11 }} />
+              <YAxis axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,.35)', fontSize: 10 }} tickFormatter={(v) => v >= 10000 ? (v / 10000).toFixed(0) + '萬' : v} />
+              <Tooltip contentStyle={{ background: '#0c1020', border: '1px solid rgba(255,255,255,.12)', borderRadius: 12, color: '#fff', fontSize: 12 }} formatter={(v) => trendMetric === 'cases' ? v + ' 件' : formatMoney(v)} />
+              <Line type="monotone" dataKey={trendMetric} name={trendCfg[trendMetric].label} stroke={trendCfg[trendMetric].color} strokeWidth={3} dot={{ r: 3, fill: trendCfg[trendMetric].color }} />
+              {trendMetric === 'weighted' && <Line type="monotone" dataKey="target" name="月均目標" stroke="rgba(255,255,255,.4)" strokeDasharray="5 5" strokeWidth={1.5} dot={false} />}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 商品線 */}
+      <div className={`${glass} p-4 mb-3`}>
+        <p className="text-[15px] font-bold mb-3.5">各商品線績效 <span className="text-[11px] text-white/35 font-medium">本月實收</span></p>
+        <div className="space-y-3.5">
+          {prods.map(p => (
+            <div key={p.l}>
+              <div className="flex items-baseline justify-between mb-1.5"><span className="text-[13px] font-bold">{p.l}</span><span className="text-[12px] text-white/60 tabular-nums"><b className="text-white text-[14px]">{wan(p.v)}</b>　{prodTotal ? Math.round((p.v / prodTotal) * 100) : 0}%</span></div>
+              <div className="h-2 rounded-full bg-white/10 overflow-hidden"><div className={`h-full rounded-full ${p.c}`} style={{ width: `${prodTotal ? (p.v / prodTotal) * 100 : 0}%`, transition: 'width .6s ease' }}></div></div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      {/* 成員（組／區才顯示） */}
+      {members.length > 1 && (
+        <div className={`${glass} p-4`}>
+          <button onClick={() => setShowMembers(v => !v)} className="w-full flex items-center justify-between">
+            <p className="text-[15px] font-bold">成員表現 <span className="text-[11px] text-white/35 font-medium">累積 FYP</span></p>
+            <span className="text-[12px] text-white/50">{showMembers ? '收合 ▴' : `展開 ${members.length} 人 ▾`}</span>
+          </button>
+          {showMembers && (
+            <div className="mt-3.5 space-y-3">
+              {[...d.per].sort((a, b) => b.w - a.w).map(x => {
+                const t = targetOf(x.m).peak.total;
+                const p = t ? Math.min(100, (x.w / t) * 100) : 0;
+                return (
+                  <div key={x.m.id}>
+                    <div className="flex items-baseline justify-between mb-1.5"><span className="text-[13px] font-bold">{x.m.name}<span className="text-white/35 font-medium text-[11px] ml-1.5">{roleOf(x.m)}</span></span><span className="text-[12px] text-white/60 tabular-nums"><b className="text-white text-[14px]">{wan(x.w)}</b>　{Math.round(p)}%</span></div>
+                    <div className="h-2 rounded-full bg-white/10 overflow-hidden"><div className={`h-full rounded-full ${p >= 100 ? 'bg-emerald-400' : 'bg-blue-400'}`} style={{ width: `${p}%` }}></div></div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+};
+
 // --- Dashboard Component ---
-const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardTargets }) => {
+const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardTargets, loggedInUser, onSearch }) => {
   const [selectedManagerId, setSelectedManagerId] = useState('');
   
   const currentMonths = season === 'H1' ? AVAILABLE_MONTHS_H1 : AVAILABLE_MONTHS_H2;
@@ -589,7 +832,9 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
   const calculateProgress = (current, target) => (!target || target === 0) ? 100 : Math.min(100, (current / target) * 100);
 
   return (
-    <div className="space-y-8 animate-fade-in pb-12">
+    <>
+    <MobileDashboardView team={team} records={records} season={season} setSeason={setSeason} activeTargets={activeTargets} currentMonths={currentMonths} currentStart={currentStart} viewMonth={viewMonth} setViewMonth={setViewMonth} loggedInUser={loggedInUser} onSearch={onSearch} />
+    <div className="hidden md:block space-y-8 animate-fade-in pb-12">
       <div className="relative overflow-hidden rounded-3xl bg-gray-900 text-white p-8 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-6 border border-gray-800">
         <div className="absolute top-0 left-0 w-full h-full opacity-20 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
         <div className="relative z-10">
@@ -827,6 +1072,287 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
            </BarChart>
          </ResponsiveContainer>
       </Card>
+    </div>
+    </>
+  );
+};
+
+// --- 手機版：MEA 活動量（深色玻璃風，重點先看、快速記錄） ---
+const MEA_ROW_TARGETS = { prospect: 80, appointment: 100, interview: 60, proposal: 60, application: 60, issue: 40 };
+const MobileActivityView = ({ team, selectedAgentId, setSelectedAgentId, viewMode, setViewMode, periodMode, setPeriodMode, periodRange, selectedMonth, setSelectedMonth, currentMonths, shiftWeek, stats, monthlyTrend, activities, canEdit, formData, setFormData, handleSubmit, isSubmitting, onSearch }) => {
+  const [goal, setGoal] = useState(() => { try { const v = Number(localStorage.getItem('jf_mea_goal')); return v > 0 ? v : 400; } catch (e) { return 400; } });
+  const [editGoal, setEditGoal] = useState(false);
+  const [goalInput, setGoalInput] = useState('');
+  const [showMenu, setShowMenu] = useState(false);
+  const [showSheet, setShowSheet] = useState(false);
+  const [lastKeys, setLastKeys] = useState(null);
+  const [trendMetric, setTrendMetric] = useState('weighted');
+  const [flash, setFlash] = useState('');
+
+  const factor = (goal / 400) * (periodMode === 'week' ? 0.25 : 1);
+  const totalGoal = Math.round(goal * (periodMode === 'week' ? 0.25 : 1));
+  const interviewGoal = Math.round(60 * factor);
+  const total = stats.totalPoints;
+  const pct = totalGoal ? Math.min(100, Math.round((total / totalGoal) * 100)) : 0;
+  const R = 62, C = 2 * Math.PI * R;
+  const agent = team.find(m => m.id === selectedAgentId);
+  const idx = currentMonths.findIndex(m => m.value === selectedMonth);
+  const shiftMonth = (d) => { const n = currentMonths[idx + d]; if (n) setSelectedMonth(n.value); };
+  const today = getTodayDate();
+  const todayRec = activities.find(a => a.agentId === selectedAgentId && a.date === today) || {};
+  const periodLabel = periodMode === 'month' ? selectedMonth.replace('-', ' 年 ') + ' 月' : `${periodRange.start.slice(5)} ~ ${periodRange.end.slice(5)}`;
+
+  const saveGoal = () => {
+    const v = Math.round(Number(goalInput));
+    if (v > 0) { setGoal(v); try { localStorage.setItem('jf_mea_goal', String(v)); } catch (e) {} }
+    setEditGoal(false);
+  };
+
+  const writeToday = async (keys, delta) => {
+    if (!canEdit || !selectedAgentId) return;
+    const ex = activities.find(a => a.agentId === selectedAgentId && a.date === today) || {};
+    const payload = { agentId: selectedAgentId, date: today, month: today.slice(0, 7), updatedAt: new Date().toISOString() };
+    keys.forEach(k => { payload[k] = Math.max(0, (ex[k] || 0) + delta); });
+    try { await setDoc(doc(db, 'activity_record', `${selectedAgentId}_${today}`), payload, { merge: true }); } catch (e) { console.error(e); }
+  };
+  const quickAdd = async (key) => {
+    const keys = viewMode === 'sales' ? getCascadeKeys(key) : [key];
+    await writeToday(keys, 1);
+    setLastKeys(keys);
+    const pts = keys.reduce((s, k) => s + (ALL_ACTIVITY_WEIGHTS[k]?.score || 0), 0);
+    setFlash(`+${pts} 分`);
+    setTimeout(() => setFlash(''), 1200);
+  };
+  const undo = async () => { if (!lastKeys) return; await writeToday(lastKeys, -1); setLastKeys(null); };
+
+  const glass = 'rounded-3xl border border-white/10 bg-white/[0.045] backdrop-blur-xl';
+  const weights = viewMode === 'sales' ? ACTIVITY_WEIGHTS : RECRUIT_ACTIVITY_WEIGHTS;
+  const totalsOf = viewMode === 'sales' ? stats.totals : stats.recruitTotals;
+  const maxRecruitPts = Math.max(1, ...Object.keys(RECRUIT_ACTIVITY_WEIGHTS).map(k => (stats.recruitTotals[k] || 0) * RECRUIT_ACTIVITY_WEIGHTS[k].score));
+  const warn = total < totalGoal || stats.interviewPoints < interviewGoal;
+  const trendCfg = { weighted: { label: '加權保費', color: '#60a5fa' }, fyc: { label: 'FYC', color: '#34d399' }, points: { label: '活動分數', color: '#fbbf24' } };
+
+  return (
+    <div className="md:hidden text-white pb-6 -mx-1">
+      {/* 標題列 */}
+      <div className="flex items-center justify-between pt-1 pb-4 relative">
+        <div>
+          <h1 className="text-[26px] font-bold tracking-tight leading-none">MEA 活動量</h1>
+          <p className="text-[12px] text-white/45 mt-1.5">P × C × I　{viewMode === 'sales' ? '業務' : '增員'}視角</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <button onClick={onSearch} aria-label="搜尋" className="w-10 h-10 rounded-full bg-white/[0.07] border border-white/10 flex items-center justify-center active:scale-95 transition"><Search size={18} /></button>
+          <button onClick={() => setShowMenu(v => !v)} aria-label="更多" className="w-10 h-10 rounded-full bg-white/[0.07] border border-white/10 flex items-center justify-center active:scale-95 transition"><MoreVertical size={18} className="rotate-90" /></button>
+        </div>
+        {showMenu && (
+          <div className="absolute right-0 top-14 z-30 w-40 rounded-2xl border border-white/10 bg-[#0c1020]/95 backdrop-blur-2xl p-1.5 shadow-2xl">
+            {[['sales', '業務活動量'], ['recruit', '增員活動量']].map(([k, l]) => (
+              <button key={k} onClick={() => { setViewMode(k); setShowMenu(false); }} className={`w-full text-left px-3 py-2.5 rounded-xl text-[13px] font-bold ${viewMode === k ? 'bg-blue-500/20 text-blue-300' : 'text-white/70'}`}>{l}</button>
+            ))}
+            <button onClick={() => { setGoalInput(String(goal)); setEditGoal(true); setShowMenu(false); }} className="w-full text-left px-3 py-2.5 rounded-xl text-[13px] font-bold text-white/70">編輯目標</button>
+          </div>
+        )}
+      </div>
+
+      {/* 人員 / 期間 */}
+      <div className="flex items-center gap-2 mb-4">
+        <div className="relative flex-1 min-w-0">
+          <select value={selectedAgentId} onChange={(e) => setSelectedAgentId(e.target.value)} className="w-full appearance-none rounded-2xl border border-white/10 bg-white/[0.07] pl-4 pr-8 py-2.5 text-[14px] font-bold text-white outline-none">
+            {team.map(m => <option key={m.id} value={m.id} className="text-gray-900">{m.name}</option>)}
+          </select>
+          <span className="pointer-events-none absolute right-3 top-1/2 -translate-y-1/2 text-white/50 text-xs">▾</span>
+        </div>
+        <div className="flex items-center rounded-2xl border border-white/10 bg-white/[0.07] px-1">
+          <button onClick={() => periodMode === 'month' ? shiftMonth(-1) : shiftWeek(-1)} className="w-8 h-10 flex items-center justify-center text-white/70 active:text-white"><ChevronLeft size={16} /></button>
+          <span className="text-[12px] font-bold px-1 whitespace-nowrap tabular-nums">{periodLabel}</span>
+          <button onClick={() => periodMode === 'month' ? shiftMonth(1) : shiftWeek(1)} className="w-8 h-10 flex items-center justify-center text-white/70 active:text-white"><ChevronRight size={16} /></button>
+        </div>
+        <div className="flex rounded-2xl border border-white/10 bg-white/[0.07] p-0.5">
+          {[['month', '月'], ['week', '週']].map(([k, l]) => (
+            <button key={k} onClick={() => setPeriodMode(k)} className={`px-3 py-2 text-[12px] font-bold rounded-[14px] transition ${periodMode === k ? 'bg-white text-gray-900' : 'text-white/55'}`}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {/* 活動量總分環 */}
+      <div className={`${glass} p-5 mb-3 relative overflow-hidden`}>
+        <div className="absolute -top-16 -right-10 w-48 h-48 rounded-full bg-blue-500/20 blur-3xl pointer-events-none"></div>
+        <div className="relative flex items-center gap-5">
+          <div className="relative shrink-0" style={{ width: 150, height: 150 }}>
+            <svg width="150" height="150" viewBox="0 0 150 150" className="-rotate-90">
+              <defs><linearGradient id="meaRing" x1="0" y1="0" x2="1" y2="1"><stop offset="0%" stopColor="#38bdf8" /><stop offset="100%" stopColor="#6366f1" /></linearGradient></defs>
+              <circle cx="75" cy="75" r={R} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth="12" />
+              <circle cx="75" cy="75" r={R} fill="none" stroke={pct >= 100 ? '#34d399' : 'url(#meaRing)'} strokeWidth="12" strokeLinecap="round" strokeDasharray={C} strokeDashoffset={C * (1 - pct / 100)} style={{ transition: 'stroke-dashoffset .8s ease' }} />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-[34px] font-bold leading-none tabular-nums">{total}</span>
+              <span className="text-[11px] text-white/45 mt-1">/ {totalGoal} 分</span>
+            </div>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-[12px] text-white/50">活動量總分</p>
+            <p className="text-[30px] font-bold leading-tight tabular-nums">{pct}<span className="text-base text-white/50">%</span></p>
+            <p className="text-[12px] text-white/50 mt-1">{periodMode === 'month' ? '本月' : '本週'}目標 {totalGoal} 分</p>
+            <button onClick={() => { setGoalInput(String(goal)); setEditGoal(true); }} className="mt-2.5 text-[12px] font-bold text-blue-300 active:opacity-60">編輯目標</button>
+          </div>
+        </div>
+      </div>
+
+      {/* 迷你卡 */}
+      <div className="grid grid-cols-3 gap-2.5 mb-3">
+        {[
+          { l: '面談總分', v: stats.interviewPoints, t: interviewGoal },
+          { l: '業務分', v: stats.salesPoints },
+          { l: '增員分', v: stats.recruitPoints },
+        ].map(c => (
+          <div key={c.l} className={`${glass} px-3.5 py-3`}>
+            <p className="text-[11px] text-white/45">{c.l}</p>
+            <p className="text-[22px] font-bold tabular-nums leading-tight mt-0.5">{c.v}{c.t ? <span className="text-[11px] text-white/40 font-medium"> /{c.t}</span> : null}</p>
+            {c.t ? <div className="h-1 rounded-full bg-white/10 mt-1.5 overflow-hidden"><div className="h-full rounded-full bg-blue-400" style={{ width: `${Math.min(100, (c.v / c.t) * 100)}%` }}></div></div> : null}
+          </div>
+        ))}
+      </div>
+
+      {/* 預警 */}
+      {warn && (
+        <div className="rounded-3xl border border-red-400/25 bg-red-500/10 px-4 py-3.5 mb-3 flex items-start gap-3">
+          <div className="w-8 h-8 rounded-full bg-red-500/20 flex items-center justify-center shrink-0"><AlertTriangle size={16} className="text-red-300" /></div>
+          <div className="min-w-0">
+            <p className="text-[13px] font-bold text-red-200">活動量未達標預警</p>
+            <ul className="text-[12px] text-red-200/80 mt-1 space-y-0.5">
+              {total < totalGoal && <li>活動量總分 {total} / {totalGoal}，還差 {totalGoal - total} 分</li>}
+              {stats.interviewPoints < interviewGoal && <li>面談總分 {stats.interviewPoints} / {interviewGoal}，還差 {interviewGoal - stats.interviewPoints} 分</li>}
+            </ul>
+          </div>
+        </div>
+      )}
+
+      {/* 快速記錄 */}
+      <div className={`${glass} p-4 mb-3`}>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[15px] font-bold">快速記錄今日活動</p>
+          {canEdit && lastKeys ? <button onClick={undo} className="text-[12px] font-bold text-white/55 active:text-white">↶ 撤銷</button> : <span className="text-[11px] text-white/35">{canEdit ? '點一下 +1' : '僅限本人'}</span>}
+        </div>
+        <div className="grid grid-cols-3 gap-2.5">
+          {Object.keys(weights).map(k => (
+            <button key={k} disabled={!canEdit} onClick={() => quickAdd(k)} className={`rounded-2xl border border-white/10 bg-white/[0.06] px-2 py-3 text-center active:scale-95 active:bg-blue-500/20 transition ${canEdit ? '' : 'opacity-50'}`}>
+              <p className="text-[12px] text-white/70 font-bold">{weights[k].label}</p>
+              <p className="text-[24px] font-bold tabular-nums leading-tight mt-0.5">{todayRec[k] || 0}</p>
+              <p className="text-[10px] text-white/35">{weights[k].score} 分 / 次</p>
+            </button>
+          ))}
+        </div>
+        {flash && <p className="text-center text-[13px] font-bold text-emerald-300 mt-2.5">{flash}</p>}
+      </div>
+
+      {/* 明細 */}
+      <div className={`${glass} p-4 mb-3`}>
+        <div className="flex items-center justify-between mb-3.5">
+          <p className="text-[15px] font-bold">{periodMode === 'month' ? '本月' : '本週'}活動量明細</p>
+          <button onClick={() => setShowSheet(true)} className="flex items-center gap-1 text-[12px] font-bold text-blue-300 active:opacity-60"><Plus size={14} />新增紀錄</button>
+        </div>
+        <div className="space-y-3.5">
+          {Object.keys(weights).map(k => {
+            const cnt = totalsOf[k] || 0;
+            const pts = cnt * weights[k].score;
+            const tgt = viewMode === 'sales' ? Math.round(MEA_ROW_TARGETS[k] * factor) : 0;
+            const p = viewMode === 'sales' ? (tgt ? Math.min(100, (pts / tgt) * 100) : 0) : (pts / maxRecruitPts) * 100;
+            const barColor = viewMode === 'sales' ? (p >= 100 ? 'bg-emerald-400' : p >= 60 ? 'bg-blue-400' : 'bg-amber-400') : 'bg-teal-400';
+            return (
+              <div key={k}>
+                <div className="flex items-baseline justify-between mb-1.5">
+                  <span className="text-[13px] font-bold">{weights[k].label}<span className="text-white/35 font-medium ml-1.5 text-[11px]">×{cnt}</span></span>
+                  <span className="text-[12px] tabular-nums text-white/60"><b className="text-white text-[14px]">{pts}</b>{tgt ? ` / ${tgt}` : ''} 分</span>
+                </div>
+                <div className="h-2 rounded-full bg-white/10 overflow-hidden"><div className={`h-full rounded-full ${barColor}`} style={{ width: `${p}%`, transition: 'width .6s ease' }}></div></div>
+              </div>
+            );
+          })}
+        </div>
+        {viewMode === 'sales' && (
+          <div className="mt-4 pt-3.5 border-t border-white/10 flex items-center justify-between text-center">
+            {[['P 件均', formatMoney(stats.P).replace('$', '')], ['C 成交率', (stats.C * 100).toFixed(1) + '%'], ['I 面談', stats.I]].map(([l, v]) => (
+              <div key={l} className="flex-1"><p className="text-[16px] font-bold tabular-nums">{v}</p><p className="text-[10px] text-white/40 mt-0.5">{l}</p></div>
+            ))}
+          </div>
+        )}
+        {viewMode === 'recruit' && (
+          <div className="mt-4 pt-3.5 border-t border-white/10 flex items-center justify-between text-center">
+            {[['增員面談', stats.recruitTotals.recruitInterview], ['面談轉登錄', (stats.recruitConversion * 100).toFixed(1) + '%'], ['登錄人數', stats.recruitTotals.recruitRegistered]].map(([l, v]) => (
+              <div key={l} className="flex-1"><p className="text-[16px] font-bold tabular-nums">{v}</p><p className="text-[10px] text-white/40 mt-0.5">{l}</p></div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* 近 6 個月趨勢 */}
+      <div className={`${glass} p-4`}>
+        <div className="flex items-center justify-between mb-3">
+          <p className="text-[15px] font-bold">近 6 個月趨勢</p>
+        </div>
+        <div className="flex gap-2 mb-3">
+          {Object.keys(trendCfg).map(k => (
+            <button key={k} onClick={() => setTrendMetric(k)} className={`px-3 py-1.5 rounded-full text-[11px] font-bold border transition ${trendMetric === k ? 'border-transparent text-gray-900' : 'border-white/10 text-white/55'}`} style={trendMetric === k ? { background: trendCfg[k].color } : {}}>{trendCfg[k].label}</button>
+          ))}
+        </div>
+        <div style={{ width: '100%', height: 170 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={monthlyTrend} margin={{ top: 8, right: 8, left: -18, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,.08)" />
+              <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,.45)', fontSize: 11 }} />
+              <YAxis axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,.35)', fontSize: 10 }} tickFormatter={(v) => v >= 10000 ? (v / 10000).toFixed(0) + '萬' : v} />
+              <Tooltip contentStyle={{ background: '#0c1020', border: '1px solid rgba(255,255,255,.12)', borderRadius: 12, color: '#fff', fontSize: 12 }} formatter={(v) => trendMetric === 'points' ? v + ' 分' : formatMoney(v)} />
+              <Line type="monotone" dataKey={trendMetric} name={trendCfg[trendMetric].label} stroke={trendCfg[trendMetric].color} strokeWidth={3} dot={{ r: 3, fill: trendCfg[trendMetric].color }} />
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+
+      {/* 編輯目標 */}
+      {editGoal && (
+        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditGoal(false)}>
+          <div className="w-full max-w-md rounded-t-[28px] border-t border-white/10 bg-[#0c1020] p-5 pb-8" onClick={e => e.stopPropagation()}>
+            <p className="text-[16px] font-bold mb-1">編輯每月活動量目標</p>
+            <p className="text-[12px] text-white/45 mb-4">每週目標自動換算為月目標的 1/4，此設定只存在這支手機</p>
+            <input type="number" inputMode="numeric" value={goalInput} onChange={e => setGoalInput(e.target.value)} className="w-full rounded-2xl border border-white/10 bg-white/[0.07] px-4 py-3 text-[20px] font-bold text-white outline-none" />
+            <div className="flex gap-3 mt-4">
+              <button onClick={() => setEditGoal(false)} className="flex-1 py-3 rounded-2xl bg-white/10 font-bold text-[14px]">取消</button>
+              <button onClick={saveGoal} className="flex-1 py-3 rounded-2xl bg-blue-500 font-bold text-[14px]">儲存</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* 新增紀錄（補登） */}
+      {showSheet && (
+        <div className="fixed inset-0 z-[80] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setShowSheet(false)}>
+          <form onSubmit={async (e) => { await handleSubmit(e); setShowSheet(false); }} className="w-full max-w-md max-h-[88vh] overflow-y-auto rounded-t-[28px] border-t border-white/10 bg-[#0c1020] p-5 pb-8" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between mb-3">
+              <p className="text-[16px] font-bold">新增 / 補登紀錄 · {agent?.name || ''}</p>
+              <button type="button" onClick={() => setShowSheet(false)} className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center"><X size={16} /></button>
+            </div>
+            <input type="date" value={formData.date} onChange={e => setFormData({ ...formData, date: e.target.value })} className="w-full rounded-2xl border border-white/10 bg-white/[0.07] px-4 py-3 text-[15px] font-bold text-white outline-none mb-4" style={{ colorScheme: 'dark' }} />
+            {[['業務', ACTIVITY_WEIGHTS], ['增員', RECRUIT_ACTIVITY_WEIGHTS]].map(([title, W]) => (
+              <div key={title} className="mb-3">
+                <p className="text-[11px] font-bold text-white/40 mb-2 tracking-wider">{title}</p>
+                <div className="space-y-2">
+                  {Object.keys(W).map(k => (
+                    <div key={k} className="flex items-center justify-between rounded-2xl bg-white/[0.05] px-3.5 py-2">
+                      <span className="text-[13px] font-bold">{W[k].label}<span className="text-white/35 text-[11px] ml-1.5">{W[k].score}分</span></span>
+                      <div className="flex items-center gap-3">
+                        <button type="button" onClick={() => setFormData({ ...formData, [k]: Math.max(0, (Number(formData[k]) || 0) - 1) })} className="w-8 h-8 rounded-full bg-white/10 text-lg leading-none active:scale-90">−</button>
+                        <span className="w-6 text-center text-[16px] font-bold tabular-nums">{Number(formData[k]) || 0}</span>
+                        <button type="button" onClick={() => setFormData({ ...formData, [k]: (Number(formData[k]) || 0) + 1 })} className="w-8 h-8 rounded-full bg-blue-500/80 text-lg leading-none active:scale-90">+</button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
+            <button type="submit" disabled={isSubmitting || !canEdit} className="w-full mt-2 py-3.5 rounded-2xl bg-blue-500 font-bold text-[15px] disabled:opacity-40">{canEdit ? (isSubmitting ? '儲存中…' : '儲存當日紀錄') : '僅限本人可修改'}</button>
+          </form>
+        </div>
+      )}
     </div>
   );
 };
@@ -1119,7 +1645,7 @@ const computeDueTodayCount = (loggedInUser, customers, scheduleEvents, recurring
   return dueEventsCount + dueCustomersCount;
 };
 
-const ActivityDashboard = ({ team, activities, records, user, season, loggedInUser }) => {
+const ActivityDashboard = ({ team, activities, records, user, season, loggedInUser, onSearch }) => {
   const currentMonths = season === 'H1' ? AVAILABLE_MONTHS_H1 : AVAILABLE_MONTHS_H2;
   const [selectedAgentId, setSelectedAgentId] = useState('');
   
@@ -1329,8 +1855,12 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
   const chartColors = ['#3B82F6', '#6366F1', '#8B5CF6', '#D946EF', '#EC4899', '#F43F5E'];
   const recruitChartColors = ['#14B8A6', '#06B6D4', '#0891B2', '#2563EB', '#1E40AF'];
 
+  const canEditMobile = !!loggedInUser && (String(selectedAgentId) === String(loggedInUser.id) || loggedInUser.name === '吳政翰');
+
   return (
-    <div className="space-y-8 animate-fade-in pb-12 max-w-7xl mx-auto">
+    <>
+    <MobileActivityView team={team} selectedAgentId={selectedAgentId} setSelectedAgentId={setSelectedAgentId} viewMode={viewMode} setViewMode={setViewMode} periodMode={periodMode} setPeriodMode={setPeriodMode} periodRange={periodRange} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} currentMonths={currentMonths} shiftWeek={shiftWeek} stats={stats} monthlyTrend={monthlyTrend} activities={activities} canEdit={canEditMobile} formData={formData} setFormData={setFormData} handleSubmit={handleSubmit} isSubmitting={isSubmitting} onSearch={onSearch} />
+    <div className="hidden md:block space-y-8 animate-fade-in pb-12 max-w-7xl mx-auto">
       {/* Header & Context */}
       <div className="relative overflow-hidden rounded-3xl bg-slate-900 text-white p-8 shadow-2xl flex flex-col lg:flex-row justify-between gap-8 border border-slate-800">
         <div className="absolute top-0 right-0 p-8 opacity-10"><Activity size={200} /></div>
@@ -1710,6 +2240,7 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
         </Card>
       </div>
     </div>
+    </>
   );
 };
 
@@ -10598,9 +11129,9 @@ const App = () => {
   }
 
   return (
-    <div className={`jf-tech ${activeTab === 'todo' ? 'jf-dark' : ''} ${(activeTab === 'calendar' || activeTab === 'customers') ? 'jf-dark-m' : ''} min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8 relative`}>
+    <div className={`jf-tech ${activeTab === 'todo' ? 'jf-dark' : ''} ${(activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'jf-dark-m' : ''} min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8 relative`}>
       <JfTechStyle />
-      {(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') && <div className={`fixed inset-0 pointer-events-none ${activeTab === 'todo' ? '' : 'md:hidden'}`} style={{ background: 'radial-gradient(ellipse 70% 40% at 85% 6%, rgba(251,146,60,.34), transparent 60%), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%), radial-gradient(ellipse 90% 40% at 50% 100%, rgba(99,102,241,.14), transparent 60%)' }}></div>}
+      {(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') && <div className={`fixed inset-0 pointer-events-none ${activeTab === 'todo' ? '' : 'md:hidden'}`} style={{ background: 'radial-gradient(ellipse 70% 40% at 85% 6%, rgba(251,146,60,.34), transparent 60%), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%), radial-gradient(ellipse 90% 40% at 50% 100%, rgba(99,102,241,.14), transparent 60%)' }}></div>}
       <DailyNudge loggedInUser={loggedInUser} activities={activities} onGo={setActiveTab} />
       {/* 桌機版：完整頂部導覽（Logo、置中分頁選單、使用者資訊） */}
       <nav className="hidden md:block sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-white/20 shadow-sm overflow-x-auto">
@@ -10653,7 +11184,7 @@ const App = () => {
       </nav>
 
       {/* 手機版：極簡頂部列，只有目前頁面標題＋搜尋＋登出，其餘導覽交給底部列 */}
-      <div className={`${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100`}>
+      <div className={`${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-white/90 backdrop-blur-xl border-b border-gray-100`}>
         <div className="h-14 px-4 flex items-center justify-between">
           <h1 className="text-base font-bold text-gray-900">{currentNavItem?.label || '極豐通訊處'}</h1>
           <div className="flex items-center gap-1">
@@ -10666,7 +11197,7 @@ const App = () => {
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
-      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
+      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
@@ -10674,8 +11205,8 @@ const App = () => {
         {activeTab === 'warroom' && <SalesWarRoomPage loggedInUser={loggedInUser} team={team} customers={customers} records={enrichedRecords} />}
         {activeTab === 'announce' && <AnnouncementsPage loggedInUser={loggedInUser} announcements={announcements} canPost={isTeamScheduleViewer} onSeen={handleMarkAnnouncementsSeen} />}
         {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} isManagerViewer={isTeamScheduleViewer} />}
-        {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
-        {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} />}
+        {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} loggedInUser={loggedInUser} onSearch={() => setShowGlobalSearch(true)} />}
+        {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} />}
         {activeTab === 'team' && <OrgChart team={team} recruits={recruits} />}
         {activeTab === 'recruitment' && <RecruitmentDashboard recruits={recruits} team={team} user={user} />}
@@ -10685,7 +11216,7 @@ const App = () => {
       </main>
 
       {/* 手機版底部導覽列：4個常用分頁＋更多，App感的核心 */}
-      <nav className={`md:hidden fixed bottom-0 left-0 right-0 z-50 backdrop-blur-2xl border-t ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'bg-[#070914]/85 border-white/10' : 'bg-white/80 border-black/[0.06]'}`} style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
+      <nav className={`md:hidden fixed bottom-0 left-0 right-0 z-50 backdrop-blur-2xl border-t ${(activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'bg-[#070914]/85 border-white/10' : 'bg-white/80 border-black/[0.06]'}`} style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
         <div className="flex items-stretch">
           {primaryNavItems.map(item => {
             const ItemIcon = item.icon;
@@ -10696,8 +11227,8 @@ const App = () => {
                 onClick={() => setActiveTab(item.id)}
                 className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1"
               >
-                <ItemIcon size={22} className={active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-white/35' : 'text-gray-300')} />
-                <span className={`text-[10px] ${active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-white/40' : 'text-gray-400')}`}>{item.label}</span>
+                <ItemIcon size={22} className={active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-white/35' : 'text-gray-300')} />
+                <span className={`text-[10px] ${active ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-white/40' : 'text-gray-400')}`}>{item.label}</span>
                 {!!item.badge && (
                   <span className="absolute top-1 right-1/4 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[16px] h-[16px] flex items-center justify-center px-1">{item.badge > 99 ? '99+' : item.badge}</span>
                 )}
@@ -10705,9 +11236,9 @@ const App = () => {
             );
           })}
           <button onClick={() => setShowMoreSheet(true)} className="relative flex-1 flex flex-col items-center justify-center gap-0.5 pt-2.5 pb-1">
-            <LayoutGrid size={22} className={isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-white/35' : 'text-gray-300')} />
+            <LayoutGrid size={22} className={isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-blue-400' : 'text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-white/35' : 'text-gray-300')} />
             {moreNavItems.some(i => i.badge) && <span className="absolute top-2 right-[28%] w-2.5 h-2.5 bg-red-500 rounded-full"></span>}
-            <span className={`text-[10px] ${isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers') ? 'text-white/40' : 'text-gray-400')}`}>更多</span>
+            <span className={`text-[10px] ${isMoreActive ? ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'font-bold text-blue-400' : 'font-bold text-gray-900') : ((activeTab === 'todo' || activeTab === 'calendar' || activeTab === 'customers' || activeTab === 'activity' || activeTab === 'dashboard') ? 'text-white/40' : 'text-gray-400')}`}>更多</span>
           </button>
         </div>
       </nav>
