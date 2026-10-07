@@ -376,7 +376,7 @@ const hashPassword = async (password, salt) => {
 
 // --- Shared UI Components ---
 const Card = ({ children, className = "", onClick }) => (
-  <div onClick={onClick} className={`bg-white rounded-2xl shadow-[0_4px_20px_rgb(0,0,0,0.03)] border border-gray-100 ${className}`}>
+  <div onClick={onClick} className={`bg-white rounded-3xl shadow-[0_1px_2px_rgba(0,0,0,0.04),0_10px_30px_rgba(0,0,0,0.04)] border border-black/[0.05] ${className}`}>
     {children}
   </div>
 );
@@ -2180,7 +2180,7 @@ const OrgGalaxy = ({ team, onGoManage }) => {
     <div className="space-y-4">
       <div>
         <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">組織架構</h2>
-        <p className="text-sm text-gray-400 md:mt-1">每一顆行星是一位主管，環繞在身邊的衛星是他帶的組員；點任何一顆看介紹</p>
+        <p className="text-sm text-gray-400 md:mt-1">吳政翰這一區的星圖：每一顆行星是一位主管，環繞的衛星是他帶的組員；點任何一顆看介紹</p>
       </div>
 
       <div className="relative rounded-3xl overflow-hidden border border-slate-800 shadow-lg" style={{ background: 'radial-gradient(ellipse at 25% 15%, rgba(99,102,241,0.30), transparent 52%), radial-gradient(ellipse at 80% 75%, rgba(168,85,247,0.24), transparent 55%), radial-gradient(ellipse at 50% 100%, rgba(251,146,60,0.10), transparent 50%), #050816' }}>
@@ -2367,13 +2367,14 @@ const OrgGalaxy = ({ team, onGoManage }) => {
 
 const OrgChart = ({ team, recruits }) => {
   const [view, setView] = useState('galaxy');
+  const districtTeam = useMemo(() => getDistrictMembers(team, '吳政翰'), [team]);
   return (
     <div>
       <div className="flex gap-1 bg-gray-100 p-0.5 rounded-lg w-fit mx-auto mb-5">
         <button onClick={() => setView('galaxy')} className={`px-5 py-2 rounded-md text-sm font-bold transition ${view === 'galaxy' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>星圖</button>
         <button onClick={() => setView('manage')} className={`px-5 py-2 rounded-md text-sm font-bold transition ${view === 'manage' ? 'bg-white text-gray-900 shadow-sm' : 'text-gray-500'}`}>成員管理</button>
       </div>
-      {view === 'galaxy' ? <OrgGalaxy team={team} onGoManage={() => setView('manage')} /> : <OrgChartManage team={team} recruits={recruits} />}
+      {view === 'galaxy' ? <OrgGalaxy team={districtTeam} onGoManage={() => setView('manage')} /> : <OrgChartManage team={team} recruits={recruits} />}
     </div>
   );
 };
@@ -7362,7 +7363,371 @@ const MonthCalendarView = ({ events, getEventLabel, getEventColor, onEventClick,
   );
 };
 
-const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, activities }) => {
+// ================= 每日活動量／全隊達成看板／鼓勵訊息／科技感佈景 =================
+const DAILY_TARGET = 20;
+const WEEKLY_TARGET = 100;
+const ACT_SCORE_KEYS = Object.keys(ALL_ACTIVITY_WEIGHTS);
+const scoreOfActivity = (a) => ACT_SCORE_KEYS.reduce((s, k) => s + (Number(a[k]) || 0) * ALL_ACTIVITY_WEIGHTS[k].score, 0);
+const pointsOnDate = (activities, agentId, date) => (activities || []).filter(a => a.agentId === agentId && a.date === date).reduce((s, a) => s + scoreOfActivity(a), 0);
+const dateAdd = (dateStr, n) => {
+  const [y, m, d] = dateStr.split('-').map(Number);
+  const dt = new Date(y, m - 1, d + n);
+  return `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`;
+};
+const dayOfWeek = (dateStr) => { const [y, m, d] = dateStr.split('-').map(Number); return new Date(y, m - 1, d).getDay(); };
+const weekStartOf = (dateStr) => { const dow = dayOfWeek(dateStr); return dateAdd(dateStr, dow === 0 ? -6 : 1 - dow); };
+const weekPoints = (activities, agentId, date) => {
+  const start = weekStartOf(date);
+  const end = dateAdd(start, 6);
+  return (activities || []).filter(a => a.agentId === agentId && a.date >= start && a.date <= end).reduce((s, a) => s + scoreOfActivity(a), 0);
+};
+const monthPoints = (activities, agentId, date) => (activities || []).filter(a => a.agentId === agentId && a.date && a.date.startsWith(date.slice(0, 7))).reduce((s, a) => s + scoreOfActivity(a), 0);
+const streakDays = (activities, agentId, today) => {
+  let streak = 0;
+  for (let i = 0; i < 120; i++) {
+    const d = dateAdd(today, -i);
+    const p = pointsOnDate(activities, agentId, d);
+    if (p >= DAILY_TARGET) streak++;
+    else if (i === 0) continue;
+    else if ([0, 6].includes(dayOfWeek(d))) continue;
+    else break;
+  }
+  return streak;
+};
+
+const getDistrictMembers = (team, rootName) => {
+  const root = team.find(m => m.name === rootName);
+  if (!root) return team;
+  const seen = new Set([String(root.id)]);
+  const out = [root];
+  const queue = [root];
+  while (queue.length) {
+    const cur = queue.shift();
+    team.forEach(m => {
+      if (m.parentId && String(m.parentId) === String(cur.id) && !seen.has(String(m.id))) { seen.add(String(m.id)); out.push(m); queue.push(m); }
+    });
+  }
+  return out;
+};
+
+// 優培欄位自動隱藏：期別距今超過一年隱藏；沒填期別但登錄已超過一年也隱藏
+const getQualityInfo = (member, records) => {
+  const now = getCurrentMonth();
+  const [cy, cm] = now.split('-').map(Number);
+  if (member.qualityTalentStartMonth) {
+    const [sy, sm] = member.qualityTalentStartMonth.split('-').map(Number);
+    const diff = (cy - sy) * 12 + (cm - sm);
+    if (Math.abs(diff) > 12 || diff >= 12) return null;
+    if (diff < 0) return { state: 'upcoming', start: member.qualityTalentStartMonth };
+    const stageIndex = Math.min(3, Math.floor(diff / 3));
+    const stageMonths = [0, 1, 2].map(i => { const d = new Date(sy, sm - 1 + stageIndex * 3 + i, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+    const stageRecords = (records || []).filter(r => r.agentId === member.id && stageMonths.includes((r.date || '').slice(0, 7)) && (r.status || '已發單') === '已發單');
+    const fyc = Math.round(stageRecords.reduce((s, r) => s + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0));
+    const insured = new Set(stageRecords.map(r => (r.insuredName || '').trim()).filter(Boolean)).size;
+    return { state: 'active', stage: stageIndex + 1, fyc, insured, fycTarget: QUALITY_TALENT_THRESHOLDS.fyc, insuredTarget: QUALITY_TALENT_THRESHOLDS.insured };
+  }
+  const reg = member.promotionDates?.registered;
+  if (!reg) return null;
+  const regTime = new Date(reg).getTime();
+  if (isNaN(regTime)) return null;
+  if ((Date.now() - regTime) / 86400000 > 365) return null;
+  return { state: 'unset' };
+};
+
+const NUDGE_NONE = [
+  '今天還沒有任何活動紀錄。先約一個人，分數就開始跑了。',
+  '活動量是業績的前一步。花兩分鐘，把今天的第一通約訪記下來。',
+  '今天的帳戶還是 0 分。找一位老客戶問候一聲，就是第一個 1 分。',
+  '沒有開始，就沒有結果。傳一則訊息給準客戶，今天就算啟動。',
+  '今天的日報還空著。做了就記，記了才看得見自己的進步。',
+  '每天 20 分不是大數字：約訪 3 通、面談 1 場，再加一個新名單。',
+  '別讓今天空白。一次約訪、一次問候，都算在分數裡。',
+  '打開 App 的你，已經比沒打開的人更靠近目標。現在去記第一筆。',
+  '客戶正在等一個關心。今天先聯絡一位，把它記下來。',
+  '起跑不用完美，只要開始。先記下第一筆活動量。'
+];
+const NUDGE_LOW = [
+  '今天已經 {pts} 分，再 {n} 分就達標。差一點點，現在動起來。',
+  '目前 {pts}/20。再約一位客戶，距離目標又近一步。',
+  '還差 {n} 分。一場面談 2 分，一份建議書 3 分。',
+  '{pts} 分是很好的開始，剩下 {n} 分，今天收得回來。',
+  '快到了。再補 {n} 分，今天就能畫上完整的句點。',
+  '進度 {pts}/20。現在傳一則訊息、約一個人，就會往前推進。',
+  '別在 {pts} 分停下來。再 {n} 分，你就可以安心下班。',
+  '穩定的人贏在每一天。今天還差 {n} 分，補上它。',
+  '你已經動起來了，{pts} 分。把剩下的 {n} 分也拿下。',
+  '距離今天的目標只剩 {n} 分，一通電話的距離。'
+];
+const NUDGE_DONE = [
+  '今天 20 分達標！{pts} 分入帳，漂亮。',
+  '{name}，今天的活動量完成。持續做，結果自然來。',
+  '達標。這一天的努力，會在未來的業績裡回來找你。',
+  '今天做到了，{pts} 分。明天同樣的節奏，繼續。',
+  '目標完成！你又把自律往前推了一天。',
+  '20 分達成。今天的你，值得好好吃一頓晚餐。',
+  '完成今天的活動量，團隊因為你更有力量。',
+  '漂亮的一天，{pts} 分。連續達標的人，最後都不會讓人意外。',
+  '今天的目標已經在你手上。恭喜，也記得休息。',
+  '又一天達標。累積，是最安靜也最強的力量。'
+];
+const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
+const fillNudge = (tpl, vars) => tpl.replace(/\{(\w+)\}/g, (_, k) => (vars[k] !== undefined ? vars[k] : ''));
+
+const JfTechStyle = () => (
+  <style>{`
+    .jf-tech { background: #f5f5f7; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang TC", "Noto Sans TC", "Helvetica Neue", sans-serif; -webkit-font-smoothing: antialiased; letter-spacing: -0.005em; }
+    .jf-tech h1, .jf-tech h2, .jf-tech h3 { letter-spacing: -0.02em; }
+    .jf-tech .bg-indigo-600, .jf-tech .bg-indigo-500 { background-color: #111114; }
+    .jf-tech .hover\\:bg-indigo-700:hover, .jf-tech .hover\\:bg-indigo-600:hover { background-color: #2a2a30; }
+    .jf-tech .text-indigo-600, .jf-tech .text-indigo-700, .jf-tech .text-indigo-500 { color: #111114; }
+    .jf-tech .bg-indigo-50, .jf-tech .bg-indigo-100 { background-color: #efeff2; }
+    .jf-tech .border-indigo-500, .jf-tech .border-t-indigo-500, .jf-tech .border-indigo-200 { border-color: #111114; }
+    @keyframes jfNudgeIn { from { opacity: 0; transform: translateY(-16px) scale(.97) } to { opacity: 1; transform: translateY(0) scale(1) } }
+    @keyframes jfRingGlow { 0%,100% { filter: drop-shadow(0 0 4px rgba(52,211,153,.35)) } 50% { filter: drop-shadow(0 0 12px rgba(52,211,153,.7)) } }
+    .jf-nudge-in { animation: jfNudgeIn .45s cubic-bezier(.2,.8,.2,1) both }
+    .jf-ring-done { animation: jfRingGlow 2.4s ease-in-out infinite }
+    .jf-grid-bg { background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 28px 28px; }
+  `}</style>
+);
+
+const DailyNudge = ({ loggedInUser, activities, onGo }) => {
+  const [msg, setMsg] = useState(null);
+  const [ready, setReady] = useState(false);
+  const prevRef = useRef(null);
+  const today = getTodayDate();
+  const pts = useMemo(() => pointsOnDate(activities, loggedInUser?.id, today), [activities, loggedInUser?.id, today]);
+
+  useEffect(() => { const t = setTimeout(() => setReady(true), 2500); return () => clearTimeout(t); }, []);
+
+  useEffect(() => {
+    if (!ready || !loggedInUser) return;
+    const prev = prevRef.current;
+    prevRef.current = pts;
+    const doneKey = `jf_nudge_done_${loggedInUser.id}_${today}`;
+    const openKey = `jf_nudge_open_${loggedInUser.id}_${today}`;
+    let doneSeen = false, openSeen = false;
+    try { doneSeen = !!localStorage.getItem(doneKey); openSeen = !!sessionStorage.getItem(openKey); } catch (e) {}
+    if (pts >= DAILY_TARGET) {
+      if (!doneSeen) {
+        try { localStorage.setItem(doneKey, '1'); } catch (e) {}
+        setMsg({ kind: 'done', title: '今日達標 🎉', text: fillNudge(pickRandom(NUDGE_DONE), { pts, name: loggedInUser.name }) });
+      }
+    } else if (prev === null && !openSeen) {
+      try { sessionStorage.setItem(openKey, '1'); } catch (e) {}
+      const n = DAILY_TARGET - pts;
+      if (pts === 0) setMsg({ kind: 'none', title: '今天還沒開始', text: fillNudge(pickRandom(NUDGE_NONE), {}) });
+      else setMsg({ kind: 'low', title: `再 ${n} 分達標`, text: fillNudge(pickRandom(NUDGE_LOW), { pts, n }) });
+    }
+  }, [ready, pts, loggedInUser, today]);
+
+  useEffect(() => {
+    if (!msg) return;
+    const t = setTimeout(() => setMsg(null), 11000);
+    return () => clearTimeout(t);
+  }, [msg]);
+
+  if (!msg) return null;
+  const done = msg.kind === 'done';
+  return (
+    <div className="fixed left-3 right-3 md:left-auto md:right-6 md:w-96 z-[130]" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 12px)' }}>
+      <div className="jf-nudge-in relative overflow-hidden rounded-3xl bg-black/90 backdrop-blur-2xl border border-white/10 text-white p-5 shadow-2xl">
+        <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full blur-3xl" style={{ background: done ? 'rgba(52,211,153,.35)' : msg.kind === 'low' ? 'rgba(251,191,36,.28)' : 'rgba(99,102,241,.3)' }}></div>
+        <button onClick={() => setMsg(null)} className="absolute top-3 right-3 w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/60"><X size={16} /></button>
+        <p className="relative text-[11px] tracking-[0.2em] text-white/50 font-semibold">{done ? 'DAILY GOAL' : 'TODAY'}</p>
+        <p className="relative text-xl font-bold mt-1 pr-8">{msg.title}</p>
+        <p className="relative text-sm text-white/75 mt-2 leading-relaxed">{msg.text}</p>
+        {!done && <button onClick={() => { setMsg(null); onGo && onGo('activity'); }} className="relative mt-4 w-full bg-white text-black font-bold text-sm py-2.5 rounded-xl active:scale-[0.98] transition">去填今天的活動量</button>}
+      </div>
+    </div>
+  );
+};
+
+const DailyActivityHero = ({ loggedInUser, activities, team, onGo }) => {
+  const today = getTodayDate();
+  const pts = pointsOnDate(activities, loggedInUser.id, today);
+  const pct = Math.min(1, pts / DAILY_TARGET);
+  const done = pts >= DAILY_TARGET;
+  const streak = useMemo(() => streakDays(activities, loggedInUser.id, today), [activities, loggedInUser.id, today]);
+  const wkStart = weekStartOf(today);
+  const week = Array.from({ length: 7 }, (_, i) => { const d = dateAdd(wkStart, i); return { d, p: pointsOnDate(activities, loggedInUser.id, d), isToday: d === today, future: d > today }; });
+  const wkTotal = week.reduce((s, x) => s + x.p, 0);
+  const todayRecords = (activities || []).filter(a => a.agentId === loggedInUser.id && a.date === today);
+  const breakdown = ACT_SCORE_KEYS.map(k => ({ k, label: ALL_ACTIVITY_WEIGHTS[k].label, v: todayRecords.reduce((s, a) => s + (Number(a[k]) || 0), 0) })).filter(x => x.v > 0).slice(0, 6);
+  const teamStats = useMemo(() => {
+    const ids = (team || []).map(m => String(m.id));
+    const total = (activities || []).filter(a => a.date === today && ids.includes(String(a.agentId))).reduce((s, a) => s + scoreOfActivity(a), 0);
+    const reached = (team || []).filter(m => pointsOnDate(activities, m.id, today) >= DAILY_TARGET).length;
+    return { total, reached, n: (team || []).length };
+  }, [activities, team, today]);
+  const R = 54, C = 2 * Math.PI * R;
+  const weekdayNames = ['日', '一', '二', '三', '四', '五', '六'];
+  const hour = new Date().getHours();
+  const greet = hour < 11 ? '早安' : hour < 18 ? '午安' : '晚安';
+
+  return (
+    <div className="relative overflow-hidden rounded-[28px] bg-[#09090c] text-white p-5 sm:p-7 border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.25)]">
+      <div className="absolute inset-0 jf-grid-bg opacity-60 pointer-events-none"></div>
+      <div className="absolute -top-24 -left-16 w-72 h-72 rounded-full blur-3xl pointer-events-none" style={{ background: done ? 'rgba(52,211,153,.22)' : 'rgba(99,102,241,.22)' }}></div>
+      <div className="absolute -bottom-28 right-0 w-72 h-72 rounded-full blur-3xl pointer-events-none" style={{ background: 'rgba(168,85,247,.16)' }}></div>
+      <div className="relative">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <p className="text-[11px] tracking-[0.22em] text-white/45 font-semibold">{today.replace(/-/g, '.')} · 週{weekdayNames[dayOfWeek(today)]}</p>
+            <h2 className="text-2xl sm:text-3xl font-semibold mt-1">{greet}，{loggedInUser.name}</h2>
+          </div>
+          <div className="flex items-center gap-1.5 bg-white/10 border border-white/10 rounded-full px-3 py-1.5 text-xs font-semibold shrink-0">
+            <span className={streak > 0 ? 'text-amber-300' : 'text-white/40'}>🔥</span>連續 {streak} 天
+          </div>
+        </div>
+
+        <div className="mt-6 flex items-center gap-6 sm:gap-10">
+          <div className={`relative w-36 h-36 sm:w-40 sm:h-40 shrink-0 ${done ? 'jf-ring-done' : ''}`}>
+            <svg viewBox="0 0 128 128" className="w-full h-full -rotate-90">
+              <defs>
+                <linearGradient id="jfRingGrad" x1="0" y1="0" x2="1" y2="1">
+                  <stop offset="0%" stopColor={done ? '#34d399' : '#818cf8'} />
+                  <stop offset="100%" stopColor={done ? '#a7f3d0' : '#c084fc'} />
+                </linearGradient>
+              </defs>
+              <circle cx="64" cy="64" r={R} fill="none" stroke="rgba(255,255,255,.1)" strokeWidth="9" />
+              <circle cx="64" cy="64" r={R} fill="none" stroke="url(#jfRingGrad)" strokeWidth="9" strokeLinecap="round" strokeDasharray={`${C * pct} ${C}`} style={{ transition: 'stroke-dasharray .8s cubic-bezier(.2,.8,.2,1)' }} />
+            </svg>
+            <div className="absolute inset-0 flex flex-col items-center justify-center">
+              <span className="text-4xl sm:text-5xl font-semibold leading-none tabular-nums">{pts}</span>
+              <span className="text-xs text-white/50 mt-1">/ {DAILY_TARGET} 分</span>
+            </div>
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="text-lg sm:text-xl font-semibold">{done ? '今天達標了' : `再 ${DAILY_TARGET - pts} 分，今天達標`}</p>
+            <p className="text-sm text-white/50 mt-1">{done ? '保持這個節奏，結果會自己來。' : pts === 0 ? '還沒有紀錄，先記下第一筆。' : '已經在路上了，再推一把。'}</p>
+            {breakdown.length > 0 && (
+              <div className="flex flex-wrap gap-1.5 mt-3">
+                {breakdown.map(b => <span key={b.k} className="text-[11px] bg-white/10 border border-white/10 rounded-full px-2.5 py-1">{b.label} {b.v}</span>)}
+              </div>
+            )}
+            <button onClick={() => onGo && onGo('activity')} className="mt-4 bg-white text-black text-sm font-bold px-4 py-2 rounded-full active:scale-95 transition">填活動量</button>
+          </div>
+        </div>
+
+        <div className="mt-6">
+          <div className="flex items-center justify-between text-[11px] text-white/45 mb-2">
+            <span className="tracking-[0.18em] font-semibold">THIS WEEK</span>
+            <span>{wkTotal} / {WEEKLY_TARGET} 分</span>
+          </div>
+          <div className="flex items-end gap-2 h-16">
+            {week.map((w) => {
+              const h = Math.max(6, Math.min(100, (w.p / DAILY_TARGET) * 100));
+              const hit = w.p >= DAILY_TARGET;
+              return (
+                <div key={w.d} className="flex-1 flex flex-col items-center justify-end h-full">
+                  <div className="w-full rounded-md transition-all duration-700" style={{ height: `${w.future ? 6 : h}%`, background: hit ? 'linear-gradient(180deg,#6ee7b7,#10b981)' : w.isToday ? 'linear-gradient(180deg,#a5b4fc,#6366f1)' : w.future ? 'rgba(255,255,255,.06)' : 'rgba(255,255,255,.22)' }}></div>
+                </div>
+              );
+            })}
+          </div>
+          <div className="flex gap-2 mt-1.5">
+            {week.map((w) => <span key={w.d} className={`flex-1 text-center text-[11px] ${w.isToday ? 'text-white font-bold' : 'text-white/40'}`}>{weekdayNames[dayOfWeek(w.d)]}</span>)}
+          </div>
+        </div>
+
+        <div className="mt-5 pt-4 border-t border-white/10 flex items-center justify-between text-xs text-white/55">
+          <span>全隊今天累計 <b className="text-white tabular-nums">{teamStats.total}</b> 分</span>
+          <span><b className="text-white tabular-nums">{teamStats.reached}</b> / {teamStats.n} 人已達標</span>
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TeamTargetBoard = ({ team, activities, records, rootName }) => {
+  const today = getTodayDate();
+  const members = useMemo(() => getDistrictMembers(team, rootName), [team, rootName]);
+  const rows = useMemo(() => members.map(m => ({
+    m,
+    today: pointsOnDate(activities, m.id, today),
+    week: weekPoints(activities, m.id, today),
+    month: monthPoints(activities, m.id, today),
+    quality: getQualityInfo(m, records)
+  })).sort((a, b) => a.today - b.today || a.week - b.week), [members, activities, records, today]);
+  const reached = rows.filter(r => r.today >= DAILY_TARGET).length;
+  const empty = rows.filter(r => r.today === 0).length;
+  const weekAvg = rows.length ? Math.round(rows.reduce((s, r) => s + Math.min(1, r.week / WEEKLY_TARGET), 0) / rows.length * 100) : 0;
+  const qualityOn = rows.filter(r => r.quality && r.quality.state === 'active').length;
+  const qualityUnset = rows.filter(r => r.quality && r.quality.state === 'unset').length;
+
+  const kpis = [
+    { label: '今日達標', value: `${reached}/${rows.length}`, tone: 'text-emerald-300' },
+    { label: '今日未建檔', value: empty, tone: empty > 0 ? 'text-rose-300' : 'text-white' },
+    { label: '本週平均達成', value: `${weekAvg}%`, tone: 'text-white' },
+    { label: '優培進行中', value: qualityOn, tone: 'text-amber-300', sub: qualityUnset > 0 ? `${qualityUnset} 人未填期別` : '' }
+  ];
+
+  return (
+    <div className="relative overflow-hidden rounded-[28px] bg-[#09090c] text-white p-5 sm:p-7 border border-white/10 shadow-[0_20px_60px_rgba(0,0,0,0.25)]">
+      <div className="absolute inset-0 jf-grid-bg opacity-50 pointer-events-none"></div>
+      <div className="absolute -top-20 right-0 w-72 h-72 rounded-full blur-3xl pointer-events-none" style={{ background: 'rgba(251,191,36,.12)' }}></div>
+      <div className="relative">
+        <p className="text-[11px] tracking-[0.22em] text-white/45 font-semibold">TEAM COMMAND · {rootName} 區</p>
+        <h3 className="text-xl sm:text-2xl font-semibold mt-1">全隊目標與優培狀況</h3>
+        <div className="grid grid-cols-2 sm:grid-cols-4 gap-2.5 mt-5">
+          {kpis.map(k => (
+            <div key={k.label} className="bg-white/[0.06] border border-white/10 rounded-2xl px-4 py-3">
+              <p className="text-[11px] text-white/50">{k.label}</p>
+              <p className={`text-2xl font-semibold tabular-nums mt-0.5 ${k.tone}`}>{k.value}</p>
+              {k.sub && <p className="text-[10px] text-white/40 mt-0.5">{k.sub}</p>}
+            </div>
+          ))}
+        </div>
+        <p className="text-[11px] text-white/40 mt-4 mb-2">依今日分數由低到高排列，需要關心的人在最上面</p>
+        <div className="space-y-2">
+          {rows.map(({ m, today: tp, week, month, quality }) => {
+            const tone = tp >= DAILY_TARGET ? '#34d399' : tp > 0 ? '#fbbf24' : '#fb7185';
+            return (
+              <div key={m.id} className="bg-white/[0.05] border border-white/10 rounded-2xl p-3.5 sm:p-4 flex flex-col sm:flex-row sm:items-center gap-3 sm:gap-5">
+                <div className="flex items-center gap-3 sm:w-44 shrink-0">
+                  <span className="w-10 h-10 rounded-full flex items-center justify-center font-bold text-sm" style={{ background: `${tone}22`, color: tone, border: `1px solid ${tone}55` }}>{String(m.name).charAt(0)}</span>
+                  <div className="min-w-0">
+                    <p className="font-semibold truncate">{m.name}</p>
+                    <p className="text-[11px] text-white/45">{m.role}</p>
+                  </div>
+                </div>
+                <div className="flex-1 grid grid-cols-2 gap-4 min-w-0">
+                  <div>
+                    <div className="flex justify-between text-[11px] text-white/50 mb-1"><span>今日</span><span className="tabular-nums text-white/80">{tp}/{DAILY_TARGET}</span></div>
+                    <div className="h-1.5 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${Math.min(100, tp / DAILY_TARGET * 100)}%`, background: tone }}></div></div>
+                  </div>
+                  <div>
+                    <div className="flex justify-between text-[11px] text-white/50 mb-1"><span>本週</span><span className="tabular-nums text-white/80">{week}/{WEEKLY_TARGET}</span></div>
+                    <div className="h-1.5 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full bg-indigo-400" style={{ width: `${Math.min(100, week / WEEKLY_TARGET * 100)}%` }}></div></div>
+                  </div>
+                </div>
+                <div className="sm:w-48 shrink-0 text-[11px]">
+                  {quality ? (
+                    quality.state === 'active' ? (
+                      <div>
+                        <p className="text-amber-300 font-semibold mb-1">優培 第 {quality.stage} 階段</p>
+                        <div className="flex items-center gap-2 text-white/60"><span className="w-12 shrink-0">FYC</span><div className="flex-1 h-1 rounded-full bg-white/10 overflow-hidden"><div className="h-full bg-amber-300" style={{ width: `${Math.min(100, quality.fyc / quality.fycTarget * 100)}%` }}></div></div><span className="tabular-nums">{Math.round(quality.fyc / quality.fycTarget * 100)}%</span></div>
+                        <div className="flex items-center gap-2 text-white/60 mt-1"><span className="w-12 shrink-0">被保人</span><div className="flex-1 h-1 rounded-full bg-white/10 overflow-hidden"><div className="h-full bg-amber-300" style={{ width: `${Math.min(100, quality.insured / quality.insuredTarget * 100)}%` }}></div></div><span className="tabular-nums">{quality.insured}/{quality.insuredTarget}</span></div>
+                      </div>
+                    ) : quality.state === 'upcoming' ? (
+                      <p className="text-white/50">優培 {quality.start} 開始</p>
+                    ) : (
+                      <p className="text-rose-300">優培期別尚未填寫</p>
+                    )
+                  ) : (
+                    <p className="text-white/25">月累計 {month} 分</p>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, activities, team, onGo, isTeamScheduleViewer }) => {
   const today = getTodayDate();
   const [busyId, setBusyId] = useState(null);
 
@@ -7535,6 +7900,10 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
 
   return (
     <div className="max-w-4xl lg:max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
+      <DailyActivityHero loggedInUser={loggedInUser} activities={activities} team={team} onGo={onGo} />
+
+      {isTeamScheduleViewer && <TeamTargetBoard team={team} activities={activities} records={records} rootName="吳政翰" />}
+
       <PersonalGoalsCard loggedInUser={loggedInUser} records={records} activities={activities} />
 
       <PersonalTodoList loggedInUser={loggedInUser} />
@@ -9568,7 +9937,9 @@ const App = () => {
   }
 
   return (
-    <div className="min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8">
+    <div className="jf-tech min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8">
+      <JfTechStyle />
+      <DailyNudge loggedInUser={loggedInUser} activities={activities} onGo={setActiveTab} />
       {/* 桌機版：完整頂部導覽（Logo、置中分頁選單、使用者資訊） */}
       <nav className="hidden md:block sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-white/20 shadow-sm overflow-x-auto">
         <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between min-w-max gap-8">
@@ -9634,7 +10005,7 @@ const App = () => {
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
       <main className="max-w-7xl mx-auto px-4 md:px-6 pt-4 md:pt-8">
-        {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} />}
+        {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'calendar' && <CalendarPage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
@@ -9652,7 +10023,7 @@ const App = () => {
       </main>
 
       {/* 手機版底部導覽列：4個常用分頁＋更多，App感的核心 */}
-      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-white border-t border-gray-100" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
+      <nav className="md:hidden fixed bottom-0 left-0 right-0 z-50 bg-white/80 backdrop-blur-2xl border-t border-black/[0.06]" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 10px)' }}>
         <div className="flex items-stretch">
           {primaryNavItems.map(item => {
             const ItemIcon = item.icon;
