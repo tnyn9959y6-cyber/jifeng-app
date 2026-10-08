@@ -82,6 +82,7 @@ import {
 } from 'recharts';
 
 // --- Firebase Imports ---
+import ProductCatalog from './ProductCatalog.jsx';
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -5826,6 +5827,7 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
   const [saving, setSaving] = useState(false);
   const emptyForm = { title: '', category: KB_CATEGORIES[0], content: '', managerOnly: false };
   const [form, setForm] = useState(emptyForm);
+  const [kbMode, setKbMode] = useState('articles');
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'knowledge_articles'), (snap) => {
@@ -5869,6 +5871,26 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
     try { await deleteDoc(doc(db, 'knowledge_articles', deleteTarget)); setDeleteTarget(null); setViewingArticle(null); } catch (e) { console.error(e); }
   };
 
+  const kbTabs = (
+    <div className="inline-flex p-1 rounded-full bg-white/[0.06] border border-white/10 self-start">
+      {[['articles', '知識文章'], ['products', '商品大全']].map(([k, l]) => (
+        <button key={k} onClick={() => setKbMode(k)} className={`px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold transition ${kbMode === k ? 'bg-white text-gray-900' : 'text-white/60 hover:text-white'}`}>{l}</button>
+      ))}
+    </div>
+  );
+
+  if (kbMode === 'products') {
+    return (
+      <div className="max-w-none mx-auto space-y-4 animate-fade-in pb-28 md:pb-12">
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900 mr-2">知識庫</h2>
+          {kbTabs}
+        </div>
+        <ProductCatalog />
+      </div>
+    );
+  }
+
   return (
     <div className="max-w-5xl mx-auto space-y-6 animate-fade-in pb-12">
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除文章" message="確定要刪除這篇知識庫文章嗎？" />
@@ -5877,6 +5899,7 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
         <div>
           <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">知識庫</h2>
           <p className="text-xs sm:text-sm text-gray-400 md:mt-1">共 {articles.length} 篇文章</p>
+          <div className="mt-3">{kbTabs}</div>
         </div>
         <button onClick={openAdd} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 新增文章</button>
       </div>
