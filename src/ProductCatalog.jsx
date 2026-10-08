@@ -7,6 +7,7 @@ const TONE = {
   emerald: { head: 'bg-emerald-400/15 text-emerald-200 border-emerald-400/30', cell: 'bg-emerald-400/[0.07] text-emerald-50', dot: 'bg-emerald-400' },
   sky:     { head: 'bg-sky-400/15 text-sky-200 border-sky-400/30',             cell: 'bg-sky-400/[0.07] text-sky-50',         dot: 'bg-sky-400' },
   violet:  { head: 'bg-violet-400/15 text-violet-200 border-violet-400/30',    cell: 'bg-violet-400/[0.07] text-violet-50',   dot: 'bg-violet-400' },
+  pink:    { head: 'bg-pink-400/15 text-pink-200 border-pink-400/30',          cell: 'bg-pink-400/[0.07] text-pink-50',       dot: 'bg-pink-400' },
   amber:   { head: 'bg-amber-400/15 text-amber-200 border-amber-400/30',       cell: 'bg-amber-400/[0.07] text-amber-50',     dot: 'bg-amber-400' },
 };
 
@@ -44,7 +45,7 @@ const ProductCatalog = () => {
       .map(sec => ({
         ...sec,
         rows: sec.rows.filter(r => {
-          const vals = orderedProducts.map(p => p.cells[r.key] ?? NA);
+          const vals = orderedProducts.map(p => p.cells[r.key] ?? (r.key === 'cur' ? '新台幣' : NA));
           if (vals.every(v => v === NA)) return false;      // 全部都沒有的列直接隱藏
           if (onlyDiff && new Set(vals).size === 1) return false;
           return true;
@@ -154,7 +155,7 @@ const ProductCatalog = () => {
                         <tr key={r.key} className="group">
                           <td className="sticky left-0 z-20 bg-[#14161c] border-b border-r border-white/[0.07] px-3 py-2 text-[11px] md:text-xs font-bold text-white/60 align-top">{r.label}</td>
                           {orderedProducts.map(p => {
-                            const v = p.cells[r.key] ?? NA;
+                            const v = p.cells[r.key] ?? (r.key === 'cur' ? '新台幣' : NA);
                             const none = v === NA;
                             return (
                               <td key={p.id} className={`border-b border-l border-white/[0.07] px-2.5 py-2 align-top text-[11px] md:text-xs leading-relaxed whitespace-pre-line group-hover:brightness-125 ${none ? 'text-white/20 text-center' : TONE[p.color].cell}`}>
@@ -170,7 +171,7 @@ const ProductCatalog = () => {
               </table>
             </div>
           </div>
-          <p className="text-[10px] text-white/30 px-1">點商品代號看詳細說明；「—」代表該商品沒有此項給付。數字依 DM 整理，實際承保請以保單條款與最新費率為準。</p>
+          <p className="text-[10px] text-white/30 px-1">點商品代號看詳細說明；「—」代表該商品沒有此項給付。數字依 DM 整理，保障結束年齡超過 90 歲者為「終身型」，其餘為「定期型」。實際承保請以保單條款與最新費率為準。</p>
         </>
       )}
 

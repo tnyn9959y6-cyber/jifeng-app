@@ -2,15 +2,18 @@
 // 資料來源：各商品 DM。數字以 DM 為準，實際承保請以保單條款與最新費率為準。
 // 儲存格值：字串；'—' 代表「無此給付」。要新增商品：在對應類別的 products 加一筆即可。
 
+import * as CRIT from './catalogCrit.js';
+import * as HOSP from './catalogHosp.js';
+
 export const NA = '—';
 
 export const CATALOG_CATEGORIES = [
-  '壽險', '意外險', '住院險', '手術險', '長照險', '癌險', '重大疾病傷病',
+  '癌險', '重大疾病・精選傷病', '住院・手術', '壽險', '意外險', '長照險',
 ];
 
 export const CANCER_GROUPS = [
   { id: 'dx',   label: '診斷一次給付型', hint: '確診即給一筆錢，用途自由' },
-  { id: 'med',  label: '醫療實支定額型', hint: '住院、手術、放化療逐項給付' },
+  { id: 'med',  label: '療程型', hint: '住院、手術、放化療逐項給付' },
   { id: 'sav',  label: '儲蓄＋癌症＋失智', hint: '有解約金、可領滿期金' },
   { id: 'prec', label: '精準治療附加條款', hint: '附加在主約上的單項治療給付' },
 ];
@@ -18,6 +21,7 @@ export const CANCER_GROUPS = [
 export const CANCER_ROWS = [
   { section: '基本資訊', rows: [
     { key: 'kind',  label: '商品型態' },
+    { key: 'cur',   label: '幣別' },
     { key: 'term',  label: '保險／繳費年期' },
     { key: 'age',   label: '投保年齡' },
     { key: 'sum',   label: '保額／單位' },
@@ -68,7 +72,7 @@ export const CANCER_PRODUCTS = [
     func: '55歲以上也能投保的癌症定期險，確診一次領。',
     fit: '年長、其他癌險已無法投保，想補強癌症確診金的客戶。',
     cells: {
-      kind: '定期險（10／20年）', term: '10年期／20年期', age: '55–80歲（10年）\n55–70歲（20年）',
+      kind: '定期型・10／20年期', term: '10年期／20年期', age: '55–80歲（10年）\n55–70歲（20年）',
       sum: '30萬起，累計最高100萬', cash: '無', wait: '90天',
       early: '一次：首年＝年繳保費×1.1\n次年起＝保額×10%', mild: '一次：首年＝年繳保費×1.1\n次年起＝保額×10%',
       severe: '首年＝年繳保費×1.1\n次年起＝保額×100%', after: '合約終止', spec: NA, extra: NA, cap: '累計最高110%',
@@ -82,7 +86,7 @@ export const CANCER_PRODUCTS = [
     func: '0–70歲都能投保的癌症診斷險，保障至95歲，可加選癌症補充包。',
     fit: '想用較低保費補強癌症確診金，且希望保障長一點的客戶。',
     cells: {
-      kind: '定期健康險（長期繳費）', term: '10年繳／20年繳\n保障至95歲', age: '0–70歲（10年繳）\n0–65歲（20年繳）',
+      kind: '終身型・健康險（保障至95歲）', term: '10年繳／20年繳\n保障至95歲', age: '0–70歲（10年繳）\n0–65歲（20年繳）',
       sum: '30萬起\n10HC+20HC累計：0–54歲300萬、55歲↑200萬', cash: '無', wait: '90天',
       early: '次年起＝保額×10%×係數', mild: '次年起＝保額×10%×係數',
       severe: '保額×係數', after: '合約終止', spec: NA, extra: NA, cap: '累計最高110%',
@@ -96,7 +100,7 @@ export const CANCER_PRODUCTS = [
     func: '確診後多段給付：癌症金、身心關懷、重度金，外加5年生活照護金。',
     fit: '20–65歲男性，希望罹癌後有長期現金流支撐生活。',
     cells: {
-      kind: '定期險（20年）', term: '20年期', age: '20–65歲',
+      kind: '定期型・20年期', term: '20年期', age: '20–65歲',
       sum: '單位制：20–25歲最少1單位\n26歲↑最少0.5單位，最多2單位', cash: '無', wait: '90天',
       early: '5萬／單位（癌症保險金）', mild: '5萬／單位（癌症保險金）',
       severe: '首年5萬\n次年起40萬／單位', after: '給付後依條款', spec: '特定重度20萬／單位\n（33種特定癌症）',
@@ -111,7 +115,7 @@ export const CANCER_PRODUCTS = [
     func: '女性專屬：多段給付再加乳癌護理金，乳癌保障更高。',
     fit: '20–60歲女性，重視乳癌與長期生活照護保障。',
     cells: {
-      kind: '定期險（20年）', term: '20年期', age: '20–60歲',
+      kind: '定期型・20年期', term: '20年期', age: '20–60歲',
       sum: '單位制：20–25歲最少1單位\n26歲↑最少0.5單位，最多2單位', cash: '無', wait: '90天',
       early: '5萬／單位\n（乳癌15萬）', mild: '5萬／單位\n（乳癌15萬）',
       severe: '首年5萬\n次年起40萬／單位', after: '給付後依條款', spec: '特定重度15萬／單位',
@@ -120,14 +124,14 @@ export const CANCER_PRODUCTS = [
       reward: '約12%', discount: NA,
     },
   },
-  // ───────── 醫療實支定額型 ─────────
+  // ───────── 療程型 ─────────
   {
     id: 'HCAB2', code: 'HCAB2', group: 'med', name: '滿溢久久2癌症醫療健康保險',
     doc: 'PA-01-442 · 2025/7', color: 'sky',
     func: '住院、放化療、門診逐項給付，外加初期／輕度／重度確診金。',
     fit: '想要癌症治療過程的日額型醫療保障。',
     cells: {
-      kind: '定額醫療（主約）', term: '20年繳\n保障至95歲', age: '0–70歲',
+      kind: '終身型・定額醫療（主約，保障至95歲）', term: '20年繳\n保障至95歲', age: '0–70歲',
       sum: '單位制\n每單位給付上限200萬', cash: '無', wait: '90天',
       early: '5,000／單位', mild: '1萬／單位', severe: '5萬／單位', after: '依條款', spec: NA, extra: NA, cap: '每單位上限200萬',
       hosp: '1,000／日', recover: '長期住院1,000／日\n出院療養1,000／日', opd: '500／次\n（每年最多120次）',
@@ -142,7 +146,7 @@ export const CANCER_PRODUCTS = [
     func: '比 HCAB2 多手術、移植、重建與義肢義齒，醫療項目最完整。',
     fit: '已有主約，想補齊癌症手術與重建相關費用的客戶。',
     cells: {
-      kind: '定額醫療（附約）', term: '20年繳\n保障至95歲', age: '0–70歲',
+      kind: '終身型・定額醫療（附約，保障至95歲）', term: '20年繳\n保障至95歲', age: '0–70歲',
       sum: '單位制\n每單位給付上限200萬', cash: '無', wait: '90天',
       early: '5,000／單位', mild: '1萬／單位', severe: '5萬／單位', after: '依條款', spec: NA, extra: NA, cap: '每單位上限200萬',
       hosp: NA, recover: NA, opd: NA, rt: NA,
@@ -158,13 +162,27 @@ export const CANCER_PRODUCTS = [
     func: '2年繳的儲蓄型：癌症與嚴重失智、巴金森都保，有解約金與滿期金。',
     fit: '想兼顧儲蓄、癌症與失智保障，且希望保障有回收的客戶。',
     cells: {
-      kind: '儲蓄型健康險', term: '2年繳\n保障至95歲', age: '16–65歲',
+      kind: '終身型・儲蓄健康險（保障至95歲）', term: '2年繳\n保障至95歲', age: '16–65歲',
       sum: '15萬起，累計最高800萬', cash: '有', wait: '癌症90天\n其他疾病30天',
       early: '（保額＋增額繳清）×5%', mild: '（保額＋增額繳清）×10%',
       severe: '兩種基礎取較大者\n給付後合約終止', after: '合約終止', spec: '嚴重阿茲海默、嚴重巴金森\n同重度給付',
       extra: '身故／完全失能：取較大值\n滿期金（95歲）', cap: '依保額與增額繳清',
       ...medNone, ...precNone,
       reward: '健康感恩回饋金\n（增額繳清）', discount: NA,
+    },
+  },
+  {
+    id: 'URSDB', code: 'URSDB', group: 'sav', name: '美好康祥B型美元終身保險',
+    doc: 'PA-01-376 · 2026/1', color: 'violet',
+    func: '美元終身壽險：罹患重度癌症、嚴重阿茲海默、嚴重巴金森時一次給付，另有身故、失能與祝壽金。',
+    fit: '想以美元配置資產，同時補癌症與腦部退化保障的客戶。',
+    cells: {
+      kind: '終身型・美元終身壽險（特定疾病）', cur: '美元', term: '繳費6年／20年\n保障終身（至110歲）', age: '0–65歲（6年繳）\n0–60歲（20年繳）',
+      sum: '1.5萬美元起\n累計：0–7歲15萬／8–15歲22.7萬／16歲↑80萬美元', cash: '有（保單價值準備金）', wait: '癌症90天\n其他疾病30天',
+      early: NA, mild: NA, severe: '癌症(重度)：保額 或 所繳保費總和×1.1 擇高\n終身限1次，給付後終止', after: '合約終止',
+      spec: '嚴重阿茲海默氏症、嚴重巴金森氏症\n同樣按上列金額給付', extra: '身故／完全失能：保價金與壽險當年度保額擇高\n祝壽金（110歲）', cap: '單次給付，不累加',
+      ...medNone, waiver: '有（2–6級失能）', ...precNone,
+      reward: NA, discount: '自動轉帳1%',
     },
   },
   // ───────── 精準治療附加條款 ─────────
@@ -177,7 +195,7 @@ export const CANCER_PRODUCTS = [
   ].map(([code, name, rowKey, amount, func, fit]) => ({
     id: code, code, group: 'prec', name, short: { '1CGT': '癌後基因檢測', '1STT': '標靶治療', '1SCT': '免疫細胞治療', '1RAS': '機械手臂手術', '1CPT': '粒子放射治療' }[code], doc: 'PA-01-453 · 2025/7', color: 'amber', func, fit,
     cells: {
-      kind: '附加條款（1年期，保證續保至第10年）', term: '1年期\n保證續保至第10年', age: '30–70歲',
+      kind: '定期型・附加條款（1年期，保證續保至第10年）', term: '1年期\n保證續保至第10年', age: '30–70歲',
       sum: amount, cash: '無', wait: '90天', ...dxNone, ...medNone, ...precNone,
       [rowKey]: amount + '\n給付一次後終止',
       reward: '最高10%＋防疫2%', discount: NA,
@@ -186,6 +204,15 @@ export const CANCER_PRODUCTS = [
   })),
 ];
 
+const GROUP_COLOR = { dx: 'emerald', med: 'sky', sav: 'violet', prec: 'amber', oth: 'pink' };
+const build = (m) => ({
+  groups: m.groups,
+  rows: m.rows,
+  products: m.products.map(x => ({ ...x, color: x.color || GROUP_COLOR[x.group] || 'sky' })),
+});
+
 export const CATALOG = {
   癌險: { groups: CANCER_GROUPS, rows: CANCER_ROWS, products: CANCER_PRODUCTS },
+  '重大疾病・精選傷病': build(CRIT),
+  '住院・手術': build(HOSP),
 };
