@@ -678,6 +678,144 @@ const MobileDashboardView = ({ team, records, season, setSeason, activeTargets, 
 };
 
 // --- Dashboard Component ---
+const DesktopDashboardView = ({ stats, season, setSeason, viewMonth, setViewMonth, currentMonths, managers, selectedManagerId, setSelectedManagerId }) => {
+  const pct = (c, t) => (!t ? 100 : Math.min(100, (c / t) * 100));
+  const glass = 'rounded-3xl border border-white/10 bg-white/[0.045] backdrop-blur-xl';
+  const sel = 'bg-white/[0.08] border border-white/10 rounded-xl px-3 py-1.5 text-[13px] font-bold text-white outline-none cursor-pointer';
+  const PBar = ({ label, value, ok, color, okColor }) => (
+    <div className="flex items-center gap-2">
+      <span className="w-8 text-[10px] text-white/40 shrink-0">{label}</span>
+      <div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${value}%`, background: ok ? okColor : color }} /></div>
+      <span className={`w-9 text-right text-[11px] font-bold tabular-nums ${ok ? '' : 'text-white/70'}`} style={ok ? { color: okColor } : {}}>{Math.round(value)}%</span>
+    </div>
+  );
+  return (
+    <div className="hidden md:flex flex-col gap-3 h-full md:min-h-[840px] text-white animate-fade-in">
+      <div className="flex items-center justify-between gap-4 shrink-0">
+        <div>
+          <h1 className="text-[26px] font-bold tracking-tight leading-none">業績儀表板</h1>
+          <p className="text-[12px] text-white/45 mt-1.5">{season === 'H1' ? '115年 上半年高峰／極峰競賽 · 115/01/02 – 06/15' : '115年 下半年新高峰／新極峰競賽 · 115/07/01 – 12/31'}</p>
+        </div>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-xl border border-white/10 bg-white/[0.07] p-0.5">
+            {[['H1', '上半年'], ['H2', '下半年']].map(([k, l]) => (
+              <button key={k} onClick={() => setSeason(k)} className={`px-3 py-1.5 text-[12px] font-bold rounded-[10px] transition ${season === k ? 'bg-white text-gray-900' : 'text-white/55'}`}>{l}</button>
+            ))}
+          </div>
+          <select className={sel} value={viewMonth} onChange={(e) => setViewMonth(e.target.value)}>
+            {currentMonths.map(m => <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>)}
+          </select>
+          <select className={sel} value={selectedManagerId} onChange={(e) => setSelectedManagerId(e.target.value)}>
+            {managers.map(m => <option key={m.id} value={m.id} className="text-gray-900">{m.name} 組</option>)}
+          </select>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-4 gap-3 shrink-0">
+        <div className={`${glass} p-4 bg-gradient-to-br from-blue-500/25 to-indigo-500/10`}>
+          <p className="text-[11px] text-white/50 font-bold tracking-wider">組績 UNIT FYP</p>
+          <p className="text-[28px] font-bold tabular-nums leading-tight mt-1">{formatMoney(stats.unitTotalWeighted)}</p>
+          <p className="text-[11px] text-white/45">實收 {formatMoney(stats.unitTotalPremium)}　·　高峰目標 {stats.unitTarget ? stats.unitTarget.peak.total / 10000 : 0} 萬</p>
+        </div>
+        <div className={`${glass} p-4 flex items-center justify-between`}>
+          <div className="space-y-1.5 min-w-0">
+            <p className="text-[11px] text-white/50 font-bold tracking-wider">組達成率</p>
+            <div className="flex items-center gap-2 text-[13px] font-bold"><span className="w-2 h-2 rounded-full bg-blue-400" />高峰 {Math.round(stats.unitPeakProgress)}%</div>
+            <div className="flex items-center gap-2 text-[13px] font-bold"><span className="w-2 h-2 rounded-full bg-amber-400" />極峰 {Math.round(stats.unitSummitProgress)}%</div>
+            {(stats.unitHasActualPeak || stats.unitHasActualSummit) && (
+              <div className="text-[11px] text-white/45">實收 高峰 {Math.round(stats.unitPeakPremiumProgress)}% · 極峰 {Math.round(stats.unitSummitPremiumProgress)}%</div>
+            )}
+          </div>
+          <div className="h-[96px] w-[96px] shrink-0 relative"><div className="absolute top-1/2 left-1/2 scale-[0.55] -translate-x-1/2 -translate-y-1/2"><DoubleRadialProgress peakPercent={stats.unitPeakProgress} summitPercent={stats.unitSummitProgress} /></div></div>
+        </div>
+        <div className={`${glass} p-4`}>
+          <p className="text-[11px] text-white/50 font-bold tracking-wider">全體總績 FYP</p>
+          <div className="flex justify-between items-end mt-2">
+            <div><p className="text-[11px] text-white/40">{viewMonth} 當月</p><p className="text-[22px] font-bold tabular-nums">{formatMoney(stats.grandTotalWeightedMonth)}</p></div>
+            <div className="text-right"><p className="text-[11px] text-white/40">累積</p><p className="text-[22px] font-bold tabular-nums text-emerald-400">{formatMoney(stats.grandTotalWeighted)}</p></div>
+          </div>
+        </div>
+        <div className={`${glass} p-4`}>
+          <p className="text-[11px] text-white/50 font-bold tracking-wider">全體總件數</p>
+          <div className="flex justify-between items-end mt-2">
+            <div><p className="text-[11px] text-white/40">{viewMonth} 當月</p><p className="text-[26px] font-bold tabular-nums">{stats.grandTotalCasesMonth}</p></div>
+            <div className="text-right"><p className="text-[11px] text-white/40">累積</p><p className="text-[26px] font-bold tabular-nums text-amber-400">{stats.grandTotalCases}</p></div>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1.9fr)_minmax(0,1fr)] gap-3">
+        <div className={`${glass} p-4 flex flex-col min-h-0`}>
+          <div className="flex items-center gap-2 mb-2 shrink-0">
+            <Crown className="text-amber-400" size={18} />
+            <h3 className="font-bold text-[15px]">極豐榮譽榜</h3>
+            <span className="text-[11px] text-white/40">{season === 'H2' ? '加權／實收任一達標即合格' : '加權＋A&H 達標'}</span>
+          </div>
+          <div className="grid grid-cols-[28px_minmax(130px,1.1fr)_64px_92px_minmax(0,1.5fr)_minmax(0,1.5fr)] gap-3 px-2 pb-1.5 text-[10px] font-bold text-white/35 shrink-0">
+            <span className="text-center">#</span><span>同仁</span><span className="text-center">件數 月/累</span><span className="text-right">當月 FYP</span><span>高峰進度</span><span>極峰進度</span>
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar divide-y divide-white/[0.06]">
+            {stats.memberStats.map((member, index) => {
+              const { targets } = member;
+              const hasAP = season === 'H2' && targets.peak.actualPremium > 0;
+              const hasAS = season === 'H2' && targets.summit.actualPremium > 0;
+              const pW = pct(member.totalWeighted, targets.peak.total), sW = pct(member.totalWeighted, targets.summit.total);
+              const pA = hasAP ? pct(member.totalPremium, targets.peak.actualPremium) : 0, sA = hasAS ? pct(member.totalPremium, targets.summit.actualPremium) : 0;
+              const pAH = pct(member.ahWeighted, targets.peak.ah), sAH = pct(member.ahWeighted, targets.summit.ah);
+              const peakW = member.totalWeighted >= targets.peak.total && (!targets.peak.ah || member.ahWeighted >= targets.peak.ah);
+              const peakA = hasAP && member.totalPremium >= targets.peak.actualPremium;
+              const sumW = member.totalWeighted >= targets.summit.total && (!targets.summit.ah || member.ahWeighted >= targets.summit.ah);
+              const sumA = hasAS && member.totalPremium >= targets.summit.actualPremium;
+              return (
+                <div key={member.id} className="grid grid-cols-[28px_minmax(130px,1.1fr)_64px_92px_minmax(0,1.5fr)_minmax(0,1.5fr)] gap-3 items-center px-2 py-2 hover:bg-white/[0.04]">
+                  <span className={`text-center text-[13px] font-bold ${index < 3 ? 'text-amber-400' : 'text-white/35'}`}>{index + 1}</span>
+                  <div className="flex items-center gap-2 min-w-0">
+                    <Avatar name={member.name} size={30} />
+                    <div className="min-w-0">
+                      <p className="text-[13px] font-bold truncate">{member.name}</p>
+                      <p className="text-[10px] text-white/40 truncate">{member.role}{season === 'H2' && H2_ROLE_MAPPING[member.name] ? ' (特)' : ''}</p>
+                    </div>
+                  </div>
+                  <span className="text-center text-[13px] tabular-nums"><b>{member.casesMonth}</b><span className="text-white/35"> / {member.casesTotal}</span></span>
+                  <span className="text-right text-[13px] font-bold tabular-nums">{formatMoney(member.monthWeighted)}</span>
+                  {[['peak', pW, pAH, pA, peakW, peakA, hasAP, '#60a5fa', '#34d399'], ['summit', sW, sAH, sA, sumW, sumA, hasAS, '#fb923c', '#fbbf24']].map(([k, w, ah, ac, okW, okA, hasA, c, ok]) => (
+                    <div key={k} className="space-y-1 min-w-0">
+                      <PBar label="加權" value={w} ok={okW} color={c} okColor={ok} />
+                      {season === 'H1' && <PBar label="A&H" value={ah} ok={member.ahWeighted >= targets[k].ah} color={c} okColor={ok} />}
+                      {hasA && <PBar label="實收" value={ac} ok={okA} color={c} okColor={ok} />}
+                    </div>
+                  ))}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+
+        <div className="flex flex-col gap-3 min-h-0">
+          <div className={`${glass} p-4 flex-[1.2] min-h-0 flex flex-col`}>
+            <div className="flex items-center gap-2 mb-2 shrink-0"><Calendar className="text-indigo-400" size={16} /><h3 className="font-bold text-[14px]">團隊月度戰報</h3></div>
+            <div className="flex-1 min-h-0">
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={stats.monthlyData} margin={{ top: 8, right: 4, left: -8, bottom: 0 }}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} stroke="rgba(255,255,255,0.08)" />
+                  <XAxis dataKey="month" axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.45)', fontSize: 11 }} />
+                  <YAxis yAxisId="left" tickFormatter={(v) => v / 10000 + '萬'} axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
+                  <YAxis yAxisId="right" orientation="right" axisLine={false} tickLine={false} tick={{ fill: 'rgba(255,255,255,0.4)', fontSize: 10 }} />
+                  <Tooltip cursor={{ fill: 'rgba(255,255,255,0.05)' }} contentStyle={{ borderRadius: 12, border: '1px solid rgba(255,255,255,0.1)', background: '#0c1020', color: '#fff' }} formatter={(v, n) => (n.includes('件數') ? v : formatMoney(v))} />
+                  <Legend iconType="circle" wrapperStyle={{ fontSize: 11 }} />
+                  <Bar yAxisId="left" dataKey="totalWeighted" name="總加權保費" fill="#6366f1" radius={[4, 4, 0, 0]} barSize={12} isAnimationActive={false} />
+                  <Bar yAxisId="left" dataKey="ahWeighted" name="A&H加權" fill="#10b981" radius={[4, 4, 0, 0]} barSize={12} isAnimationActive={false} />
+                  <Bar yAxisId="right" dataKey="cases" name="總件數" fill="#f59e0b" radius={[4, 4, 0, 0]} barSize={12} isAnimationActive={false} />
+                </BarChart>
+              </ResponsiveContainer>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardTargets, loggedInUser, onSearch }) => {
   const [selectedManagerId, setSelectedManagerId] = useState('');
   
@@ -832,7 +970,7 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
       grandTotalWeightedMonth,
       grandTotalCases,
       grandTotalCasesMonth,
-      monthlyData: Object.values(monthlyStats)
+      monthlyData: currentMonths.map(m => monthlyStats[m.value.split('-')[1]])
     };
   }, [team, records, selectedManagerId, viewMonth, season, activeTargets, currentMonths, currentStart]); 
 
@@ -841,7 +979,8 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
   return (
     <>
     <MobileDashboardView team={team} records={records} season={season} setSeason={setSeason} activeTargets={activeTargets} currentMonths={currentMonths} currentStart={currentStart} viewMonth={viewMonth} setViewMonth={setViewMonth} loggedInUser={loggedInUser} onSearch={onSearch} />
-    <div className="hidden md:block space-y-8 animate-fade-in pb-12">
+    <DesktopDashboardView stats={stats} season={season} setSeason={setSeason} viewMonth={viewMonth} setViewMonth={setViewMonth} currentMonths={currentMonths} managers={managers} selectedManagerId={selectedManagerId} setSelectedManagerId={setSelectedManagerId} />
+    <div className="hidden space-y-8 animate-fade-in pb-12">
       <div className="relative overflow-hidden rounded-3xl bg-gray-900 text-white p-8 shadow-2xl flex flex-col md:flex-row items-center justify-between gap-6 border border-gray-800">
         <div className="absolute top-0 left-0 w-full h-full opacity-20 bg-[url('https://www.transparenttextures.com/patterns/cubes.png')]"></div>
         <div className="relative z-10">
@@ -962,9 +1101,7 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
                 const summitByActual = hasActualSummit && member.totalPremium >= targets.summit.actualPremium;
                 const isSummitQualified = summitByWeighted || summitByActual;
 
-                const isDoubleEligibleRank = season === 'H2' && doubleAwardTargets[member.role];
-                const doubleTarget = isDoubleEligibleRank ? doubleAwardTargets[member.role] : null;
-                const isDoubleQualified = doubleTarget && (member.totalWeighted >= doubleTarget.total || (doubleTarget.actualPremium > 0 && member.totalPremium >= doubleTarget.actualPremium));
+                const isDoubleQualified = false;
 
                 return (
                   <tr key={member.id} className="hover:bg-gray-50 group">
@@ -1036,32 +1173,6 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
           </table>
         </div>
       </Card>
-
-      {season === 'H2' && (
-        <Card className="p-6">
-          <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2"><Gift className="text-fuchsia-500" size={20}/> 業務主管雙倍獎標準 (主任以上適用，任一標達成)</h3>
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-sm">
-              <thead>
-                <tr className="bg-gray-50 text-xs font-bold text-gray-400 uppercase">
-                  <th className="px-4 py-3">參賽組別</th>
-                  <th className="px-4 py-3 text-right">加權保費標</th>
-                  <th className="px-4 py-3 text-right">實收保費標</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-gray-100">
-                {Object.entries(doubleAwardTargets).map(([role, val]) => (
-                  <tr key={role}>
-                    <td className="px-4 py-3 font-bold text-gray-800">{role}</td>
-                    <td className="px-4 py-3 text-right font-mono">{formatMoney(val.total)}</td>
-                    <td className="px-4 py-3 text-right font-mono">{formatMoney(val.actualPremium)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </Card>
-      )}
 
       <Card className="p-6">
          <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2"><Calendar className="text-indigo-500" size={20}/> 團隊月度戰報 (全月份概覽)</h3>
@@ -2400,32 +2511,32 @@ const OrgChartManage = ({ team, recruits }) => {
       <div className="flex flex-col items-center flex-shrink-0">
         {depth > 0 && (
           <div className="flex flex-col items-center w-full">
-            <div className="h-6 w-px bg-gray-300"></div>
-            {(members.length + candidates.length) > 1 && <div className="w-full h-px bg-gray-300 mb-6 relative"></div>}
-            {(members.length + candidates.length) === 1 && <div className="h-6 w-px bg-gray-300"></div>}
+            <div className="h-6 w-px bg-white/25"></div>
+            {(members.length + candidates.length) > 1 && <div className="w-full h-px bg-white/25 mb-6 relative"></div>}
+            {(members.length + candidates.length) === 1 && <div className="h-6 w-px bg-white/25"></div>}
           </div>
         )}
         <div className="flex gap-8 items-start justify-center pt-2 min-w-max">
           {members.map((member) => (
             <div key={member.id} className="flex flex-col items-center relative">
-               {(members.length + candidates.length) > 1 && <div className="absolute -top-8 w-px h-6 bg-gray-300"></div>}
-               <Card className="w-48 p-4 text-center border-t-4 border-t-indigo-500 hover:-translate-y-1 transition-transform relative group z-10 cursor-pointer" onClick={() => setEditMember(member)}>
+               {(members.length + candidates.length) > 1 && <div className="absolute -top-8 w-px h-6 bg-white/25"></div>}
+               <div className="w-44 p-4 text-center rounded-3xl border border-white/10 border-t-2 border-t-indigo-400 bg-white/[0.06] backdrop-blur-xl hover:-translate-y-1 hover:bg-white/[0.1] transition relative group z-10 cursor-pointer" onClick={() => setEditMember(member)}>
                  <Avatar name={member.name} size={48} className="mx-auto mb-3" />
-                 <h4 className="font-bold text-gray-900">{member.name}</h4>
-                 <p className="text-xs text-indigo-500 bg-indigo-50 px-2 py-0.5 rounded-full inline-block mt-2 font-medium">{member.role}</p>
+                 <h4 className="font-bold text-white">{member.name}</h4>
+                 <p className="text-xs text-indigo-200 bg-indigo-500/20 px-2 py-0.5 rounded-full inline-block mt-2 font-medium">{member.role}</p>
                  <button onClick={(e) => { e.stopPropagation(); setDeleteInfo({ id: member.id, isRecruit: false }); }} className="absolute top-2 right-2 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"><Trash2 size={14} /></button>
-               </Card>
+               </div>
                {renderTree(member.id, depth + 1)}
             </div>
           ))}
           
           {candidates.map((recruit) => (
             <div key={recruit.id} className="flex flex-col items-center relative">
-               {(members.length + candidates.length) > 1 && <div className="absolute -top-8 w-px h-6 bg-gray-300"></div>}
-               <div className="w-48 p-4 text-center bg-gray-50 border-2 border-dashed border-gray-300 rounded-2xl relative group z-10 hover:border-gray-400 transition-colors">
-                 <div className="w-12 h-12 bg-gray-200 rounded-full flex items-center justify-center text-gray-500 font-bold mx-auto mb-3 text-lg">{recruit.name[0]}</div>
-                 <h4 className="font-bold text-gray-600">{recruit.name}</h4>
-                 <span className="text-[10px] bg-gray-200 text-gray-600 px-2 py-0.5 rounded-full inline-block mt-2">準增員 ({recruit.status})</span>
+               {(members.length + candidates.length) > 1 && <div className="absolute -top-8 w-px h-6 bg-white/25"></div>}
+               <div className="w-44 p-4 text-center bg-white/[0.03] border-2 border-dashed border-white/20 rounded-3xl relative group z-10 hover:border-white/40 transition-colors">
+                 <div className="w-12 h-12 bg-white/10 rounded-full flex items-center justify-center text-white/60 font-bold mx-auto mb-3 text-lg">{recruit.name[0]}</div>
+                 <h4 className="font-bold text-white/70">{recruit.name}</h4>
+                 <span className="text-[10px] bg-white/10 text-white/60 px-2 py-0.5 rounded-full inline-block mt-2">準增員 ({recruit.status})</span>
                  <button onClick={() => setDeleteInfo({ id: recruit.id, isRecruit: true })} className="absolute top-2 right-2 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"><Trash2 size={14} /></button>
                </div>
             </div>
@@ -2436,7 +2547,7 @@ const OrgChartManage = ({ team, recruits }) => {
   };
 
   return (
-    <div className="space-y-10 animate-fade-in pb-12 text-center">
+    <div className="animate-fade-in pb-12 md:pb-0 md:h-full md:min-h-[840px] flex flex-col gap-3 text-white">
       <ConfirmModal 
         isOpen={!!deleteInfo} 
         onClose={() => setDeleteInfo(null)} 
@@ -2444,42 +2555,66 @@ const OrgChartManage = ({ team, recruits }) => {
         title={`刪除${deleteInfo?.isRecruit ? '準增員' : '成員'}`} 
         message={`確定要刪除此${deleteInfo?.isRecruit ? '準增員' : '成員'}嗎？如果該成員有下線，組織圖可能會斷開連結。`} 
       />
-      <div className="max-w-5xl mx-auto flex flex-wrap items-end gap-4 bg-white p-6 rounded-2xl border border-gray-100 shadow-sm mb-12">
+      <div className="shrink-0 flex items-start justify-between gap-4 pt-1 flex-wrap">
+        <div className="text-left"><h1 className="text-[26px] font-bold tracking-tight leading-none">組織架構</h1><p className="text-[12px] text-white/45 mt-1.5">團隊成員與準增員的上下線關係，點成員卡可編輯</p></div>
+      </div>
+      <div className="shrink-0 flex flex-wrap items-end gap-3 rounded-3xl border border-white/10 bg-white/[0.045] backdrop-blur-xl p-4">
         <div className="w-32 text-left">
-           <label className="text-xs font-bold text-gray-500 mb-1 block">類型</label>
-           <select className="w-full p-2 bg-gray-100 rounded-lg outline-none" value={newMember.type} onChange={e => setNewMember({...newMember, type: e.target.value})}>
+           <label className="text-[11px] font-bold text-white/50 mb-1 block">類型</label>
+           <select className="w-full px-3 py-2 bg-white/[0.08] border border-white/10 text-white rounded-xl outline-none" value={newMember.type} onChange={e => setNewMember({...newMember, type: e.target.value})}>
              <option value="正式人員">正式人員</option>
              <option value="準增員對象">準增員對象</option>
            </select>
         </div>
         <div className="flex-1 text-left min-w-[150px]">
-           <label className="text-xs font-bold text-gray-500 mb-1 block">姓名</label>
-           <input type="text" className="w-full p-2 bg-gray-100 rounded-lg outline-none" placeholder="輸入姓名" value={newMember.name} onChange={e => setNewMember({...newMember, name: e.target.value})}/>
+           <label className="text-[11px] font-bold text-white/50 mb-1 block">姓名</label>
+           <input type="text" className="w-full px-3 py-2 bg-white/[0.08] border border-white/10 text-white rounded-xl outline-none" placeholder="輸入姓名" value={newMember.name} onChange={e => setNewMember({...newMember, name: e.target.value})}/>
         </div>
         {newMember.type === '正式人員' && (
           <div className="w-40 text-left">
-             <label className="text-xs font-bold text-gray-500 mb-1 block">職級</label>
-             <select className="w-full p-2 bg-gray-100 rounded-lg outline-none" value={newMember.role} onChange={e => setNewMember({...newMember, role: e.target.value})}>
+             <label className="text-[11px] font-bold text-white/50 mb-1 block">職級</label>
+             <select className="w-full px-3 py-2 bg-white/[0.08] border border-white/10 text-white rounded-xl outline-none" value={newMember.role} onChange={e => setNewMember({...newMember, role: e.target.value})}>
                {RANKS.map(r => <option key={r} value={r}>{r}</option>)}
              </select>
           </div>
         )}
         <div className="w-40 text-left">
-           <label className="text-xs font-bold text-gray-500 mb-1 block">{newMember.type === '正式人員' ? '直屬主管' : '推薦人'}</label>
-           <select className="w-full p-2 bg-gray-100 rounded-lg outline-none" value={newMember.parentId || ''} onChange={e => setNewMember({...newMember, parentId: e.target.value})}>
+           <label className="text-[11px] font-bold text-white/50 mb-1 block">{newMember.type === '正式人員' ? '直屬主管' : '推薦人'}</label>
+           <select className="w-full px-3 py-2 bg-white/[0.08] border border-white/10 text-white rounded-xl outline-none" value={newMember.parentId || ''} onChange={e => setNewMember({...newMember, parentId: e.target.value})}>
              <option value="">(請選擇)</option>
              {team.map(t => <option key={t.id} value={t.id}>{t.name}</option>)}
            </select>
         </div>
-        <button disabled={loading} onClick={handleAdd} className="bg-black text-white px-4 py-2 rounded-lg font-bold hover:bg-gray-800 transition h-[40px] flex items-center gap-2">
+        <button disabled={loading} onClick={handleAdd} className="bg-gradient-to-r from-blue-500 to-indigo-500 text-white px-5 py-2 rounded-xl font-bold shadow-lg shadow-blue-500/25 transition h-[40px] flex items-center gap-2">
           {loading ? <Loader2 className="animate-spin"/> : <><Plus size={16} /> 新增</>}
         </button>
       </div>
       
-      <div className="overflow-x-auto pb-8">
-          <div className="inline-block min-w-full px-4">
+      <div className="md:flex-1 md:min-h-0 md:grid md:grid-cols-[250px_minmax(0,1fr)] gap-3 flex flex-col">
+        <div className="rounded-3xl border border-white/10 bg-white/[0.045] backdrop-blur-xl p-4 text-left md:overflow-y-auto no-scrollbar">
+          <p className="font-bold text-[15px] mb-3">團隊概況</p>
+          <div className="grid grid-cols-2 gap-2 mb-4">
+            <div className="rounded-2xl bg-white/[0.06] p-3"><p className="text-[11px] text-white/50">正式人員</p><p className="text-[24px] font-black leading-none mt-1">{team.length}</p></div>
+            <div className="rounded-2xl bg-white/[0.06] p-3"><p className="text-[11px] text-white/50">準增員</p><p className="text-[24px] font-black leading-none mt-1">{(recruits || []).filter(r => !r.isPromoted).length}</p></div>
+          </div>
+          <p className="text-[11px] text-white/45 mb-2">職級分佈</p>
+          <div className="space-y-1.5 mb-4">
+            {RANKS.map(r => ({ r, n: team.filter(m => m.role === r).length })).filter(x => x.n > 0).map(x => (
+              <div key={x.r} className="flex items-center gap-2 text-[12px]"><span className="flex-1 truncate text-white/80">{x.r}</span><div className="w-16 h-1.5 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full bg-indigo-400" style={{ width: `${x.n / Math.max(1, team.length) * 100}%` }} /></div><b className="w-5 text-right tabular-nums">{x.n}</b></div>
+            ))}
+          </div>
+          <p className="text-[11px] text-white/45 mb-2">成員</p>
+          <div className="space-y-1">
+            {team.map(m => (
+              <button key={m.id} type="button" onClick={() => setEditMember(m)} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-xl hover:bg-white/[0.07] text-left"><Avatar name={m.name} size={26} /><span className="flex-1 text-[13px] font-semibold truncate">{m.name}</span><span className="text-[10px] text-white/40 truncate max-w-[80px]">{m.role}</span></button>
+            ))}
+          </div>
+        </div>
+        <div className="rounded-3xl border border-white/10 bg-white/[0.03] backdrop-blur-xl overflow-auto no-scrollbar p-4 min-h-[320px]">
+          <div className="inline-block min-w-full text-center">
             {renderTree(null)}
           </div>
+        </div>
       </div>
 
       {editMember && (
@@ -2653,6 +2788,7 @@ const MobileRecruitView = ({ recruits, team, status, updateRecruit, toggleDoc, o
   };
 
   return (
+    <>
     <div className="md:hidden text-white pb-28 animate-fade-in">
       <div className="flex items-start justify-between gap-3 pt-1">
         <div className="min-w-0">
@@ -2786,10 +2922,118 @@ const MobileRecruitView = ({ recruits, team, status, updateRecruit, toggleDoc, o
         </div>
       )}
 
+    </div>
+      <div className="hidden md:flex flex-col gap-3 h-full md:min-h-[840px] text-white animate-fade-in">
+        <div className="flex items-center justify-between gap-4 shrink-0">
+          <div><h1 className="text-[26px] font-bold tracking-tight leading-none">增員儀表板</h1><p className="text-[12px] text-white/45 mt-1.5">打造更強的團隊，從今天開始。</p></div>
+          <label className="relative flex items-center gap-1.5 rounded-xl border border-white/10 bg-white/[0.08] px-3 py-2 text-[13px] font-bold cursor-pointer">
+            <Calendar size={15} className="text-white/70" />{month.replace('-', '年')}月<ChevronDown size={14} className="text-white/60" />
+            <input type="month" value={month} onChange={e => e.target.value && setMonth(e.target.value)} className="absolute inset-0 opacity-0 w-full h-full cursor-pointer" />
+          </label>
+        </div>
+        <div className="grid grid-cols-8 gap-3 shrink-0">
+          {[['本月登錄', monthReg, yearReg, GOAL_REGISTER, 'from-blue-500 to-indigo-400', Users, '#818cf8'], ['本月優培', monthQual, yearQual, GOAL_QUALITY, 'from-amber-500 to-orange-400', Star, '#fbbf24']].map(([l, v, y, g, grad, Ic, col]) => (
+            <div key={l} className={`${card} col-span-2 p-4`}>
+              <div className="flex items-center gap-3">
+                <span className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: col + '26', color: col }}><Ic size={22} /></span>
+                <div className="min-w-0"><p className="text-[12px] text-white/60">{l}</p><p className="leading-none mt-1"><span className="text-[28px] font-black">{v}</span><span className="text-[13px] text-white/50"> 人</span></p></div>
+              </div>
+              <div className="mt-3 h-1.5 rounded-full bg-white/10 overflow-hidden"><div className={`h-full rounded-full bg-gradient-to-r ${grad}`} style={{ width: `${pct(y, g)}%` }} /></div>
+              <p className="text-[11px] text-white/50 mt-1.5 flex justify-between"><span>年度 {y} / {g} 人，還差 {Math.max(0, g - y)} 人</span><span>{pct(y, g)}%</span></p>
+            </div>
+          ))}
+          {[['名單總數', list.filter(r => !r.isPromoted).length, '#60a5fa', UserPlus], ['考試中', examing, '#34d399', FileText], ['優培', yearQual, '#a78bfa', Award], ['已登錄', yearReg, '#fbbf24', CheckCircle2]].map(([l, v, col, Ic]) => (
+            <div key={l} className={`${card} p-4 flex flex-col justify-between`}>
+              <Ic size={18} style={{ color: col }} />
+              <div><p className="text-[11px] text-white/60 mt-2">{l}</p><p className="leading-none mt-1"><span className="text-[26px] font-black">{v}</span><span className="text-[11px] text-white/50"> 人</span></p></div>
+            </div>
+          ))}
+        </div>
+        <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1.7fr)_minmax(0,1fr)] gap-3">
+          <div className="flex flex-col gap-3 min-h-0">
+            <div className={`${card} p-4 shrink-0`}>
+              <p className="font-bold text-[15px] flex items-center gap-2"><Filter size={16} className="text-blue-400" />準增員轉換漏斗</p>
+              <div className="mt-3 grid grid-cols-6 gap-1.5">
+                {RECRUIT_STATUSES.map((s, i) => (
+                  <div key={s} className="text-center">
+                    <div className={`h-9 flex items-center justify-center text-[12px] font-bold text-white bg-gradient-to-r ${RECRUIT_STAGE_TONE[s].g}`} style={{ clipPath: 'polygon(0 0, 88% 0, 100% 50%, 88% 100%, 0 100%, 12% 50%)' }}>{s}</div>
+                    <p className="text-[22px] font-black mt-2 leading-none">{reach[i]}</p>
+                    <p className="text-[11px] mt-1" style={{ color: RECRUIT_STAGE_TONE[s].c }}>{pct(reach[i], reach[0])}%</p>
+                    <p className="text-[10.5px] text-white/45 mt-1.5 pt-1.5 border-t border-white/10">{i === 0 ? '全部' : `轉換 ${pct(reach[i], reach[i - 1])}%`}</p>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className={`${card} p-4 flex-1 min-h-0 flex flex-col`}>
+              <div className="flex items-center justify-between mb-2 gap-2 shrink-0">
+                <p className="font-bold text-[15px] flex items-center gap-2"><Users size={16} className="text-blue-400" />準增員名單<span className="text-white/45 font-medium text-[12px]">{sortedList.filter(r => stage === 'all' || r.st === stage).length} 人</span></p>
+                <div className="flex gap-1.5">
+                  {['all', ...RECRUIT_STATUSES].map(s => <button key={s} type="button" onClick={() => setStage(s)} className={`px-3 py-1 rounded-full text-[12px] font-semibold border ${stage === s ? 'bg-blue-500/25 border-blue-400/50 text-blue-200' : 'border-white/10 bg-white/[0.05] text-white/60'}`}>{s === 'all' ? '全部' : s}</button>)}
+                </div>
+              </div>
+              <div className="grid grid-cols-[minmax(0,1.3fr)_90px_minmax(0,1fr)_minmax(0,1fr)] gap-3 text-[11px] text-white/40 pb-1.5 px-1 shrink-0"><span>姓名</span><span>階段</span><span>下一個日期</span><span>推薦人</span></div>
+              <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar divide-y divide-white/[0.06]">
+                {sortedList.filter(r => stage === 'all' || r.st === stage).length === 0 && <p className="text-center text-white/40 text-sm py-8">沒有符合的準增員</p>}
+                {sortedList.filter(r => stage === 'all' || r.st === stage).map(r => {
+                  const nx = nextDate(r);
+                  return (
+                    <button key={r.id} type="button" onClick={() => setDetailId(r.id)} className="w-full grid grid-cols-[minmax(0,1.3fr)_90px_minmax(0,1fr)_minmax(0,1fr)] gap-3 items-center px-1 py-2.5 text-left hover:bg-white/[0.05]">
+                      <div className="flex items-center gap-2 min-w-0"><Avatar name={r.name} size={32} /><span className="font-semibold text-[14px] truncate">{r.name}</span></div>
+                      <div><StagePill s={r.st} /></div>
+                      <div className="min-w-0 text-[12px] text-white/60 truncate">{nx ? <><span className="text-white/80">{nx.label}</span> {nx.d}</> : '—'}</div>
+                      <div className="flex items-center gap-1.5 min-w-0"><Avatar name={nameOf(r.recruiterId)} size={22} /><span className="text-[12px] text-white/70 truncate">{nameOf(r.recruiterId)}</span><ChevronRight size={14} className="text-white/30 ml-auto shrink-0" /></div>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+          <div className="flex flex-col gap-3 min-h-0">
+            <div className="grid grid-cols-2 gap-3 shrink-0">
+              <div className={`${card} p-4`}>
+                <p className="font-bold text-[14px]">推薦人分佈</p>
+                <div className="flex items-center gap-3 mt-3">
+                  <div className="relative w-[84px] h-[84px] shrink-0 rounded-full" style={{ background: owners.length ? `conic-gradient(${donutStops})` : 'rgba(255,255,255,.1)' }}>
+                    <div className="absolute inset-[11px] rounded-full bg-[#0b1020] flex flex-col items-center justify-center"><span className="text-[20px] font-black leading-none">{list.length}</span><span className="text-[9px] text-white/50">總人數</span></div>
+                  </div>
+                  <div className="space-y-1.5 min-w-0">{owners.slice(0, 4).map((o, i) => <p key={o.m.id} className="text-[11.5px] flex items-center gap-1.5 truncate"><span className="w-2 h-2 rounded-full shrink-0" style={{ background: donutColors[i % 6] }} />{o.m.name} {o.n}</p>)}</div>
+                </div>
+              </div>
+              <div className={`${card} p-4`}>
+                <p className="font-bold text-[14px]">階段分佈</p>
+                <div className="flex items-end justify-between gap-1 h-[92px] mt-3">
+                  {RECRUIT_STATUSES.map((s, i) => (
+                    <div key={s} className="flex-1 flex flex-col items-center justify-end h-full gap-1">
+                      <span className="text-[11px] font-bold" style={{ color: RECRUIT_STAGE_TONE[s].c }}>{stageCount[i]}</span>
+                      <div className="w-full rounded-t-md" style={{ height: `${Math.max(4, stageCount[i] / maxStage * 56)}px`, background: RECRUIT_STAGE_TONE[s].c }} />
+                      <span className="text-[9px] text-white/50 whitespace-nowrap">{s.length > 3 ? s.slice(0, 2) : s}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            <div className={`${card} p-4 flex-1 min-h-0 flex flex-col`}>
+              <p className="font-bold text-[15px] mb-2 shrink-0">成員表現</p>
+              <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-2">
+                {owners.length === 0 && <p className="text-center text-white/40 text-sm py-8">目前沒有資料</p>}
+                {owners.map(o => (
+                  <div key={o.m.id} className="rounded-xl bg-white/[0.04] p-3">
+                    <div className="flex items-center gap-2.5"><Avatar name={o.m.name} size={34} /><div className="flex-1 min-w-0"><p className="font-bold text-[14px]">{o.m.name}</p><p className="text-[11px] text-white/50">準增員 {o.n} 人</p></div></div>
+                    <div className="grid grid-cols-4 gap-2 mt-2 text-center">
+                      {[['本月登錄', o.mReg, '#818cf8'], ['本月優培', o.mQual, '#fbbf24'], ['累積登錄', o.reg, '#34d399'], ['累積優培', o.qual, '#fbbf24']].map(([l, v, c]) => <div key={l} className="rounded-lg bg-white/[0.05] py-1.5"><p className="text-[16px] font-black" style={{ color: c }}>{v}</p><p className="text-[10px] text-white/50">{l}</p></div>)}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {detail && (
-        <div className="fixed inset-0 z-[120] flex flex-col justify-end" onClick={() => setDetailId(null)}>
+        <div className="fixed inset-0 z-[120] flex flex-col justify-end md:justify-center md:items-center" onClick={() => setDetailId(null)}>
           <div className="absolute inset-0 bg-black/60 backdrop-blur-sm" />
-          <div className="relative rounded-t-3xl border-t border-white/15 bg-[#0c1020] max-h-[88vh] overflow-y-auto px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+20px)]" onClick={e => e.stopPropagation()}>
+          <div className="relative rounded-t-3xl md:rounded-3xl md:w-full md:max-w-lg border-t md:border border-white/15 bg-[#0c1020] max-h-[88vh] overflow-y-auto no-scrollbar px-4 pt-3 pb-[calc(env(safe-area-inset-bottom,0px)+20px)]" onClick={e => e.stopPropagation()}>
             <div className="w-10 h-1 rounded-full bg-white/25 mx-auto mb-3" />
             <div className="flex items-center gap-3">
               <Avatar name={detail.name} size={52} />
@@ -2823,11 +3067,9 @@ const MobileRecruitView = ({ recruits, team, status, updateRecruit, toggleDoc, o
           </div>
         </div>
       )}
-    </div>
+    </>
   );
-};
-
-// ================= 電腦版：吳政翰專屬總覽（一頁看完，不用上下捲動）=================
+};// ================= 電腦版：吳政翰專屬總覽（一頁看完，不用上下捲動）=================
 const getRecruitStatus = (r) => {
   if (r.isPromoted) return '登錄';
   const d = r.dates || {}, t = getTodayDate();
@@ -3341,7 +3583,7 @@ const RecruitmentDashboard = ({ recruits, team, user }) => {
   return (
     <>
     <MobileRecruitView recruits={recruits} team={team} status={determineStatus} updateRecruit={updateRecruit} toggleDoc={toggleDoc} onDelete={(id) => setDeleteTarget(id)} onPromote={(r) => setConfirmPromoteTarget(r)} loadingId={loadingId} canEdit={!!user} />
-    <div className="hidden md:block space-y-12 animate-fade-in max-w-7xl mx-auto pb-12">
+    <div className="hidden space-y-12 animate-fade-in max-w-7xl mx-auto pb-12">
       <ConfirmModal
         isOpen={!!deleteTarget}
         onClose={() => setDeleteTarget(null)}
@@ -3429,7 +3671,7 @@ const RecruitmentDashboard = ({ recruits, team, user }) => {
         message={confirmPromoteTarget ? `確定要提前幫「${confirmPromoteTarget.name}」建立正式使用者帳號嗎？建立後她就能直接登入系統，之後就算走到預計登錄日期，系統也不會再重複建立第二個帳號。` : ''}
       />
     </div>
-    <div className="md:hidden">
+    <div>
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除準增員" message="確定要刪除此準增員資料嗎？此動作無法復原。" />
       <ConfirmModal isOpen={!!confirmPromoteTarget} onClose={() => setConfirmPromoteTarget(null)} onConfirm={() => handleManualCreateAccount(confirmPromoteTarget)} title="手動建立帳號" message={confirmPromoteTarget ? `確定要提前幫「${confirmPromoteTarget.name}」建立正式使用者帳號嗎？` : ''} />
     </div>
@@ -3493,7 +3735,10 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
 
   const glass = 'rounded-3xl border border-white/10 bg-white/[0.06] backdrop-blur-xl';
 
+  const memberBars = (() => { const mx = Math.max(1, ...team.map(m => sumP(inMonth.filter(r => r.agentId === m.id)))); return team.map(m => { const l = inMonth.filter(r => r.agentId === m.id); const p = sumP(l); return { id: m.id, name: m.name, p, n: l.length, pct: Math.round(p / mx * 100) }; }).sort((x, y) => y.p - x.p); })();
+
   return (
+    <>
     <div className="md:hidden text-white">
       <div className="flex items-start justify-between pt-1 pb-3 gap-2">
         <div className="min-w-0">
@@ -3590,12 +3835,96 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
         ))}
       </div>
 
+    </div>
+      <div className="hidden md:flex flex-col gap-3 h-full md:min-h-[840px] text-white animate-fade-in">
+        <div className="flex items-center justify-between gap-4 shrink-0">
+          <div><h1 className="text-[26px] font-bold tracking-tight leading-none">業績回報</h1><p className="text-[12px] text-white/45 mt-1.5">快速記錄與追蹤團隊案件</p></div>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-full border border-white/10 bg-white/[0.06] p-1">
+              {[['overview', '團隊總覽'], ['mine', '我的回報'], ['manage', '案件管理']].map(([k, l]) => (
+                <button key={k} onClick={() => { setTab(k); setChip('all'); }} className={`px-4 py-1.5 text-[13px] font-bold rounded-full transition whitespace-nowrap ${tab === k ? 'bg-blue-500 shadow-md shadow-blue-500/30' : 'text-white/60'}`}>{l}</button>
+              ))}
+            </div>
+            <select value={month} onChange={e => setMonth(e.target.value)} className="bg-white/[0.08] border border-white/10 rounded-xl px-3 py-1.5 text-[13px] font-bold text-white outline-none">
+              {months.map(m => <option key={m} value={m} className="text-gray-900">{m.replace('-', '年')}月</option>)}
+            </select>
+            <select value={agentFilter} onChange={e => setAgentFilter(e.target.value)} className="bg-white/[0.08] border border-white/10 rounded-xl px-3 py-1.5 text-[13px] font-bold text-white outline-none">
+              <option value="" className="text-gray-900">所有業務同仁</option>
+              {team.map(m => <option key={m.id} value={m.id} className="text-gray-900">{m.name}</option>)}
+            </select>
+            {onBatch && <button onClick={onBatch} className="px-4 py-2 rounded-xl bg-white/[0.08] border border-white/10 text-[13px] font-bold flex items-center gap-1.5"><ListPlus size={15} />批次新增</button>}
+            <button onClick={onAdd} className="px-5 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 font-bold text-[13px] flex items-center gap-1.5 shadow-lg shadow-blue-500/25"><Plus size={15} />新增回報</button>
+          </div>
+        </div>
+        <div className="grid grid-cols-4 gap-3 shrink-0">
+          {tiles.map(t => { const Icon = t.icon; return (
+            <div key={t.l} className={`${glass} px-4 py-3`}>
+              <div className="flex items-center gap-2"><span className={`w-7 h-7 rounded-full flex items-center justify-center ${t.c}`}><Icon size={14} /></span><span className="text-[12px] text-white/65">{t.l}</span></div>
+              <p className="mt-2 leading-none"><b className="text-[26px] font-bold tabular-nums">{t.v}</b>{t.u && <span className="text-[13px] text-white/55 ml-1">{t.u}</span>}</p>
+              {t.d !== undefined && <p className={`text-[11px] mt-1.5 font-bold ${t.d >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{t.d >= 0 ? '↑' : '↓'} {Math.abs(t.d)}% <span className="text-white/40 font-normal">較上月</span></p>}
+              {t.sub && <p className="text-[11px] text-white/45 mt-1.5">{t.sub}</p>}
+            </div>
+          ); })}
+        </div>
+        <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-3">
+          <div className={`${glass} p-4 flex flex-col min-h-0`}>
+            <div className="flex items-center justify-between mb-2 gap-2 shrink-0">
+              <p className="text-[15px] font-bold">{tab === 'mine' ? '我的案件' : tab === 'manage' ? '待處理案件' : '團隊案件列表'}<span className="text-white/35 font-normal text-[12px] ml-2">{filtered.length} 筆</span></p>
+              <div className="flex items-center gap-1.5">
+                {[['all', '全部'], ['pending', '受理中'], ['overdue', '逾期追蹤'], ['issued', '已發單']].map(([k, l]) => (
+                  <button key={k} onClick={() => setChip(k)} className={`px-3 py-1 rounded-full text-[12px] font-bold border transition ${chip === k ? 'bg-blue-500/25 border-blue-400/50 text-blue-200' : 'border-white/10 bg-white/[0.05] text-white/60'}`}>{l} {counts[k]}</button>
+                ))}
+                <button onClick={() => setSortDesc(v => !v)} className="text-[11px] font-bold text-white/65 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 whitespace-nowrap">成交日 {sortDesc ? '新→舊' : '舊→新'}</button>
+              </div>
+            </div>
+            <div className="grid grid-cols-[36px_minmax(90px,1fr)_minmax(0,1.3fr)_minmax(0,1.6fr)_90px_80px_16px] gap-3 px-2 pb-1.5 text-[10px] font-bold text-white/35 shrink-0"><span></span><span>同仁</span><span>被保人</span><span>商品</span><span className="text-right">保費</span><span className="text-center">狀態</span><span></span></div>
+            <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar divide-y divide-white/[0.06]">
+              {filtered.length === 0 && <p className="text-center text-[13px] text-white/40 py-10">沒有符合條件的案件</p>}
+              {filtered.slice(0, 100).map(r => {
+                const st = STATE[stateOf(r)];
+                return (
+                  <button key={r.id} onClick={() => setDetail(r)} className="w-full grid grid-cols-[36px_minmax(90px,1fr)_minmax(0,1.3fr)_minmax(0,1.6fr)_90px_80px_16px] gap-3 items-center px-2 py-2 text-left hover:bg-white/[0.05]">
+                    <Avatar name={r.agentName} size={30} />
+                    <span className="min-w-0"><p className="text-[13px] font-bold truncate">{r.agentName}</p><p className="text-[10px] text-white/40">{(r.date || '').slice(5)}</p></span>
+                    <span className="text-[13px] truncate">{r.insuredName || '—'}</span>
+                    <span className="text-[12px] text-white/55 truncate">{r.product || '—'}</span>
+                    <span className="text-right text-[13px] font-bold tabular-nums text-blue-300">{money(r.premium || 0)}</span>
+                    <span className={`text-center text-[10px] font-bold px-2 py-0.5 rounded-full ${st.chip}`}>{st.label}</span>
+                    <ChevronRight size={14} className="text-white/25" />
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+          <div className="flex flex-col gap-3 min-h-0">
+            <div className="grid grid-cols-2 gap-3 shrink-0">
+              <WarDonut title="案件狀態分佈" centerTop={inMonth.length} centerBottom="本月案件" parts={parts.map(p => ({ label: p.label, color: p.color, v: p.n, text: `${p.n} 件` }))} />
+              <WarDonut title="保費金額分佈" centerTop={money(sumP(inMonth))} centerBottom="本月保費" parts={parts.map(p => ({ label: p.label, color: p.color, v: p.p, text: money(p.p) }))} />
+            </div>
+            <div className={`${glass} p-4 flex-1 min-h-0 flex flex-col`}>
+              <div className="flex items-center justify-between mb-2 shrink-0"><p className="text-[15px] font-bold">成員本月保費</p><span className="text-[11px] text-white/40">今日回報 {todayN} 件</span></div>
+              <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-2.5">
+                {memberBars.map(m => (
+                  <div key={m.id} className="flex items-center gap-2.5">
+                    <Avatar name={m.name} size={26} />
+                    <span className="w-14 text-[12px] font-bold truncate">{m.name}</span>
+                    <div className="flex-1 h-2 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-blue-400 to-indigo-400" style={{ width: `${m.pct}%` }} /></div>
+                    <span className="w-16 text-right text-[12px] font-bold tabular-nums">{money(m.p)}</span>
+                    <span className="w-8 text-right text-[11px] text-white/40 tabular-nums">{m.n}件</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+
       {detail && (() => {
         const r = records.find(x => x.id === detail.id) || detail;
         const st = STATE[stateOf(r)];
         return (
-          <div className="fixed inset-0 z-[100] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setDetail(null)}>
-            <div className="w-full max-w-md rounded-t-[28px] border-t border-white/10 bg-[#0c1020] p-5 pb-8" onClick={e => e.stopPropagation()}>
+          <div className="fixed inset-0 z-[100] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setDetail(null)}>
+            <div className="w-full max-w-md rounded-t-[28px] md:rounded-[28px] border-t md:border border-white/10 bg-[#0c1020] p-5 pb-8 md:pb-5" onClick={e => e.stopPropagation()}>
               <div className="flex items-start justify-between gap-3 mb-4">
                 <div className="min-w-0"><p className="text-[18px] font-bold truncate">{r.agentName}</p><p className="text-[12px] text-white/45">{r.date} · {r.insuredName || '—'}</p></div>
                 <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${st.chip}`}>{st.label}</span>
@@ -3614,11 +3943,9 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
           </div>
         );
       })()}
-    </div>
+    </>
   );
-};
-
-const SalesEntry = ({ team, records, setRecords, user, loggedInUser, onSearch }) => {
+};const SalesEntry = ({ team, records, setRecords, user, loggedInUser, onSearch }) => {
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState({ agentId: '', policyNumber: '', insuredName: '', product: '', typeCode: 'ah_general', premium: '', isESG: false, date: getTodayDate() });
   const [submitting, setSubmitting] = useState(false);
@@ -3756,11 +4083,11 @@ const SalesEntry = ({ team, records, setRecords, user, loggedInUser, onSearch })
   const fld = 'w-full rounded-2xl px-4 py-3 text-[15px] outline-none';
 
   return (
-    <div className="max-w-4xl mx-auto space-y-8 animate-fade-in">
-      <MobileSalesEntry team={team} records={records} loggedInUser={loggedInUser || {}} onAdd={openAdd} onEdit={handleEdit} onDelete={(id) => setDeleteId(id)} onMarkIssued={handleMarkIssued} issuingId={issuingId} onSearch={onSearch} />
+    <div className="max-w-4xl md:max-w-none md:h-full mx-auto space-y-8 md:space-y-0 animate-fade-in">
+      <MobileSalesEntry team={team} records={records} loggedInUser={loggedInUser || {}} onAdd={openAdd} onEdit={handleEdit} onDelete={(id) => setDeleteId(id)} onMarkIssued={handleMarkIssued} issuingId={issuingId} onSearch={onSearch} onBatch={() => setIsBatchOpen(true)} />
       {showSheet && (
-        <div className="md:hidden fixed inset-0 z-[90] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={closeSheet}>
-          <form onSubmit={handleSubmit} className="w-full max-h-[92vh] overflow-y-auto rounded-t-[28px] border-t border-white/10 bg-[#0c1020] text-white p-5 pb-8" onClick={e => e.stopPropagation()}>
+        <div className="fixed inset-0 z-[90] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={closeSheet}>
+          <form onSubmit={handleSubmit} className="w-full md:max-w-lg max-h-[92vh] overflow-y-auto no-scrollbar rounded-t-[28px] md:rounded-[28px] md:border border-t border-white/10 bg-[#0c1020] text-white p-5 pb-8" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
               <p className="text-[18px] font-bold">{editingId ? '修改紀錄' : '新增回報'}</p>
               <div className="flex items-center gap-2">
@@ -3782,7 +4109,6 @@ const SalesEntry = ({ team, records, setRecords, user, loggedInUser, onSearch })
           </form>
         </div>
       )}
-      <div className="hidden md:block space-y-8">
       {celebration && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[200] bg-gradient-to-r from-amber-400 to-orange-500 text-white px-6 py-4 rounded-2xl shadow-2xl animate-scale-up flex items-center gap-3">
           <span className="text-2xl">🎉</span>
@@ -3806,6 +4132,7 @@ const SalesEntry = ({ team, records, setRecords, user, loggedInUser, onSearch })
         records={records}
         onSubmit={handleBatchSubmit}
       />
+      <div className="hidden">
       <div className="text-center mb-8 relative">
         <h2 className="text-3xl font-bold text-gray-900 inline-block">{editingId ? '修改紀錄' : '業績回報'}</h2>
         {!editingId && (
@@ -5128,6 +5455,122 @@ const MobileWarRoom = ({ summary, deals, visibleIds, today, onSelect, onSearch }
   );
 };
 
+const DesktopWarRoom = ({ summary, deals, visibleIds, today, onSelect }) => {
+  const [rtab, setRtab] = useState('cases');
+  const [sortKey, setSortKey] = useState('premium');
+  const ageDays = (r) => Math.max(0, Math.floor((new Date(today) - new Date(r.date)) / 86400000));
+  const allCases = useMemo(() => summary.flatMap(s => s.pendingCases.map(r => ({ r, member: s.member, days: ageDays(r) }))).sort((a, b) => b.days - a.days), [summary, today]);
+  const totalPremium = allCases.reduce((s, x) => s + (x.r.premium || 0), 0);
+  const stuckTotal = summary.reduce((s, x) => s + x.stuckCustomers.length, 0);
+  const visibleDeals = useMemo(() => deals.filter(d => visibleIds.has(d.ownerId)), [deals, visibleIds]);
+  const withCases = summary.filter(s => s.pendingCases.length > 0).length;
+  const avgDays = allCases.length ? Math.round(allCases.reduce((s, x) => s + x.days, 0) / allCases.length) : 0;
+  const buckets = WAR_AGE_BUCKETS.map((b, i) => {
+    const prev = i === 0 ? -1 : WAR_AGE_BUCKETS[i - 1].max;
+    const list = allCases.filter(x => x.days > prev && x.days <= b.max);
+    return { ...b, n: list.length, prem: list.reduce((s, x) => s + (x.r.premium || 0), 0) };
+  });
+  const money = (n) => n >= 1000000 ? '$' + (n / 1000000).toFixed(2) + 'M' : n >= 10000 ? '$' + (n / 10000).toFixed(1) + '萬' : '$' + Math.round(n);
+  const sorted = useMemo(() => [...summary].sort((a, b) => sortKey === 'premium' ? b.pendingTotal - a.pendingTotal : sortKey === 'cases' ? b.pendingCases.length - a.pendingCases.length : b.stuckCustomers.length - a.stuckCustomers.length), [summary, sortKey]);
+  const tone = (d) => d >= 15 ? 'text-rose-400' : d >= 8 ? 'text-amber-400' : 'text-emerald-400';
+  const glass = 'rounded-3xl border border-white/10 bg-white/[0.045] backdrop-blur-xl';
+  const tiles = [
+    { l: '受理中案件', v: allCases.length, u: '件', s: allCases.length ? `平均卡 ${avgDays} 天` : '目前沒有', icon: FileText, c: 'bg-blue-500/25 text-blue-300' },
+    { l: '受理中保費', v: money(totalPremium), s: allCases.length ? `件均 ${money(totalPremium / allCases.length)}` : '', icon: TrendingUp, c: 'bg-emerald-500/25 text-emerald-300' },
+    { l: '卡關客戶', v: stuckTotal, u: '位', s: '已過追蹤日未處理', icon: AlertTriangle, c: 'bg-amber-500/25 text-amber-300' },
+    { l: '團隊人數', v: summary.length, u: '人', s: `${withCases} 人有案件`, icon: Users, c: 'bg-violet-500/25 text-violet-300' },
+  ];
+  const cols = 'grid-cols-[minmax(0,1fr)_56px_84px_56px_56px]';
+  return (
+    <div className="hidden md:flex flex-col gap-3 h-full md:min-h-[840px] text-white animate-fade-in">
+      <div className="shrink-0">
+        <h1 className="text-[26px] font-bold tracking-tight leading-none">業務戰情室</h1>
+        <p className="text-[12px] text-white/45 mt-1.5">團隊受理中案件、客戶追蹤狀況與商機總覽</p>
+      </div>
+      <div className="grid grid-cols-4 gap-3 shrink-0">
+        {tiles.map(t => { const Icon = t.icon; return (
+          <div key={t.l} className={`${glass} px-4 py-3`}>
+            <div className="flex items-center gap-2"><span className={`w-7 h-7 rounded-full flex items-center justify-center ${t.c}`}><Icon size={14} /></span><span className="text-[12px] text-white/65">{t.l}</span></div>
+            <p className="mt-2 leading-none"><b className="text-[28px] font-bold tabular-nums">{t.v}</b>{t.u && <span className="text-[13px] text-white/55 ml-1">{t.u}</span>}</p>
+            <p className="text-[11px] text-white/40 mt-1.5">{t.s || ' '}</p>
+          </div>
+        ); })}
+      </div>
+      <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)] gap-3">
+        <div className="flex flex-col gap-3 min-h-0">
+          <div className="grid grid-cols-2 gap-3 shrink-0">
+            <WarDonut title="案件卡關天數" centerTop={allCases.length} centerBottom="受理中案件" parts={buckets.map(b => ({ label: b.label, color: b.color, v: b.n, text: `${b.n} 件` }))} />
+            <WarDonut title="保費金額分佈" centerTop={money(totalPremium)} centerBottom="受理中保費" parts={buckets.map(b => ({ label: b.label, color: b.color, v: b.prem, text: money(b.prem) }))} />
+          </div>
+          <div className={`${glass} p-4 flex-1 min-h-0 flex flex-col`}>
+            <div className="flex items-center justify-between mb-2 shrink-0">
+              <p className="text-[15px] font-bold">成員列表</p>
+              <select value={sortKey} onChange={e => setSortKey(e.target.value)} className="bg-white/[0.08] border border-white/10 rounded-xl px-3 py-1 text-[12px] font-bold text-white outline-none">
+                <option value="premium" className="text-gray-900">排序：受理中保費</option><option value="cases" className="text-gray-900">排序：案件數</option><option value="stuck" className="text-gray-900">排序：卡關客戶</option>
+              </select>
+            </div>
+            <div className={`grid ${cols} gap-2 px-2 pb-1.5 text-[10px] font-bold text-white/35 shrink-0`}><span>成員</span><span className="text-center">案件</span><span className="text-right">保費</span><span className="text-center">卡關</span><span className="text-center">商機</span></div>
+            <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar divide-y divide-white/[0.06]">
+              {sorted.map((x, i) => (
+                <button key={x.member.id} onClick={() => onSelect(x.member.id)} className={`w-full grid ${cols} gap-2 items-center px-2 py-2 text-left hover:bg-white/[0.05]`}>
+                  <span className="flex items-center gap-2 min-w-0">
+                    <span className={`w-5 shrink-0 text-center text-[12px] font-bold ${i < 3 && x.pendingTotal > 0 ? 'text-amber-400' : 'text-white/35'}`}>{i + 1}</span>
+                    <Avatar name={x.member.name} size={30} />
+                    <span className="text-[13px] font-bold truncate">{x.member.name}</span>
+                  </span>
+                  <span className="text-center text-[13px] tabular-nums">{x.pendingCases.length}</span>
+                  <span className="text-right text-[13px] font-bold text-blue-300 tabular-nums">{money(x.pendingTotal)}</span>
+                  <span className={`text-center text-[13px] tabular-nums ${x.stuckCustomers.length ? 'text-amber-400 font-bold' : 'text-white/45'}`}>{x.stuckCustomers.length}</span>
+                  <span className="text-center text-[13px] tabular-nums text-white/70">{x.memberDeals.length}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+        </div>
+        <div className={`${glass} p-4 flex flex-col min-h-0`}>
+          <div className="flex rounded-full border border-white/10 bg-white/[0.06] p-1 mb-3 shrink-0">
+            {[['cases', `案件進度 ${allCases.length}`], ['deals', `商機追蹤 ${visibleDeals.length}`]].map(([k, l]) => (
+              <button key={k} onClick={() => setRtab(k)} className={`flex-1 py-1.5 text-[13px] font-bold rounded-full transition ${rtab === k ? 'bg-blue-500 shadow-lg shadow-blue-500/30' : 'text-white/60'}`}>{l}</button>
+            ))}
+          </div>
+          <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar space-y-2">
+            {rtab === 'cases' && (allCases.length === 0
+              ? <p className="text-center text-white/40 text-sm py-10">目前沒有受理中的案件 🎉</p>
+              : allCases.map(({ r, member, days }) => (
+                <div key={r.id} className="rounded-2xl bg-white/[0.05] border border-white/[0.06] px-3 py-2.5 flex items-center gap-3">
+                  <Avatar name={member.name} size={34} />
+                  <div className="min-w-0 flex-1"><p className="text-[13px] font-bold truncate">{r.insuredName || '（未填被保人）'}</p><p className="text-[11px] text-white/40 truncate">{member.name} · {r.product || '—'}</p></div>
+                  <div className="text-right shrink-0"><p className="text-[13px] font-bold text-blue-300 tabular-nums">{money(r.premium || 0)}</p><p className={`text-[11px] font-bold ${tone(days)}`}>卡 {days} 天</p></div>
+                </div>
+              )))}
+            {rtab === 'deals' && (visibleDeals.length === 0
+              ? <p className="text-center text-white/40 text-sm py-10">目前沒有登記中的商機</p>
+              : PIPELINE_STAGES.map(st => {
+                const list = visibleDeals.filter(d => d.stage === st);
+                if (!list.length) return null;
+                return (
+                  <div key={st} className="mb-2">
+                    <p className="text-[11px] font-bold text-white/45 mb-1.5">{st} · {list.length}</p>
+                    <div className="space-y-2">{list.map(d => {
+                      const owner = summary.find(s => s.member.id === d.ownerId)?.member;
+                      return (
+                        <div key={d.id} className="rounded-2xl bg-white/[0.05] border border-white/[0.06] px-3 py-2.5 flex items-center gap-3">
+                          {owner && <Avatar name={owner.name} size={30} />}
+                          <div className="min-w-0 flex-1"><p className="text-[13px] font-bold truncate">{d.customerName}<span className="text-white/40 font-normal"> · {d.product}</span></p><p className="text-[11px] text-white/40 truncate">{owner?.name || ''}{d.expectedCloseDate ? ` · 預計 ${d.expectedCloseDate}` : ''}</p></div>
+                          <p className="text-[13px] font-bold text-teal-300 tabular-nums shrink-0">{money(d.estimatedPremium || 0)}</p>
+                        </div>
+                      );
+                    })}</div>
+                  </div>
+                );
+              }))}
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const SalesWarRoomPage = ({ loggedInUser, team, customers, records, onSearch }) => {
   const today = getTodayDate();
   const [selectedId, setSelectedId] = useState(null);
@@ -5289,12 +5732,13 @@ const SalesWarRoomPage = ({ loggedInUser, team, customers, records, onSearch }) 
   ) : null;
 
   return (
-    <div className="max-w-5xl lg:max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+    <div className="max-w-5xl lg:max-w-none md:max-w-none md:h-full mx-auto space-y-6 md:space-y-0 animate-fade-in pb-12 md:pb-0">
       <MobileWarRoom summary={summary} deals={deals} visibleIds={visibleIds} today={today} onSelect={setSelectedId} onSearch={onSearch} />
+      <DesktopWarRoom summary={summary} deals={deals} visibleIds={visibleIds} today={today} onSelect={setSelectedId} />
 
       <ConfirmModal isOpen={!!dealDeleteTarget} onClose={() => setDealDeleteTarget(null)} onConfirm={handleDeleteDealConfirm} title="刪除商機" message="確定要刪除這筆商機紀錄嗎？" />
 
-      <div className="hidden md:block space-y-6">
+      <div className="hidden space-y-6">
       <div>
         <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">業務戰情室</h2>
         <p className="text-sm text-gray-400 md:mt-1">團隊受理中案件、客戶追蹤狀況與進行中商機總覽</p>
@@ -5329,7 +5773,11 @@ const SalesWarRoomPage = ({ loggedInUser, team, customers, records, onSearch }) 
       </Card>
       </div>
 
-      <div className="hidden md:block">{detailCard}</div>
+      {selectedEntry && (
+        <div className="hidden md:flex fixed inset-0 z-[100] items-center justify-center bg-black/60 backdrop-blur-sm p-6" onClick={() => setSelectedId(null)}>
+          <div className="w-full max-w-2xl max-h-[88vh] overflow-y-auto no-scrollbar rounded-3xl" onClick={e => e.stopPropagation()}>{detailCard}</div>
+        </div>
+      )}
       {selectedEntry && (
         <div className="md:hidden fixed inset-0 z-[100] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setSelectedId(null)}>
           <div className="w-full max-h-[88vh] overflow-y-auto rounded-t-[28px] bg-[#f5f5f7] p-3 pb-8" onClick={e => e.stopPropagation()}>{detailCard}</div>
@@ -9349,7 +9797,7 @@ const HomeTodoCard = ({ loggedInUser }) => {
 };
 
 // ================= 今日待辦首頁（手機優先：深色單欄，只留最重要的資訊）=================
-const TodayHome = ({ loggedInUser, activities, team, records, isTeamScheduleViewer, scheduleEvents, recurringRules, onGo, bellCount, dueCount, onShowMore }) => {
+const TodayHome = ({ loggedInUser, activities, team, records, isTeamScheduleViewer, scheduleEvents, recurringRules, onGo, bellCount, dueCount, onShowMore, dueNode }) => {
   const today = getTodayDate();
   const pts = pointsOnDate(activities, loggedInUser.id, today);
   const pct = Math.min(1, pts / DAILY_TARGET);
@@ -9398,7 +9846,7 @@ const TodayHome = ({ loggedInUser, activities, team, records, isTeamScheduleView
   const glass = 'bg-white/[0.06] backdrop-blur-xl border border-white/10';
 
   return (
-    <div className="text-white space-y-3.5">
+    <div className="text-white space-y-3.5 md:space-y-0 md:flex md:flex-col md:gap-3 md:h-full md:min-h-[840px]">
       <div className="flex items-start justify-between gap-3 px-1">
         <div className="min-w-0">
           <p className="text-[13px] tracking-[0.12em] text-white/55">{today.replace(/-/g, '.')}　週{dayNames[dayOfWeek(today)]}</p>
@@ -9411,7 +9859,9 @@ const TodayHome = ({ loggedInUser, activities, team, records, isTeamScheduleView
         </button>
       </div>
 
-      <div className={`${glass} rounded-[28px] p-4 sm:p-5`}>
+      <div className="flex flex-col gap-3.5 md:grid md:grid-cols-3 md:gap-3 md:flex-1 md:min-h-0">
+    <div className="contents md:flex md:flex-col md:gap-3 md:min-h-0">
+      <div className={`${glass} rounded-[28px] p-4 sm:p-5 order-1 md:order-none`}>
         <div className="flex items-center gap-4">
           <div className={`relative w-[132px] h-[132px] sm:w-36 sm:h-36 shrink-0 ${done ? 'jf-ring-done' : ''}`}>
             <svg viewBox="0 0 140 140" className="w-full h-full -rotate-90">
@@ -9465,7 +9915,7 @@ const TodayHome = ({ loggedInUser, activities, team, records, isTeamScheduleView
         </button>
       </div>
 
-      <div className="grid grid-cols-4 gap-2.5">
+      <div className="grid grid-cols-4 gap-2.5 order-2 md:order-none">
         {[
           { id: 'activity', label: '建活動量', icon: Plus, accent: true },
           { id: 'customers', label: '新增客戶', icon: Users },
@@ -9482,33 +9932,10 @@ const TodayHome = ({ loggedInUser, activities, team, records, isTeamScheduleView
         })}
       </div>
 
-      <HomeGoalsQuality loggedInUser={loggedInUser} records={records} activities={activities} />
-
-      <HomeTodoCard loggedInUser={loggedInUser} />
-
-      <button onClick={() => onGo('activity')} className={`${glass} w-full rounded-[24px] p-4 text-left active:scale-[0.99] transition`}>
-        <div className="flex items-center gap-3">
-          <p className="font-bold text-base shrink-0">本週活動量</p>
-          <div className="flex-1 h-2 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-violet-400 transition-all duration-700" style={{ width: `${Math.min(100, wkTotal / WEEKLY_TARGET * 100)}%` }}></div></div>
-          <p className="text-sm text-white/70 shrink-0 tabular-nums">{wkTotal} / {WEEKLY_TARGET} 分</p>
-        </div>
-        <div className="flex justify-between mt-4 px-1">
-          {week.map(w => {
-            const hit = w.p >= DAILY_TARGET;
-            return (
-              <div key={w.d} className="flex flex-col items-center gap-2">
-                <span className={`text-[12px] ${w.isToday ? 'text-white font-bold' : 'text-white/45'}`}>{dayNames[dayOfWeek(w.d)]}</span>
-                <span className={`rounded-full ${w.isToday ? 'w-[26px] h-[26px] ring-2 ring-indigo-300 ring-offset-2 ring-offset-[#0b1022]' : 'w-[18px] h-[18px]'}`} style={{ background: w.future ? 'rgba(255,255,255,.14)' : hit ? '#34d399' : w.p > 0 ? '#818cf8' : 'rgba(255,255,255,.22)' }}></span>
-              </div>
-            );
-          })}
-        </div>
-      </button>
-
-      <div className={`${glass} rounded-[24px] p-4`}>
+      <div className={`${glass} rounded-[24px] p-4 order-6 md:order-none`}>
         <div className="flex items-center justify-between mb-3">
           <p className="font-bold text-base">今日重點</p>
-          <button onClick={onShowMore} className="text-xs text-white/55 flex items-center gap-0.5">查看更多<ChevronRight size={14} /></button>
+          <button onClick={onShowMore} className="md:hidden text-xs text-white/55 flex items-center gap-0.5">查看更多<ChevronRight size={14} /></button>
         </div>
         <div className="grid grid-cols-3 gap-2.5">
           <div className="rounded-2xl bg-white/[0.06] border border-white/10 p-3">
@@ -9528,7 +9955,35 @@ const TodayHome = ({ loggedInUser, activities, team, records, isTeamScheduleView
           </div>
         </div>
       </div>
+    </div>
+    <div className="contents md:flex md:flex-col md:gap-3 md:min-h-0 md:overflow-y-auto no-scrollbar">
+      <div className="order-3 md:order-none"><HomeGoalsQuality loggedInUser={loggedInUser} records={records} activities={activities} /></div>
+      <div className="order-4 md:order-none"><HomeTodoCard loggedInUser={loggedInUser} /></div>
+    </div>
+    <div className="contents md:flex md:flex-col md:gap-3 md:min-h-0">
 
+      <button onClick={() => onGo('activity')} className={`${glass} w-full rounded-[24px] p-4 text-left active:scale-[0.99] transition order-5 md:order-none`}>
+        <div className="flex items-center gap-3">
+          <p className="font-bold text-base shrink-0">本週活動量</p>
+          <div className="flex-1 h-2 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full bg-gradient-to-r from-indigo-400 to-violet-400 transition-all duration-700" style={{ width: `${Math.min(100, wkTotal / WEEKLY_TARGET * 100)}%` }}></div></div>
+          <p className="text-sm text-white/70 shrink-0 tabular-nums">{wkTotal} / {WEEKLY_TARGET} 分</p>
+        </div>
+        <div className="flex justify-between mt-4 px-1">
+          {week.map(w => {
+            const hit = w.p >= DAILY_TARGET;
+            return (
+              <div key={w.d} className="flex flex-col items-center gap-2">
+                <span className={`text-[12px] ${w.isToday ? 'text-white font-bold' : 'text-white/45'}`}>{dayNames[dayOfWeek(w.d)]}</span>
+                <span className={`rounded-full ${w.isToday ? 'w-[26px] h-[26px] ring-2 ring-indigo-300 ring-offset-2 ring-offset-[#0b1022]' : 'w-[18px] h-[18px]'}`} style={{ background: w.future ? 'rgba(255,255,255,.14)' : hit ? '#34d399' : w.p > 0 ? '#818cf8' : 'rgba(255,255,255,.22)' }}></span>
+              </div>
+            );
+          })}
+        </div>
+      </button>
+
+      {dueNode && <div className="hidden md:block md:flex-1 md:min-h-0 md:overflow-y-auto no-scrollbar">{dueNode}</div>}
+    </div>
+    </div>
     </div>
   );
 };
@@ -9707,16 +10162,11 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
 
   const isTodayEmpty = dueCustomers.length === 0 && birthdayCustomers.length === 0 && autoSuggested.length === 0;
 
-  return (
-    <div className="max-w-xl mx-auto space-y-4 animate-fade-in pb-12">
-      <TodayHome loggedInUser={loggedInUser} activities={activities} team={team} records={records} isTeamScheduleViewer={isTeamScheduleViewer} scheduleEvents={scheduleEvents} recurringRules={recurringRules} onGo={onGo} bellCount={bellCount} dueCount={dueCustomers.length} onShowMore={openDue} />
-
-      <div ref={dueRef}></div>
-      {showMore && (
+  const dueBlock = (
       <div className="rounded-[28px] bg-[#f5f5f7] text-gray-900 p-3 sm:p-4 space-y-6">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500 font-bold">{today} · 今天該聯繫、該留意的事</p>
-        <button onClick={() => setShowMore(false)} className="text-xs font-bold text-gray-500 bg-white rounded-full px-3 py-1.5 border border-gray-200">收起</button>
+        <button onClick={() => setShowMore(false)} className="md:hidden text-xs font-bold text-gray-500 bg-white rounded-full px-3 py-1.5 border border-gray-200">收起</button>
       </div>
 
       {isTodayEmpty && <Card className="p-8 text-center text-gray-400">今天沒有待辦事項，太棒了 🎉</Card>}
@@ -9790,7 +10240,14 @@ const TodoSchedulePage = ({ loggedInUser, customers, scheduleEvents, records, ac
       </div>
 
       </div>
-      )}
+  );
+
+  return (
+    <div className="max-w-xl md:max-w-none md:h-full mx-auto space-y-4 md:space-y-0 animate-fade-in pb-12 md:pb-0">
+      <TodayHome dueNode={dueBlock} loggedInUser={loggedInUser} activities={activities} team={team} records={records} isTeamScheduleViewer={isTeamScheduleViewer} scheduleEvents={scheduleEvents} recurringRules={recurringRules} onGo={onGo} bellCount={bellCount} dueCount={dueCustomers.length} onShowMore={openDue} />
+
+      <div ref={dueRef}></div>
+      {showMore && <div className="md:hidden">{dueBlock}</div>}
 
       {/* 標記聯繫客戶 (選擇 MEA 類別) */}
       {completingContact && (
@@ -12176,7 +12633,7 @@ const LoginScreen = ({ team, onLogin }) => {
 };
 
 // --- Main App ---
-const FIT_TABS = ['overview', 'calendar', 'customers', 'activity'];
+const FIT_TABS = ['overview', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'todo', 'recruitment', 'team'];
 const App = () => {
   const [activeTab, setActiveTab] = useState('todo');
 
