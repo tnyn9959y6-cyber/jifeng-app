@@ -4,11 +4,13 @@
 
 import * as CRIT from './catalogCrit.js';
 import * as HOSP from './catalogHosp.js';
+import * as LTC from './catalogLtc.js';
+import * as ACC from './catalogAcc.js';
 
 export const NA = '—';
 
 export const CATALOG_CATEGORIES = [
-  '癌險', '重大疾病・精選傷病', '住院・手術', '壽險', '意外險', '長照險',
+  '癌險', '重大疾病・精選傷病', '住院・手術', '長照險', '意外險', '壽險',
 ];
 
 export const CANCER_GROUPS = [
@@ -215,4 +217,6 @@ export const CATALOG = {
   癌險: { groups: CANCER_GROUPS, rows: CANCER_ROWS, products: CANCER_PRODUCTS },
   '重大疾病・精選傷病': build(CRIT),
   '住院・手術': build(HOSP),
+  長照險: build(LTC),
+  意外險: build(ACC),
 };
