@@ -42,6 +42,9 @@ import {
   ChevronLeft,
   ChevronRight,
   ChevronDown,
+  DollarSign,
+  MessageCircle,
+  Layers,
   ShieldCheck,
   ClipboardCheck,
   ClipboardList,
@@ -72,7 +75,10 @@ import {
   Cell,
   Legend,
   LineChart,
-  Line
+  Line,
+  AreaChart,
+  Area,
+  ComposedChart
 } from 'recharts';
 
 // --- Firebase Imports ---
@@ -1646,6 +1652,18 @@ const computeDueTodayCount = (loggedInUser, customers, scheduleEvents, recurring
   return dueEventsCount + dueCustomersCount;
 };
 
+// 趨勢圖的發光圓點（最後一個點會呼吸）
+const GlowDot = ({ cx, cy, index, color, total }) => {
+  if (cx == null || cy == null) return null;
+  const last = index === total - 1;
+  return (
+    <g>
+      {last && <circle cx={cx} cy={cy} r={6} fill={color} opacity={0.35}><animate attributeName="r" values="5;14;5" dur="2s" repeatCount="indefinite" /><animate attributeName="opacity" values=".45;0;.45" dur="2s" repeatCount="indefinite" /></circle>}
+      <circle cx={cx} cy={cy} r={last ? 5 : 3.5} fill={color} stroke="#0b1020" strokeWidth={1.5} />
+    </g>
+  );
+};
+
 const ActivityDashboard = ({ team, activities, records, user, season, loggedInUser, onSearch }) => {
   const currentMonths = season === 'H1' ? AVAILABLE_MONTHS_H1 : AVAILABLE_MONTHS_H2;
   const [selectedAgentId, setSelectedAgentId] = useState('');
@@ -1861,384 +1879,196 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
   return (
     <>
     <MobileActivityView team={team} selectedAgentId={selectedAgentId} setSelectedAgentId={setSelectedAgentId} viewMode={viewMode} setViewMode={setViewMode} periodMode={periodMode} setPeriodMode={setPeriodMode} periodRange={periodRange} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} currentMonths={currentMonths} shiftWeek={shiftWeek} stats={stats} monthlyTrend={monthlyTrend} activities={activities} canEdit={canEditMobile} formData={formData} setFormData={setFormData} handleSubmit={handleSubmit} isSubmitting={isSubmitting} onSearch={onSearch} />
-    <div className="hidden md:block space-y-8 animate-fade-in pb-12 max-w-7xl mx-auto">
-      {/* Header & Context */}
-      <div className="relative overflow-hidden rounded-3xl bg-slate-900 text-white p-8 shadow-2xl flex flex-col lg:flex-row justify-between gap-8 border border-slate-800">
-        <div className="absolute top-0 right-0 p-8 opacity-10"><Activity size={200} /></div>
-        <div className="relative z-10 space-y-6">
-          <div>
-            <h2 className="text-3xl font-bold font-serif tracking-wide text-transparent bg-clip-text bg-gradient-to-r from-blue-300 to-indigo-400 mb-2">
-              MEA 活動量管理 (P x C x I)
-            </h2>
-            <p className="text-gray-400 text-sm max-w-lg">
-              量大是致勝的關鍵。透過追蹤每日活動量，掌握面談次數 (I)、提升成交率 (C)，並優化件均保費 (P)。
-            </p>
-          </div>
-          <div className="flex flex-wrap gap-3 items-center">
-            <div className="flex gap-4 items-center bg-white/5 p-2 rounded-xl border border-white/10 w-fit backdrop-blur-md">
-              <select 
-                className="bg-transparent text-sm font-bold text-white outline-none cursor-pointer appearance-none px-3" 
-                value={selectedAgentId} 
-                onChange={(e) => setSelectedAgentId(e.target.value)}
-              >
-                {team.map(m => <option key={m.id} value={m.id} className="text-gray-900">{m.name}</option>)}
+    <div className="hidden md:flex flex-col gap-3 h-full md:min-h-[840px] text-white animate-fade-in">
+      {/* 標題＋選擇器＋公式 */}
+      <div className="grid grid-cols-[1fr_auto] gap-3 shrink-0">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl px-5 py-3.5">
+          <h1 className="text-[28px] font-black leading-tight">MEA 活動量管理 <span className="font-serif font-bold text-transparent bg-clip-text bg-gradient-to-r from-blue-300 to-indigo-400">(P x C x I)</span></h1>
+          <p className="text-[12.5px] text-white/50 mt-0.5">量大是致勝的關鍵。透過追蹤每日活動量，掌握面談次數 (I)、提升成交率 (C)，並優化件均保費 (P)。</p>
+          <div className="flex flex-wrap items-center gap-2.5 mt-3">
+            <select className="h-10 rounded-xl text-[14px] font-bold px-3 min-w-[110px]" value={selectedAgentId} onChange={(e) => setSelectedAgentId(e.target.value)}>
+              {team.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+            </select>
+            {periodMode === 'month' ? (
+              <select className="h-10 rounded-xl text-[14px] font-bold px-3" value={selectedMonth} onChange={(e) => setSelectedMonth(e.target.value)}>
+                {currentMonths.map(m => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
-              <div className="w-px h-6 bg-white/20"></div>
-              {periodMode === 'month' ? (
-                <select 
-                  className="bg-transparent text-sm font-bold text-white outline-none cursor-pointer appearance-none px-3" 
-                  value={selectedMonth} 
-                  onChange={(e) => setSelectedMonth(e.target.value)}
-                >
-                  {currentMonths.map(m => <option key={m.value} value={m.value} className="text-gray-900">{m.label}</option>)}
-                </select>
-              ) : (
-                <div className="flex items-center gap-2 px-2">
-                  <button type="button" onClick={() => shiftWeek(-1)} className="text-gray-300 hover:text-white"><ChevronLeft size={16} /></button>
-                  <span className="text-xs font-bold text-white whitespace-nowrap">{periodRange.start} ~ {periodRange.end}</span>
-                  <button type="button" onClick={() => shiftWeek(1)} className="text-gray-300 hover:text-white"><ChevronRight size={16} /></button>
-                </div>
-              )}
-              <div className="w-px h-6 bg-white/20"></div>
-              <div className="flex bg-white/10 rounded-lg p-0.5">
-                <button type="button" onClick={() => setPeriodMode('month')} className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition ${periodMode === 'month' ? 'bg-white text-gray-900' : 'text-gray-300'}`}>月</button>
-                <button type="button" onClick={() => setPeriodMode('week')} className={`px-2.5 py-1 text-[11px] font-bold rounded-md transition ${periodMode === 'week' ? 'bg-white text-gray-900' : 'text-gray-300'}`}>週</button>
+            ) : (
+              <div className="flex items-center gap-2 h-10 px-3 rounded-xl border border-white/15 bg-white/[0.07]">
+                <button type="button" onClick={() => shiftWeek(-1)} className="text-white/70 hover:text-white"><ChevronLeft size={16} /></button>
+                <span className="text-[13px] font-bold whitespace-nowrap">{periodRange.start} ~ {periodRange.end}</span>
+                <button type="button" onClick={() => shiftWeek(1)} className="text-white/70 hover:text-white"><ChevronRight size={16} /></button>
               </div>
+            )}
+            <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">
+              {[['month', '月'], ['week', '週']].map(([k, l]) => <button key={k} type="button" onClick={() => setPeriodMode(k)} className={`px-4 h-8 rounded-lg text-[13px] font-bold ${periodMode === k ? 'bg-blue-600 shadow-[0_0_14px_rgba(37,99,235,.55)]' : 'text-white/60'}`}>{l}</button>)}
             </div>
-            <div className="flex bg-white/5 rounded-xl p-1 border border-white/10 backdrop-blur-md">
-              <button type="button" onClick={() => setViewMode('sales')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition ${viewMode === 'sales' ? 'bg-indigo-600 text-white' : 'text-gray-400 hover:text-white'}`}>業務</button>
-              <button type="button" onClick={() => setViewMode('recruit')} className={`px-4 py-1.5 text-xs font-bold rounded-lg transition ${viewMode === 'recruit' ? 'bg-teal-600 text-white' : 'text-gray-400 hover:text-white'}`}>增員</button>
+            <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">
+              {[['sales', '業務', 'bg-blue-600'], ['recruit', '增員', 'bg-teal-600']].map(([k, l, c]) => <button key={k} type="button" onClick={() => setViewMode(k)} className={`px-4 h-8 rounded-lg text-[13px] font-bold ${viewMode === k ? c : 'text-white/60'}`}>{l}</button>)}
             </div>
           </div>
         </div>
-        
-        {/* The MEA Core Formula Display */}
-        {viewMode === 'sales' ? (
-          <div className="relative z-10 bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20 min-w-[300px] flex flex-col justify-center">
-            <p className="text-xs text-indigo-300 font-bold uppercase tracking-wider mb-2">本月業務 MEA 核心公式</p>
-            <div className="flex items-center gap-3 text-lg font-mono">
-              <div className="text-center">
-                <span className="block text-2xl font-bold text-white">{formatMoney(stats.P).replace('$', '')}</span>
-                <span className="text-[10px] text-gray-400">P (件均)</span>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl px-6 py-3.5 min-w-[470px] flex flex-col justify-center">
+          <p className={`text-[12px] font-bold tracking-wide mb-1.5 ${viewMode === 'sales' ? 'text-indigo-300' : 'text-teal-300'}`}>{viewMode === 'sales' ? '本月業務 MEA 核心公式' : '本月增員 MEA 核心公式'}</p>
+          {viewMode === 'sales' ? (
+            <>
+              <div className="flex items-center gap-4 font-mono">
+                {[[formatMoney(stats.P).replace('$', ''), 'P (件均)'], [(stats.C * 100).toFixed(1) + '%', 'C (成交率)'], [stats.I, 'I (面談次數)']].map(([v, l], i) => (
+                  <React.Fragment key={l}>{i > 0 && <span className="text-indigo-400 font-bold text-xl">x</span>}<div className="text-center"><span className="block text-[26px] font-bold leading-tight">{v}</span><span className="text-[11px] text-white/45">{l}</span></div></React.Fragment>
+                ))}
+                <span className="text-indigo-400 font-bold text-xl">=</span>
               </div>
-              <span className="text-indigo-400 font-bold">X</span>
-              <div className="text-center">
-                <span className="block text-2xl font-bold text-white">{(stats.C * 100).toFixed(1)}%</span>
-                <span className="text-[10px] text-gray-400">C (成交率)</span>
+              <p className="mt-1.5 pt-1.5 border-t border-white/10"><span className="text-[30px] font-bold text-emerald-400">{formatMoney(stats.totalPremium)}</span><span className="text-[12px] text-white/50 ml-2">總實收保費</span></p>
+            </>
+          ) : (
+            <>
+              <div className="flex items-center gap-4 font-mono">
+                {[[stats.recruitTotals.recruitInterview, 'I (增員面談)'], [(stats.recruitConversion * 100).toFixed(1) + '%', 'C (面談轉登錄率)']].map(([v, l], i) => (
+                  <React.Fragment key={l}>{i > 0 && <span className="text-teal-400 font-bold text-xl">x</span>}<div className="text-center"><span className="block text-[26px] font-bold leading-tight">{v}</span><span className="text-[11px] text-white/45">{l}</span></div></React.Fragment>
+                ))}
+                <span className="text-teal-400 font-bold text-xl">=</span>
               </div>
-              <span className="text-indigo-400 font-bold">X</span>
-              <div className="text-center">
-                <span className="block text-2xl font-bold text-white">{stats.I}</span>
-                <span className="text-[10px] text-gray-400">I (面談次數)</span>
-              </div>
-              <span className="text-indigo-400 font-bold">=</span>
-            </div>
-            <div className="mt-4 pt-4 border-t border-white/10 flex justify-between items-end">
-              <div>
-                 <span className="text-3xl font-bold text-emerald-400">{formatMoney(stats.totalPremium)}</span>
-                 <span className="text-xs text-gray-400 ml-2">總實收保費</span>
-              </div>
-            </div>
-          </div>
-        ) : (
-          <div className="relative z-10 bg-white/10 backdrop-blur-md rounded-2xl p-6 border border-white/20 min-w-[300px] flex flex-col justify-center">
-            <p className="text-xs text-teal-300 font-bold uppercase tracking-wider mb-2">本月增員核心公式</p>
-            <div className="flex items-center gap-3 text-lg font-mono">
-              <div className="text-center">
-                <span className="block text-2xl font-bold text-white">{stats.recruitTotals.recruitInterview}</span>
-                <span className="text-[10px] text-gray-400">I (增員面談)</span>
-              </div>
-              <span className="text-teal-400 font-bold">X</span>
-              <div className="text-center">
-                <span className="block text-2xl font-bold text-white">{(stats.recruitConversion * 100).toFixed(1)}%</span>
-                <span className="text-[10px] text-gray-400">C (面談轉登錄率)</span>
-              </div>
-              <span className="text-teal-400 font-bold">=</span>
-            </div>
-            <div className="mt-4 pt-4 border-t border-white/10 flex justify-between items-end">
-              <div>
-                 <span className="text-3xl font-bold text-teal-400">{stats.recruitTotals.recruitRegistered}</span>
-                 <span className="text-xs text-gray-400 ml-2">本月登錄人數</span>
-              </div>
-            </div>
-          </div>
-        )}
+              <p className="mt-1.5 pt-1.5 border-t border-white/10"><span className="text-[30px] font-bold text-teal-300">{stats.recruitTotals.recruitRegistered}</span><span className="text-[12px] text-white/50 ml-2">本月登錄人數</span></p>
+            </>
+          )}
+        </div>
       </div>
 
-      {/* 警告提示區塊 */}
       {(stats.totalPoints < 400 || stats.interviewPoints < 60) && (
-        <div className="bg-red-50 border border-red-200 rounded-2xl p-5 flex items-start gap-4 shadow-sm">
-          <div className="bg-red-100 p-2 rounded-full shrink-0">
-             <AlertTriangle className="text-red-600" size={24} />
-          </div>
-          <div>
-            <h4 className="text-base font-bold text-red-800 mb-1">活動量未達標預警</h4>
-            <ul className="text-sm text-red-600 space-y-1 list-disc list-inside font-medium">
-               {stats.totalPoints < 400 && <li>本月「活動量總分」低於標準：目前 {stats.totalPoints} 分（目標 400 分）</li>}
-               {stats.interviewPoints < 60 && <li>本月「面談總分」低於標準：目前 {stats.interviewPoints} 分（目標 60 分）</li>}
-            </ul>
-          </div>
+        <div className="shrink-0 flex items-center gap-3 rounded-2xl border border-rose-400/40 bg-rose-500/10 px-4 py-2.5">
+          <AlertTriangle className="text-rose-300 shrink-0" size={20} />
+          <p className="text-[13px] font-semibold text-rose-200">活動量未達標預警　{stats.totalPoints < 400 && <span className="mr-5">活動量總分 {stats.totalPoints} 分（目標 400）</span>}{stats.interviewPoints < 60 && <span>面談總分 {stats.interviewPoints} 分（目標 60）</span>}</p>
         </div>
       )}
 
-      <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
-        {/* Left Column: Data Input & Points Summary */}
-        <div className="lg:col-span-1 space-y-6">
-          {/* Quick Input Card */}
-          <Card className="p-6 border-t-4 border-t-indigo-500">
-            <div className="flex items-center gap-2 mb-6">
-              <Edit3 size={18} className="text-indigo-500"/>
-              <h3 className="font-bold text-gray-800">活動量紀錄 (日報)</h3>
+      {/* KPI */}
+      <div className="grid grid-cols-5 gap-3 shrink-0">
+        {[
+          { l: '本月活動量總分', v: stats.totalPoints, u: '/ 400', pct: Math.min(100, stats.totalPoints / 400 * 100), c: '#60a5fa', icon: ListPlus, red: stats.totalPoints < 400 },
+          { l: '面談總分', v: stats.interviewPoints, u: '/ 60', pct: Math.min(100, stats.interviewPoints / 60 * 100), c: '#a78bfa', icon: MessageCircle, red: stats.interviewPoints < 60 },
+          { l: '本月每分實收', v: formatMoney(stats.premiumPerPoint), sub: `總實收 ${formatMoney(stats.totalPremium)}`, c: '#34d399', icon: DollarSign },
+          { l: '本月每分價值 (FYC)', v: formatMoney(stats.valuePerPoint), sub: `總FYC ${formatMoney(stats.totalFYC)}`, c: '#fbbf24', icon: Layers },
+          { l: '業務活動分', v: stats.salesPoints, sub: `增員活動分 ${stats.recruitPoints}　總分 ${stats.totalPoints}`, c: '#38bdf8', icon: Activity },
+        ].map(k => (
+          <div key={k.l} className="rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl p-3 flex items-center gap-3 min-w-0">
+            <span className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: k.c + '26', color: k.c }}><k.icon size={22} /></span>
+            <div className="flex-1 min-w-0">
+              <p className="text-[12px] text-white/60 truncate">{k.l}</p>
+              <p className="leading-none mt-1"><span className="text-[24px] font-black">{k.v}</span>{k.u && <span className="text-[13px] text-white/45 ml-1.5">{k.u}</span>}</p>
+              {k.pct !== undefined ? (
+                <div className="mt-1.5 flex items-center gap-2"><div className="flex-1 h-1.5 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full transition-all duration-700" style={{ width: `${k.pct}%`, background: k.red ? 'linear-gradient(90deg,#fb7185,#f43f5e)' : k.c }} /></div><span className={`text-[11.5px] font-bold ${k.red ? 'text-rose-300' : 'text-emerald-300'}`}>{Math.round(k.pct)}%</span></div>
+              ) : <p className="text-[11px] text-white/45 mt-1.5 truncate">{k.sub}</p>}
             </div>
-            <form onSubmit={handleSubmit} className="space-y-4">
-              <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">紀錄日期</label>
-                <input 
-                  type="date" 
-                  className="w-full p-2 bg-gray-50 rounded-lg border outline-none text-sm font-bold text-gray-700" 
-                  value={formData.date} 
-                  onChange={e => setFormData({...formData, date: e.target.value})}
-                  required
-                />
-              </div>
-              {viewMode === 'sales' ? (
-                <div className="space-y-2">
-                  {Object.entries(ACTIVITY_WEIGHTS).map(([key, config]) => (
-                    <div key={key} className="flex items-center justify-between bg-gray-50 p-2 rounded-lg border border-gray-100">
-                      <div className="flex items-center gap-2">
-                        <span className={`w-2 h-2 rounded-full ${config.color}`}></span>
-                        <span className="text-sm font-medium text-gray-700">{config.label}</span>
-                        <span className="text-[10px] text-gray-400 bg-gray-200 px-1.5 rounded">x{config.score}</span>
-                      </div>
-                      <div className="flex items-center gap-2">
-                        <button type="button" onClick={() => setFormData(p => ({...p, [key]: Math.max(0, p[key] - 1)}))} className="w-6 h-6 flex items-center justify-center bg-white rounded border hover:bg-gray-100 text-gray-500">-</button>
-                        <input 
-                          type="number" 
-                          min="0" 
-                          className="w-12 text-center bg-transparent font-bold text-gray-900 outline-none" 
-                          value={formData[key]} 
-                          onChange={e => setFormData(p => ({...p, [key]: parseInt(e.target.value) || 0}))}
-                        />
-                        <button type="button" onClick={() => setFormData(p => {
-                          const keys = getCascadeKeys(key);
-                          const next = { ...p };
-                          keys.forEach(k => { next[k] = (next[k] || 0) + 1; });
-                          return next;
-                        })} className="w-6 h-6 flex items-center justify-center bg-white rounded border hover:bg-gray-100 text-gray-500" title="完成此階段會自動補上前面的階段">+</button>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <div>
-                  <p className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-2">增員活動</p>
-                  <div className="space-y-2">
-                    {Object.entries(RECRUIT_ACTIVITY_WEIGHTS).map(([key, config]) => (
-                      <div key={key} className="flex items-center justify-between bg-gray-50 p-2 rounded-lg border border-gray-100">
-                        <div className="flex items-center gap-2">
-                          <span className={`w-2 h-2 rounded-full ${config.color}`}></span>
-                          <span className="text-sm font-medium text-gray-700">{config.label}</span>
-                          <span className="text-[10px] text-gray-400 bg-gray-200 px-1.5 rounded">x{config.score}</span>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          <button type="button" onClick={() => setFormData(p => ({...p, [key]: Math.max(0, p[key] - 1)}))} className="w-6 h-6 flex items-center justify-center bg-white rounded border hover:bg-gray-100 text-gray-500">-</button>
-                          <input
-                            type="number"
-                            min="0"
-                            className="w-12 text-center bg-transparent font-bold text-gray-900 outline-none"
-                            value={formData[key]}
-                            onChange={e => setFormData(p => ({...p, [key]: parseInt(e.target.value) || 0}))}
-                          />
-                          <button type="button" onClick={() => setFormData(p => ({...p, [key]: p[key] + 1}))} className="w-6 h-6 flex items-center justify-center bg-white rounded border hover:bg-gray-100 text-gray-500">+</button>
-                        </div>
-                      </div>
-                    ))}
+          </div>
+        ))}
+      </div>
+
+      {/* 日報＋漏斗 */}
+      <div className="grid grid-cols-[360px_1fr] gap-3 flex-[1.5] min-h-0">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl p-4 flex flex-col min-h-0">
+          <p className="font-bold text-[15px] flex items-center gap-2 shrink-0"><Edit3 size={16} className="text-blue-300" />活動量紀錄（日報）</p>
+          <form onSubmit={handleSubmit} className="flex flex-col flex-1 min-h-0 mt-2">
+            <input type="date" className="shrink-0 !h-8 !min-h-0 rounded-lg !text-[13px] font-bold px-3" value={formData.date} onChange={e => setFormData({ ...formData, date: e.target.value })} required />
+            <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar mt-1.5 space-y-[3px]">
+              {Object.entries(viewMode === 'sales' ? ACTIVITY_WEIGHTS : RECRUIT_ACTIVITY_WEIGHTS).map(([key, config]) => (
+                <div key={key} className="flex items-center justify-between px-2.5 py-[3px] rounded-lg bg-white/[0.04] border border-white/[0.07]">
+                  <div className="flex items-center gap-2 text-[13px]"><span className={`w-2 h-2 rounded-full ${config.color}`} /><span className="font-medium">{config.label}</span><span className="text-[10px] text-white/50 bg-white/10 px-1.5 rounded">x{config.score}</span></div>
+                  <div className="flex items-center gap-1.5">
+                    <button type="button" onClick={() => setFormData(p => ({ ...p, [key]: Math.max(0, p[key] - 1) }))} className="w-6 h-6 rounded-md border border-white/15 bg-white/[0.06] hover:bg-white/10 text-white/80 leading-none">-</button>
+                    <input type="number" min="0" className="w-10 text-center !bg-transparent !border-0 font-bold outline-none text-[14px]" style={{ minHeight: 0, padding: 0 }} value={formData[key]} onChange={e => setFormData(p => ({ ...p, [key]: parseInt(e.target.value) || 0 }))} />
+                    <button type="button" title={viewMode === 'sales' ? '完成此階段會自動補上前面的階段' : ''} onClick={() => setFormData(p => {
+                      if (viewMode !== 'sales') return { ...p, [key]: p[key] + 1 };
+                      const next = { ...p }; getCascadeKeys(key).forEach(k => { next[k] = (next[k] || 0) + 1; }); return next;
+                    })} className="w-6 h-6 rounded-md border border-white/15 bg-white/[0.06] hover:bg-white/10 text-white/80 leading-none">+</button>
                   </div>
                 </div>
-              )}
-
-              <button 
-                type="submit" 
-                disabled={isSubmitting} 
-                className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition flex justify-center items-center gap-2"
-              >
-                {isSubmitting ? <Loader2 size={16} className="animate-spin"/> : '儲存本日紀錄'}
-              </button>
-            </form>
-          </Card>
-
-          {/* Points Value Summary */}
-          <div className="grid grid-cols-2 gap-4">
-            <div className="bg-gradient-to-br from-amber-50 to-orange-50 rounded-2xl p-4 border border-amber-100">
-              <p className="text-[10px] font-bold text-amber-600 uppercase tracking-wider mb-1">本月每分實收</p>
-              <h4 className="text-xl font-bold text-gray-900">{formatMoney(stats.premiumPerPoint)}</h4>
-              <p className="text-xs text-gray-500 mt-1">總分: <span className={`font-bold ${stats.totalPoints < 400 ? 'text-red-500' : 'text-gray-700'}`}>{stats.totalPoints}</span></p>
+              ))}
             </div>
-            <div className="bg-gradient-to-br from-emerald-50 to-teal-50 rounded-2xl p-4 border border-emerald-100">
-              <p className="text-[10px] font-bold text-emerald-600 uppercase tracking-wider mb-1">本月每分價值(FYC)</p>
-              <h4 className="text-xl font-bold text-gray-900">{formatMoney(stats.valuePerPoint)}</h4>
-              <p className="text-xs text-gray-500 mt-1">總FYC: <span className="font-bold text-gray-700">{formatMoney(stats.totalFYC)}</span></p>
-            </div>
-          </div>
-
-          <div className="bg-white rounded-2xl p-4 border border-gray-100 flex items-center justify-around text-center">
-            <div>
-              <p className="text-[10px] font-bold text-gray-400 uppercase">業務活動分</p>
-              <p className="text-lg font-bold text-indigo-600">{stats.salesPoints}</p>
-            </div>
-            <div className="w-px h-8 bg-gray-100"></div>
-            <div>
-              <p className="text-[10px] font-bold text-gray-400 uppercase">增員活動分</p>
-              <p className="text-lg font-bold text-teal-600">{stats.recruitPoints}</p>
-            </div>
-            <div className="w-px h-8 bg-gray-100"></div>
-            <div>
-              <p className="text-[10px] font-bold text-gray-400 uppercase">總分</p>
-              <p className={`text-lg font-bold ${stats.totalPoints < 400 ? 'text-red-500' : 'text-gray-900'}`}>{stats.totalPoints}</p>
-            </div>
-          </div>
+            <button type="submit" disabled={isSubmitting} className="shrink-0 mt-2 h-10 rounded-xl bg-blue-600 hover:bg-blue-500 font-bold text-[14px] flex justify-center items-center gap-2 shadow-[0_0_18px_rgba(37,99,235,.45)]">{isSubmitting ? <Loader2 size={16} className="animate-spin" /> : '儲存本日紀錄'}</button>
+          </form>
         </div>
 
-        {/* Right Column: Funnel & Analysis */}
-        <div className="lg:col-span-2 space-y-6">
-          <Card className="p-6 h-full flex flex-col">
-            <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2">
-              <Filter className={viewMode === 'sales' ? 'text-indigo-500' : 'text-teal-500'} size={20}/> 
-              {viewMode === 'sales' ? '銷售漏斗分析與轉換率' : '增員漏斗分析與轉換率'} ({periodMode === 'month' ? selectedMonth : `${periodRange.start} ~ ${periodRange.end}`})
-            </h3>
-            <div className="flex-1 min-h-[350px]">
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={viewMode === 'sales' ? chartData : recruitChartData} layout="vertical" margin={{ top: 5, right: 30, left: 40, bottom: 5 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={true} vertical={false} stroke="#f0f0f0"/>
-                  <XAxis type="number" hide />
-                  <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} tick={{fill: '#4B5563', fontSize: 12, fontWeight: 'bold'}} />
-                  <Tooltip 
-                    cursor={{fill: '#f9fafb'}} 
-                    contentStyle={{borderRadius: '12px', border: 'none', boxShadow: '0 10px 20px rgba(0,0,0,0.1)'}}
-                    formatter={(value) => [value, '次數']}
-                  />
-                  <Bar dataKey="count" radius={[0, 8, 8, 0]} barSize={32} label={{ position: 'right', fill: '#6B7280', fontWeight: 'bold' }}>
-                    {(viewMode === 'sales' ? chartData : recruitChartData).map((entry, index) => (
-                      <Cell key={`cell-${index}`} fill={(viewMode === 'sales' ? chartColors : recruitChartColors)[index % (viewMode === 'sales' ? chartColors : recruitChartColors).length]} />
-                    ))}
-                  </Bar>
-                </BarChart>
-              </ResponsiveContainer>
-            </div>
-            
-            {/* Conversion Rates */}
-            {viewMode === 'sales' ? (
-              <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-gray-100">
-                 <div className="text-center">
-                   <p className="text-[10px] font-bold text-gray-400 uppercase">準客戶轉換約訪</p>
-                   <p className="text-lg font-bold text-indigo-600 mt-1">
-                     {stats.totals.prospect > 0 ? Math.round((stats.totals.appointment / stats.totals.prospect) * 100) : 0}%
-                   </p>
-                 </div>
-                 <div className="text-center border-l border-gray-100">
-                   <p className="text-[10px] font-bold text-gray-400 uppercase">約訪轉換面談</p>
-                   <p className="text-lg font-bold text-violet-600 mt-1">
-                     {stats.totals.appointment > 0 ? Math.round((stats.totals.interview / stats.totals.appointment) * 100) : 0}%
-                   </p>
-                 </div>
-                 <div className="text-center border-l border-gray-100 bg-rose-50/50 rounded-lg p-2">
-                   <p className="text-[10px] font-bold text-rose-500 uppercase">成交率 (C) = 發單/面談</p>
-                   <p className="text-xl font-bold text-rose-600 mt-1">
-                     {(stats.C * 100).toFixed(1)}%
-                   </p>
-                 </div>
-              </div>
-            ) : (
-              <div className="grid grid-cols-3 gap-4 mt-6 pt-6 border-t border-gray-100">
-                 <div className="text-center">
-                   <p className="text-[10px] font-bold text-gray-400 uppercase">準增員轉換約訪</p>
-                   <p className="text-lg font-bold text-teal-600 mt-1">
-                     {stats.recruitTotals.newRecruitProspect > 0 ? Math.round((stats.recruitTotals.recruitContact / stats.recruitTotals.newRecruitProspect) * 100) : 0}%
-                   </p>
-                 </div>
-                 <div className="text-center border-l border-gray-100">
-                   <p className="text-[10px] font-bold text-gray-400 uppercase">約訪轉換面談</p>
-                   <p className="text-lg font-bold text-cyan-600 mt-1">
-                     {stats.recruitTotals.recruitContact > 0 ? Math.round((stats.recruitTotals.recruitInterview / stats.recruitTotals.recruitContact) * 100) : 0}%
-                   </p>
-                 </div>
-                 <div className="text-center border-l border-gray-100 bg-blue-50/50 rounded-lg p-2">
-                   <p className="text-[10px] font-bold text-blue-500 uppercase">面談轉登錄率 (C)</p>
-                   <p className="text-xl font-bold text-blue-600 mt-1">
-                     {(stats.recruitConversion * 100).toFixed(1)}%
-                   </p>
-                 </div>
-              </div>
-            )}
-          </Card>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl p-4 flex flex-col min-h-0">
+          <p className="font-bold text-[15px] flex items-center gap-2 shrink-0"><Filter size={16} className={viewMode === 'sales' ? 'text-blue-300' : 'text-teal-300'} />{viewMode === 'sales' ? '銷售漏斗分析與轉換率' : '增員漏斗分析與轉換率'} <span className="text-white/45 font-normal text-[13px]">({periodMode === 'month' ? selectedMonth : `${periodRange.start} ~ ${periodRange.end}`})</span></p>
+          <div className="flex-1 min-h-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <BarChart data={viewMode === 'sales' ? chartData : recruitChartData} layout="vertical" margin={{ top: 4, right: 36, left: 28, bottom: 0 }}>
+                <CartesianGrid strokeDasharray="3 3" horizontal={false} stroke="rgba(255,255,255,.08)" />
+                <XAxis type="number" tick={{ fill: 'rgba(255,255,255,.4)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis dataKey="name" type="category" axisLine={false} tickLine={false} width={70} tick={{ fill: 'rgba(255,255,255,.8)', fontSize: 12, fontWeight: 600 }} />
+                <Tooltip cursor={{ fill: 'rgba(255,255,255,.05)' }} contentStyle={{ background: '#0d1124', border: '1px solid rgba(255,255,255,.15)', borderRadius: 10, color: '#fff', fontSize: 12 }} formatter={(value) => [value, '次數']} />
+                <Bar dataKey="count" radius={[0, 8, 8, 0]} barSize={20} animationDuration={1100} label={{ position: 'right', fill: 'rgba(255,255,255,.85)', fontWeight: 'bold', fontSize: 13 }}>
+                  {(viewMode === 'sales' ? chartData : recruitChartData).map((entry, index) => {
+                    const arr = viewMode === 'sales' ? chartColors : recruitChartColors;
+                    return <Cell key={`cell-${index}`} fill={arr[index % arr.length]} />;
+                  })}
+                </Bar>
+              </BarChart>
+            </ResponsiveContainer>
+          </div>
+          <div className="grid grid-cols-3 gap-3 shrink-0 mt-1.5 pt-2 border-t border-white/10 text-center">
+            {viewMode === 'sales' ? (<>
+              <div><p className="text-[11px] text-white/50">準客戶轉換約訪</p><p className="text-[20px] font-bold text-blue-300">{stats.totals.prospect > 0 ? Math.round((stats.totals.appointment / stats.totals.prospect) * 100) : 0}%</p></div>
+              <div className="border-l border-white/10"><p className="text-[11px] text-white/50">約訪轉換面談</p><p className="text-[20px] font-bold text-violet-300">{stats.totals.appointment > 0 ? Math.round((stats.totals.interview / stats.totals.appointment) * 100) : 0}%</p></div>
+              <div className="rounded-xl border border-rose-400/30 bg-rose-500/10"><p className="text-[11px] text-rose-300">成交率 (C) = 發單/面談</p><p className="text-[20px] font-bold text-rose-300">{(stats.C * 100).toFixed(1)}%</p></div>
+            </>) : (<>
+              <div><p className="text-[11px] text-white/50">準增員轉換約訪</p><p className="text-[20px] font-bold text-teal-300">{stats.recruitTotals.newRecruitProspect > 0 ? Math.round((stats.recruitTotals.recruitContact / stats.recruitTotals.newRecruitProspect) * 100) : 0}%</p></div>
+              <div className="border-l border-white/10"><p className="text-[11px] text-white/50">約訪轉換面談</p><p className="text-[20px] font-bold text-cyan-300">{stats.recruitTotals.recruitContact > 0 ? Math.round((stats.recruitTotals.recruitInterview / stats.recruitTotals.recruitContact) * 100) : 0}%</p></div>
+              <div className="rounded-xl border border-blue-400/30 bg-blue-500/10"><p className="text-[11px] text-blue-300">面談轉登錄率 (C)</p><p className="text-[20px] font-bold text-blue-300">{(stats.recruitConversion * 100).toFixed(1)}%</p></div>
+            </>)}
+          </div>
         </div>
-        
-        {/* 各商品線業績分析 Table (僅業務模式顯示) */}
-        {viewMode === 'sales' && (
-        <Card className="p-6 col-span-1 lg:col-span-3 border-t-4 border-t-emerald-500">
-          <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2">
-            <PieChartIcon className="text-emerald-500" size={20}/>
-            各商品線業績分析 ({periodMode === 'month' ? selectedMonth : `${periodRange.start} ~ ${periodRange.end}`})
-          </h3>
-          <div className="overflow-x-auto">
-             <table className="w-full text-left">
-                <thead>
-                   <tr className="bg-gray-50 text-xs font-bold text-gray-500 uppercase">
-                      <th className="px-4 py-3 rounded-l-lg">商品線</th>
-                      <th className="px-4 py-3 text-right">實收保費</th>
-                      <th className="px-4 py-3 text-right">首獎 (FYC)</th>
-                      <th className="px-4 py-3 text-center">佔比</th>
-                      <th className="px-4 py-3 text-center">件數</th>
-                      <th className="px-4 py-3 text-right rounded-r-lg">件均保費 (P)</th>
-                   </tr>
-                </thead>
-                <tbody className="divide-y divide-gray-100">
-                   {stats.productLines.map(line => (
-                      <tr key={line.label} className="hover:bg-gray-50">
-                         <td className="px-4 py-4 font-bold text-gray-900 flex items-center gap-2">
-                           <div className={`w-2 h-2 rounded-full ${line.label.includes('AH') ? 'bg-emerald-500' : line.label.includes('RP') ? 'bg-blue-500' : 'bg-amber-500'}`}></div>
-                           {line.label}
-                         </td>
-                         <td className="px-4 py-4 text-right text-gray-700 font-mono font-medium">{formatMoney(line.premium)}</td>
-                         <td className="px-4 py-4 text-right text-indigo-600 font-mono font-medium">{formatMoney(line.fyc)}</td>
-                         <td className="px-4 py-4 text-center text-gray-600 font-bold">{(line.ratio * 100).toFixed(1)}%</td>
-                         <td className="px-4 py-4 text-center text-gray-600 font-bold">{line.cases}</td>
-                         <td className="px-4 py-4 text-right text-gray-700 font-mono font-medium">{formatMoney(line.avg)}</td>
-                      </tr>
-                   ))}
-                   <tr className="bg-gray-100 font-bold">
-                      <td className="px-4 py-4 text-gray-900">總計</td>
-                      <td className="px-4 py-4 text-right text-gray-900 font-mono">{formatMoney(stats.totalPremium)}</td>
-                      <td className="px-4 py-4 text-right text-indigo-600 font-mono">{formatMoney(stats.totalFYC)}</td>
-                      <td className="px-4 py-4 text-center text-gray-900">100%</td>
-                      <td className="px-4 py-4 text-center text-gray-900">{stats.productLines.reduce((acc, l) => acc + l.cases, 0)}</td>
-                      <td className="px-4 py-4 text-right text-gray-900 font-mono">{formatMoney(stats.P)}</td>
-                   </tr>
+      </div>
+
+      {/* 商品線＋動態趨勢 */}
+      <div className="grid grid-cols-[1fr_1.05fr] gap-3 flex-1 min-h-0">
+        <div className="rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl p-4 flex flex-col min-h-0">
+          <p className="font-bold text-[15px] flex items-center gap-2 shrink-0 mb-2"><PieChartIcon size={16} className="text-emerald-300" />各商品線業績分析 <span className="text-white/45 font-normal text-[13px]">({periodMode === 'month' ? selectedMonth : `${periodRange.start} ~ ${periodRange.end}`})</span></p>
+          {viewMode === 'sales' ? (
+            <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar">
+              <table className="w-full text-[13px]">
+                <thead className="text-white/45 text-[11.5px]"><tr className="text-right"><th className="text-left font-normal pb-1.5">商品線</th><th className="font-normal pb-1.5">實收保費</th><th className="font-normal pb-1.5">首年 (FYC)</th><th className="font-normal pb-1.5 text-center">佔比</th><th className="font-normal pb-1.5 text-center">件數</th><th className="font-normal pb-1.5">件均保費 (P)</th></tr></thead>
+                <tbody>
+                  {stats.productLines.map(line => (
+                    <tr key={line.label} className="border-t border-white/[0.07] text-right">
+                      <td className="py-1.5 text-left font-semibold whitespace-nowrap"><i className={`inline-block w-2 h-2 rounded-full mr-2 ${line.label.includes('AH') ? 'bg-emerald-400' : line.label.includes('RP') ? 'bg-blue-400' : 'bg-amber-400'}`} />{line.label}</td>
+                      <td className="tabular-nums">{formatMoney(line.premium)}</td><td className="tabular-nums text-indigo-300">{formatMoney(line.fyc)}</td>
+                      <td className="text-center text-white/70">{(line.ratio * 100).toFixed(1)}%</td><td className="text-center text-white/70">{line.cases}</td><td className="tabular-nums">{formatMoney(line.avg)}</td>
+                    </tr>
+                  ))}
+                  <tr className="border-t border-white/20 font-bold text-right"><td className="py-1.5 text-left">總計</td><td className="tabular-nums">{formatMoney(stats.totalPremium)}</td><td className="tabular-nums text-indigo-300">{formatMoney(stats.totalFYC)}</td><td className="text-center">100%</td><td className="text-center">{stats.productLines.reduce((acc, l) => acc + l.cases, 0)}</td><td className="tabular-nums">{formatMoney(stats.P)}</td></tr>
                 </tbody>
-             </table>
-          </div>
-        </Card>
-        )}
+              </table>
+            </div>
+          ) : <p className="text-white/40 text-sm text-center py-8">增員模式沒有商品線資料，請切換到「業務」</p>}
+        </div>
 
-        {/* 歷史趨勢圖 (近6個月) */}
-        <Card className="p-6 col-span-1 lg:col-span-3 border-t-4 border-t-indigo-500">
-          <h3 className="font-bold text-gray-800 mb-6 flex items-center gap-2">
-            <TrendingUp className="text-indigo-500" size={20} />
-            近6個月趨勢
-          </h3>
-          <ResponsiveContainer width="100%" height={240}>
-            <LineChart data={monthlyTrend}>
-              <CartesianGrid strokeDasharray="3 3" stroke="#F3F4F6" />
-              <XAxis dataKey="month" tick={{ fontSize: 11 }} />
-              <YAxis tick={{ fontSize: 11 }} />
-              <Tooltip />
-              <Legend wrapperStyle={{ fontSize: 12 }} />
-              <Line type="monotone" dataKey="weighted" name="加權保費" stroke="#4F46E5" strokeWidth={2} dot={{ r: 3 }} />
-              <Line type="monotone" dataKey="fyc" name="FYC(佣金)" stroke="#F59E0B" strokeWidth={2} dot={{ r: 3 }} />
-              <Line type="monotone" dataKey="points" name="活動分數" stroke="#10B981" strokeWidth={2} dot={{ r: 3 }} />
-            </LineChart>
-          </ResponsiveContainer>
-        </Card>
+        <div className="rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl p-4 flex flex-col min-h-0">
+          <p className="font-bold text-[15px] flex items-center gap-2 shrink-0"><TrendingUp size={16} className="text-blue-300" />近6個月趨勢<span className="ml-auto flex items-center gap-1.5 text-[11px] text-emerald-300 font-semibold"><i className="w-1.5 h-1.5 rounded-full bg-emerald-400 jf-live-dot" />即時</span></p>
+          <div className="flex-1 min-h-0">
+            <ResponsiveContainer width="100%" height="100%">
+              <ComposedChart data={monthlyTrend} margin={{ top: 10, right: 6, left: -8, bottom: 0 }}>
+                <defs>
+                  {[['gW', '#60a5fa'], ['gF', '#fbbf24'], ['gP', '#34d399']].map(([id, c]) => <linearGradient key={id} id={id} x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor={c} stopOpacity={0.35} /><stop offset="100%" stopColor={c} stopOpacity={0} /></linearGradient>)}
+                </defs>
+                <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.07)" vertical={false} />
+                <XAxis dataKey="month" tick={{ fill: 'rgba(255,255,255,.5)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <YAxis yAxisId="l" tick={{ fill: 'rgba(255,255,255,.4)', fontSize: 11 }} axisLine={false} tickLine={false} tickFormatter={(v) => v >= 10000 ? (v / 10000) + '萬' : v} />
+                <YAxis yAxisId="r" orientation="right" tick={{ fill: 'rgba(52,211,153,.6)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <Tooltip contentStyle={{ background: '#0d1124', border: '1px solid rgba(255,255,255,.15)', borderRadius: 10, color: '#fff', fontSize: 12 }} />
+                <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" />
+                <Area yAxisId="l" type="monotone" dataKey="weighted" legendType="none" tooltipType="none" stroke="none" fill="url(#gW)" animationDuration={1600} />
+                <Area yAxisId="r" type="monotone" dataKey="points" legendType="none" tooltipType="none" stroke="none" fill="url(#gP)" animationDuration={1600} />
+                <Line yAxisId="l" type="monotone" dataKey="weighted" name="加權保費" stroke="#60a5fa" strokeWidth={3} dot={<GlowDot color="#60a5fa" total={monthlyTrend.length} />} activeDot={{ r: 7, strokeWidth: 3, stroke: '#fff' }} animationDuration={1800} style={{ filter: 'drop-shadow(0 0 7px rgba(96,165,250,.8))' }} />
+                <Line yAxisId="l" type="monotone" dataKey="fyc" name="FYC(佣金)" stroke="#fbbf24" strokeWidth={3} dot={<GlowDot color="#fbbf24" total={monthlyTrend.length} />} activeDot={{ r: 7, strokeWidth: 3, stroke: '#fff' }} animationDuration={1800} style={{ filter: 'drop-shadow(0 0 7px rgba(251,191,36,.7))' }} />
+                <Line yAxisId="r" type="monotone" dataKey="points" name="活動分數" stroke="#34d399" strokeWidth={3} dot={<GlowDot color="#34d399" total={monthlyTrend.length} />} activeDot={{ r: 7, strokeWidth: 3, stroke: '#fff' }} animationDuration={1800} style={{ filter: 'drop-shadow(0 0 7px rgba(52,211,153,.7))' }} />
+                <Line yAxisId="l" type="monotone" dataKey="weighted" legendType="none" tooltipType="none" stroke="#fff" strokeOpacity={0.7} strokeWidth={2} dot={false} activeDot={false} isAnimationActive={false} className="jf-flow-line" />
+                <Line yAxisId="l" type="monotone" dataKey="fyc" legendType="none" tooltipType="none" stroke="#fff" strokeOpacity={0.6} strokeWidth={2} dot={false} activeDot={false} isAnimationActive={false} className="jf-flow-line jf-flow-b" />
+                <Line yAxisId="r" type="monotone" dataKey="points" legendType="none" tooltipType="none" stroke="#fff" strokeOpacity={0.6} strokeWidth={2} dot={false} activeDot={false} isAnimationActive={false} className="jf-flow-line jf-flow-c" />
+              </ComposedChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
       </div>
     </div>
     </>
@@ -2993,6 +2823,359 @@ const MobileRecruitView = ({ recruits, team, status, updateRecruit, toggleDoc, o
           </div>
         </div>
       )}
+    </div>
+  );
+};
+
+// ================= 電腦版：吳政翰專屬總覽（一頁看完，不用上下捲動）=================
+const getRecruitStatus = (r) => {
+  if (r.isPromoted) return '登錄';
+  const d = r.dates || {}, t = getTodayDate();
+  if (d.trainingDate && d.trainingDate <= t) return '優培';
+  if (d.registeredDate && d.registeredDate <= t) return '登錄';
+  if (d.externalExamDate && d.externalExamDate <= t) return '外考';
+  if (d.internalExamDate && d.internalExamDate <= t) return '內考';
+  if (d.tempAccountDate && d.tempAccountDate <= t) return '臨時帳號';
+  return '新名單';
+};
+
+const OvDonut = ({ parts, size = 150, centerTop, centerBottom, thickness = 18 }) => {
+  const total = parts.reduce((s, p) => s + p.v, 0);
+  const R = (size - thickness) / 2, C = 2 * Math.PI * R;
+  let acc = 0;
+  return (
+    <div className="relative shrink-0" style={{ width: size, height: size }}>
+      <svg width={size} height={size} viewBox={`0 0 ${size} ${size}`} className="-rotate-90">
+        <circle cx={size / 2} cy={size / 2} r={R} fill="none" stroke="rgba(255,255,255,.08)" strokeWidth={thickness} />
+        {total > 0 && parts.filter(p => p.v > 0).map((p, i) => {
+          const len = p.v / total * C; const off = acc; acc += len;
+          return <circle key={i} cx={size / 2} cy={size / 2} r={R} fill="none" stroke={p.color} strokeWidth={thickness} strokeDasharray={`${Math.max(0, len - 3)} ${C}`} strokeDashoffset={-off} strokeLinecap="round" style={{ transition: 'stroke-dasharray .8s ease' }} />;
+        })}
+      </svg>
+      <div className="absolute inset-0 flex flex-col items-center justify-center text-center">
+        <span className={`font-black leading-none ${String(centerTop).length > 6 ? 'text-[19px]' : 'text-[28px]'}`}>{centerTop}</span>
+        <span className="text-[11px] text-white/55 mt-1">{centerBottom}</span>
+      </div>
+    </div>
+  );
+};
+
+const OverviewPage = ({ loggedInUser, team, records, activities, recruits, season, rankTargets }) => {
+  const today = getTodayDate();
+  const month = today.slice(0, 7);
+  const [section, setSection] = useState('overview');
+  const [goals, setGoals] = useState(PERSONAL_GOALS_DEFAULT);
+
+  useEffect(() => {
+    if (!loggedInUser) return;
+    const unsub = onSnapshot(doc(db, 'personal_goals', `${loggedInUser.id}_${month}`), (snap) => {
+      setGoals(snap.exists() ? { ...PERSONAL_GOALS_DEFAULT, ...snap.data() } : PERSONAL_GOALS_DEFAULT);
+    });
+    return () => unsub();
+  }, [loggedInUser?.id, month]);
+
+  const members = useMemo(() => getDistrictMembers(team, '吳政翰'), [team]);
+  const ids = useMemo(() => new Set(members.map(m => String(m.id))), [members]);
+  const nameOf = (id) => team.find(m => String(m.id) === String(id))?.name || '—';
+  const money = (n) => n >= 1000000 ? '$' + (n / 1000000).toFixed(2) + 'M' : n >= 10000 ? '$' + (n / 10000).toFixed(1) + '萬' : '$' + Math.round(n || 0).toLocaleString();
+  const pct = (a, b) => b > 0 ? Math.min(100, Math.round(a / b * 100)) : 0;
+
+  // ---- 案件 ----
+  const distRecords = useMemo(() => (records || []).filter(r => ids.has(String(r.agentId))), [records, ids]);
+  const ageOf = (r) => Math.max(0, Math.floor((new Date(today) - new Date(r.date)) / 86400000));
+  const pending = useMemo(() => distRecords.filter(r => (r.status || '已發單') === '受理中').map(r => ({ r, days: ageOf(r) })).sort((a, b) => b.days - a.days), [distRecords, today]);
+  const pendingPremium = pending.reduce((s, x) => s + (x.r.premium || 0), 0);
+  const stuck = pending.filter(x => x.days >= 15).length;
+  const monthIssued = distRecords.filter(r => (r.status || '已發單') === '已發單' && (r.date || '').startsWith(month));
+  const monthIssuedPremium = monthIssued.reduce((s, r) => s + (r.premium || 0), 0);
+  const buckets = WAR_AGE_BUCKETS.map((b, i) => {
+    const prev = i === 0 ? -1 : WAR_AGE_BUCKETS[i - 1].max;
+    const list = pending.filter(x => x.days > prev && x.days <= b.max);
+    return { ...b, n: list.length, prem: list.reduce((s, x) => s + (x.r.premium || 0), 0) };
+  });
+  const recentCases = useMemo(() => distRecords.slice(0, 40), [distRecords]);
+
+  // ---- 活動量 ----
+  const actRows = useMemo(() => members.map(m => ({ m, today: pointsOnDate(activities, m.id, today), week: weekPoints(activities, m.id, today), month: monthPoints(activities, m.id, today) })).sort((a, b) => b.today - a.today || b.week - a.week), [members, activities, today]);
+  const reached = actRows.filter(r => r.today >= DAILY_TARGET).length;
+  const emptyToday = actRows.filter(r => r.today === 0).length;
+  const weekAvg = actRows.length ? Math.round(actRows.reduce((s, r) => s + Math.min(1, r.week / WEEKLY_TARGET), 0) / actRows.length * 100) : 0;
+  const monthTotal = actRows.reduce((s, r) => s + r.month, 0);
+
+  // ---- 競賽 ----
+  const seasonMonths = (season === 'H1' ? AVAILABLE_MONTHS_H1 : AVAILABLE_MONTHS_H2).map(m => m.value);
+  const targets = (season === 'H1' ? rankTargets?.H1 : rankTargets?.H2) || {};
+  const contestRows = useMemo(() => members.map(m => {
+    const role = (season === 'H2' && H2_ROLE_MAPPING[m.name]) ? H2_ROLE_MAPPING[m.name] : m.role;
+    const t = targets[role] || targets['業務代表'] || { peak: { total: 0 }, summit: { total: 0 } };
+    let w = 0, p = 0;
+    distRecords.forEach(r => { if (String(r.agentId) === String(m.id) && seasonMonths.includes((r.date || '').slice(0, 7))) { w += r.weighted || 0; p += r.premium || 0; } });
+    const pk = Math.max(pct(w, t.peak?.total), t.peak?.actualPremium > 0 ? pct(p, t.peak.actualPremium) : 0);
+    const sm = Math.max(pct(w, t.summit?.total), t.summit?.actualPremium > 0 ? pct(p, t.summit.actualPremium) : 0);
+    return { m, role, w, p, t, pk, sm };
+  }).sort((a, b) => b.pk - a.pk), [members, distRecords, season, rankTargets]);
+  const peakDone = contestRows.filter(r => r.pk >= 100).length;
+  const contestAvg = contestRows.length ? Math.round(contestRows.reduce((s, r) => s + r.pk, 0) / contestRows.length) : 0;
+
+  // ---- 優培 ----
+  const qualRows = useMemo(() => members.map(m => ({ m, q: getQualityInfo(m, records) })).filter(x => x.q), [members, records]);
+  const qualActive = qualRows.filter(x => x.q.state === 'active').length;
+  const qualUnset = qualRows.filter(x => x.q.state === 'unset').length;
+
+  // ---- 增員 ----
+  const recList = useMemo(() => (recruits || []).filter(r => !r.recruiterId || ids.has(String(r.recruiterId)) || true).map(r => ({ ...r, st: getRecruitStatus(r) })), [recruits]);
+  const stageIdx = (r) => r.isPromoted ? 4 : RECRUIT_STATUSES.indexOf(r.st);
+  const stageCount = RECRUIT_STATUSES.map((s, i) => recList.filter(r => r.st === s).length);
+  const monthReg = recList.filter(r => stageIdx(r) >= 4 && (r.dates?.registeredDate || '').startsWith(month)).length;
+  const yearReg = recList.filter(r => stageIdx(r) >= 4).length;
+  const nextDate = (r) => {
+    const c = RECRUIT_DATE_FIELDS.map(f => ({ label: f.label, d: r.dates?.[f.key] })).filter(x => x.d && x.d >= today).sort((a, b) => a.d.localeCompare(b.d))[0];
+    return c ? `${c.label} ${c.d.slice(5).replace('-', '/')}` : '—';
+  };
+
+  // ---- 個人目標 ----
+  const myRecs = distRecords.filter(r => String(r.agentId) === String(loggedInUser.id) && (r.date || '').startsWith(month));
+  const mySales = myRecs.reduce((s, r) => s + (goals.salesBasis === 'premium' ? (r.premium || 0) : (r.weighted || 0)), 0);
+  const myIncome = myRecs.filter(r => (r.status || '已發單') === '已發單').reduce((s, r) => s + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0);
+  const myRecruit = (activities || []).filter(a => a.agentId === loggedInUser.id && a.month === month).reduce((s, a) => s + (a.recruitRegistered || 0), 0);
+
+  const card = 'rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl';
+  const Panel = ({ title, icon: Ic, tone = 'text-blue-300', right, children, className = '' }) => (
+    <div className={`${card} p-4 flex flex-col min-h-0 min-w-0 ${className}`}>
+      <div className="flex items-center justify-between mb-2.5 shrink-0">
+        <p className="font-bold text-[15px] flex items-center gap-2"><Ic size={17} className={tone} />{title}</p>{right}
+      </div>
+      <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar">{children}</div>
+    </div>
+  );
+  const more = (k) => <button type="button" onClick={() => setSection(k)} className="text-[12px] text-white/50 hover:text-white flex items-center">詳情<ChevronRight size={14} /></button>;
+  const Bar = ({ v, color, h = 6 }) => <div className="rounded-full bg-white/10 overflow-hidden" style={{ height: h }}><div className="h-full rounded-full transition-all duration-700" style={{ width: `${Math.min(100, v)}%`, background: color }} /></div>;
+  const StatusPill = ({ s }) => <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold border ${s === '已發單' ? 'text-emerald-300 border-emerald-400/50 bg-emerald-500/10' : 'text-amber-300 border-amber-400/50 bg-amber-500/10'}`}>{s}</span>;
+
+  const KPI = ({ icon: Ic, label, value, unit, sub, color }) => (
+    <div className={`${card} p-3.5 flex items-center gap-3 min-w-0`}>
+      <span className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: color + '26', color }}><Ic size={24} /></span>
+      <div className="min-w-0"><p className="text-[12px] text-white/60 truncate">{label}</p><p className="leading-none mt-1.5 whitespace-nowrap"><span className="text-[26px] font-black">{value}</span>{unit && <span className="text-[13px] text-white/55 ml-1">{unit}</span>}</p><p className="text-[11px] text-white/45 mt-1 truncate">{sub}</p></div>
+    </div>
+  );
+
+  // ---- 面板內容 ----
+  const casesDonut = (
+    <div className="flex items-center gap-5 h-full">
+      <OvDonut parts={buckets.map(b => ({ v: b.n, color: b.color }))} centerTop={pending.length} centerBottom="受理中案件" />
+      <div className="flex-1 min-w-0 space-y-2">
+        {buckets.map(b => (
+          <div key={b.key} className="flex items-center gap-2 text-[13px]"><i className="w-2.5 h-2.5 rounded-sm shrink-0" style={{ background: b.color }} /><span className="w-[70px] text-white/80">{b.label}</span><span className="font-semibold w-8 text-right">{b.n}</span><span className="text-white/45 w-10 text-right">{pending.length ? Math.round(b.n / pending.length * 100) : 0}%</span><span className="ml-auto text-white/70 tabular-nums">{money(b.prem)}</span></div>
+        ))}
+      </div>
+    </div>
+  );
+  const contestList = (limit) => (
+    <div className="space-y-2.5">
+      {contestRows.slice(0, limit).map(r => (
+        <div key={r.m.id} className="flex items-center gap-3">
+          <Avatar name={r.m.name} size={32} />
+          <div className="flex-1 min-w-0">
+            <div className="flex justify-between text-[12.5px] mb-1"><span className="font-semibold truncate">{r.m.name}<span className="text-white/40 font-normal ml-1.5">{r.role}</span></span><span className="tabular-nums text-white/70">{money(r.w)} · <b className={r.pk >= 100 ? 'text-emerald-300' : 'text-white'}>{r.pk}%</b></span></div>
+            <div className="relative"><Bar v={r.pk} color={r.pk >= 100 ? '#34d399' : 'linear-gradient(90deg,#60a5fa,#818cf8)'} h={7} />{r.sm > 0 && <div className="absolute top-0 h-[7px] rounded-full bg-amber-300/80" style={{ width: `${Math.min(100, r.sm)}%`, opacity: .55 }} />}</div>
+          </div>
+        </div>
+      ))}
+      {contestRows.length === 0 && <p className="text-white/40 text-sm text-center py-6">目前沒有資料</p>}
+    </div>
+  );
+  const caseTable = (limit) => (
+    <table className="w-full text-[13px]">
+      <thead className="text-white/40 text-[11.5px]"><tr className="text-left"><th className="font-normal pb-2">姓名</th><th className="font-normal pb-2">日期</th><th className="font-normal pb-2">商品</th><th className="font-normal pb-2 text-right">保費</th><th className="font-normal pb-2 pl-3">狀態</th><th className="font-normal pb-2 pl-3 w-[18%]">帳齡</th></tr></thead>
+      <tbody>
+        {recentCases.slice(0, limit).map(r => { const d = ageOf(r); const pend = (r.status || '已發單') === '受理中'; return (
+          <tr key={r.id} className="border-t border-white/[0.07]">
+            <td className="py-1.5 whitespace-nowrap"><span className="flex items-center gap-2"><Avatar name={r.agentName} size={26} /><span className="font-semibold">{r.agentName}</span></span></td>
+            <td className="text-white/65 tabular-nums whitespace-nowrap pr-2">{(r.date || '').slice(5)}</td>
+            <td className="text-white/80 truncate max-w-[130px]">{r.product || '—'}</td>
+            <td className="text-right tabular-nums whitespace-nowrap">{money(r.premium)}</td>
+            <td className="pl-3 whitespace-nowrap"><StatusPill s={r.status || '已發單'} /></td>
+            <td className="pl-3">{pend ? <Bar v={Math.min(100, d / 20 * 100)} color={d >= 15 ? '#fb7185' : d >= 8 ? '#fbbf24' : '#34d399'} /> : <span className="text-white/30 text-xs">—</span>}</td>
+          </tr>); })}
+      </tbody>
+    </table>
+  );
+  const activityList = (limit) => (
+    <div className="space-y-2.5">
+      {actRows.slice(0, limit).map(r => { const tone = r.today >= DAILY_TARGET ? '#34d399' : r.today > 0 ? '#fbbf24' : '#fb7185'; return (
+        <div key={r.m.id} className="flex items-center gap-3">
+          <Avatar name={r.m.name} size={32} style={{ border: `2px solid ${tone}88` }} />
+          <div className="flex-1 min-w-0 grid grid-cols-2 gap-4">
+            <div><div className="flex justify-between text-[12px] mb-1"><span className="font-semibold truncate">{r.m.name}</span><span className="tabular-nums text-white/70">今日 {r.today}/{DAILY_TARGET}</span></div><Bar v={r.today / DAILY_TARGET * 100} color={tone} /></div>
+            <div><div className="flex justify-between text-[12px] mb-1"><span className="text-white/45">本週</span><span className="tabular-nums text-white/70">{r.week}/{WEEKLY_TARGET}</span></div><Bar v={r.week / WEEKLY_TARGET * 100} color="#818cf8" /></div>
+          </div>
+        </div>); })}
+    </div>
+  );
+  const qualityList = (limit) => (
+    qualRows.length === 0 ? <p className="text-white/40 text-sm text-center py-6">目前沒有進行中的優培</p> :
+    <div className="space-y-3">
+      {qualRows.slice(0, limit).map(({ m, q }) => (
+        <div key={m.id} className="flex items-center gap-3">
+          <Avatar name={m.name} size={32} />
+          <div className="flex-1 min-w-0">
+            {q.state === 'active' ? (<>
+              <div className="flex justify-between text-[12px] mb-1"><span className="font-semibold">{m.name}<span className="text-amber-300 font-normal ml-1.5">第 {q.stage} 階段</span></span><span className="text-white/60 tabular-nums">FYC {pct(q.fyc, q.fycTarget)}% · 被保人 {q.insured}/{q.insuredTarget}</span></div>
+              <Bar v={pct(q.fyc, q.fycTarget)} color="#fbbf24" />
+              <div className="mt-1"><Bar v={pct(q.insured, q.insuredTarget)} color="#fb923c" h={4} /></div>
+            </>) : <div className="flex justify-between text-[12.5px]"><span className="font-semibold">{m.name}</span><span className={q.state === 'upcoming' ? 'text-white/50' : 'text-rose-300'}>{q.state === 'upcoming' ? `優培 ${q.start} 開始` : '期別尚未填寫'}</span></div>}
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+  const recruitFunnel = (
+    <div className="grid grid-cols-6 gap-1.5 text-center">
+      {RECRUIT_STATUSES.map((s, i) => (
+        <div key={s}>
+          <div className={`h-8 flex items-center justify-center text-[10.5px] font-bold text-white whitespace-nowrap bg-gradient-to-r ${RECRUIT_STAGE_TONE[s].g}`} style={{ clipPath: 'polygon(0 0, 88% 0, 100% 50%, 88% 100%, 0 100%, 10% 50%)' }}>{s === '臨時帳號' ? '臨時' : s}</div>
+          <p className="text-[22px] font-black mt-1.5 leading-none">{stageCount[i]}</p>
+          <p className="text-[10.5px] text-white/45 mt-1">人</p>
+        </div>
+      ))}
+    </div>
+  );
+  const recruitList = (limit) => (
+    <div>
+      {[...recList].sort((a, b) => stageIdx(b) - stageIdx(a)).slice(0, limit).map(r => (
+        <div key={r.id} className="grid grid-cols-[1.2fr_78px_1fr_auto] items-center gap-2 py-2 border-t border-white/[0.07] text-[13px]">
+          <span className="flex items-center gap-2 min-w-0"><Avatar name={r.name} size={26} /><span className="font-semibold truncate">{r.name}</span></span>
+          <span className="px-2 py-0.5 rounded-md text-[11px] font-bold border text-center" style={{ color: RECRUIT_STAGE_TONE[r.st].c, borderColor: RECRUIT_STAGE_TONE[r.st].c + '66', background: RECRUIT_STAGE_TONE[r.st].c + '1a' }}>{r.st}</span>
+          <span className="text-white/60 truncate">{nextDate(r)}</span>
+          <span className="flex items-center gap-1.5 text-white/55"><Avatar name={nameOf(r.recruiterId)} size={20} />{nameOf(r.recruiterId)}</span>
+        </div>
+      ))}
+      {recList.length === 0 && <p className="text-white/40 text-sm text-center py-6">目前沒有準增員</p>}
+    </div>
+  );
+  const goalRows = [
+    { l: '業績（' + (goals.salesBasis === 'premium' ? '實收' : '加權') + '）', a: mySales, t: goals.salesTarget, money: true, c: '#60a5fa', icon: TrendingUp },
+    { l: '增員人數', a: myRecruit, t: goals.recruitTarget, unit: '人', c: '#2dd4bf', icon: Users },
+    { l: '預估收入', a: Math.round(myIncome), t: goals.incomeTarget, money: true, c: '#fbbf24', icon: Award },
+  ];
+  const goalPanel = (
+    <div className="space-y-2.5">
+      {goalRows.map(g => (
+        <div key={g.l} className="rounded-xl bg-white/[0.045] border border-white/[0.07] px-3 py-2.5">
+          <div className="flex items-center justify-between text-[13px]"><span className="flex items-center gap-2"><g.icon size={15} style={{ color: g.c }} />{g.l}</span><span className="tabular-nums"><b className="text-[15px]">{g.money ? money(g.a) : g.a}</b><span className="text-white/45"> / {g.t ? (g.money ? money(g.t) : g.t + (g.unit || '')) : '未設定'}</span></span></div>
+          <div className="mt-1.5 flex items-center gap-2"><div className="flex-1"><Bar v={pct(g.a, g.t)} color={g.c} /></div><span className="text-[11.5px] text-white/60 w-9 text-right">{pct(g.a, g.t)}%</span></div>
+        </div>
+      ))}
+    </div>
+  );
+
+  const hour = new Date().getHours();
+  const greet = hour < 5 ? '夜深了' : hour < 12 ? '早安' : hour < 18 ? '午安' : '晚安';
+  const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+  const sections = [
+    ['overview', '總覽', LayoutGrid], ['activity', '全體活動量', Activity], ['contest', '競賽狀況', Trophy],
+    ['quality', '優培狀況', Award], ['cases', '案件狀況', ClipboardList], ['recruit', '增員狀況', UserPlus],
+  ];
+  const sectionTitle = sections.find(s => s[0] === section)?.[1];
+
+  return (
+    <div className="hidden md:grid grid-cols-[176px_1fr] gap-4 h-full md:min-h-[840px] text-white animate-fade-in">
+      <aside className={`${card} p-2.5 flex flex-col gap-1`}>
+        {sections.map(([k, l, Ic]) => (
+          <button key={k} type="button" onClick={() => setSection(k)} className={`flex items-center gap-2.5 px-3 h-11 rounded-xl text-[14px] font-semibold text-left transition ${section === k ? 'bg-blue-500/20 border border-blue-400/50 text-white shadow-[0_0_16px_rgba(59,130,246,.35)]' : 'text-white/65 hover:bg-white/[0.06] border border-transparent'}`}><Ic size={17} />{l}</button>
+        ))}
+        <div className="mt-auto px-2 pb-1 pt-3 text-[11px] text-white/40 border-t border-white/10">政翰區 · {members.length} 人<br />{season === 'H1' ? '上半年' : '下半年'}競賽</div>
+      </aside>
+
+      <section className="min-h-0 min-w-0 flex flex-col gap-3">
+        <div className="flex items-end justify-between shrink-0 px-1">
+          <div>
+            <p className="text-[12px] text-white/50 tracking-widest">{today.replace(/-/g, '.')}　週{dayNames[dayOfWeek(today)]}</p>
+            <h1 className="text-[28px] font-black leading-tight">{section === 'overview' ? `${greet}，${loggedInUser.name}` : sectionTitle}</h1>
+          </div>
+          <p className="text-[13px] text-white/50 pb-1">{section === 'overview' ? '政翰區全貌：活動量・競賽・優培・案件・增員' : '政翰區 · 全員'}</p>
+        </div>
+
+        {section === 'overview' && (
+          <>
+            <div className="grid grid-cols-6 gap-3 shrink-0">
+              <KPI icon={FileText} label="受理中案件" value={pending.length} unit="件" sub={stuck ? `逾期追蹤 ${stuck} 件` : '沒有逾期'} color="#60a5fa" />
+              <KPI icon={DollarSign} label="受理中保費" value={money(pendingPremium)} sub={`本月已發單 ${money(monthIssuedPremium)}`} color="#34d399" />
+              <KPI icon={Activity} label="今日活動量達標" value={`${reached}/${actRows.length}`} unit="人" sub={`${emptyToday} 人今日未建檔`} color="#a78bfa" />
+              <KPI icon={Trophy} label="競賽平均進度" value={contestAvg} unit="%" sub={`${peakDone} 人已達新高峰`} color="#fbbf24" />
+              <KPI icon={Award} label="優培進行中" value={qualActive} unit="人" sub={qualUnset ? `${qualUnset} 人未填期別` : '期別皆已填寫'} color="#fb923c" />
+              <KPI icon={UserPlus} label="本月增員登錄" value={monthReg} unit="人" sub={`年度累積 ${yearReg} / ${GOAL_REGISTER}`} color="#2dd4bf" />
+            </div>
+            <div className="grid grid-cols-[1.15fr_1fr_.9fr] gap-3 flex-[1.05] min-h-0">
+              <Panel title="案件狀態分佈" icon={ClipboardList} right={more('cases')}>{casesDonut}</Panel>
+              <Panel title="競賽狀況" icon={Trophy} tone="text-amber-300" right={more('contest')}>{contestList(6)}</Panel>
+              <div className="min-h-0 min-w-0 overflow-y-auto no-scrollbar"><HomeTodoCard loggedInUser={loggedInUser} /></div>
+            </div>
+            <div className="grid grid-cols-[1.35fr_1fr_1fr_.95fr] gap-3 flex-[1.2] min-h-0">
+              <Panel title="團隊案件列表" icon={Users} right={more('cases')}>{caseTable(7)}</Panel>
+              <Panel title="全體活動量" icon={Activity} tone="text-violet-300" right={more('activity')}>{activityList(7)}</Panel>
+              <Panel title="優培狀況" icon={Award} tone="text-orange-300" right={more('quality')}>{qualityList(5)}</Panel>
+              <Panel title="增員狀況" icon={UserPlus} tone="text-teal-300" right={more('recruit')}>{recruitFunnel}<div className="mt-3">{goalPanel}</div></Panel>
+            </div>
+          </>
+        )}
+
+        {section === 'activity' && (
+          <div className="grid grid-cols-[1fr_280px] gap-3 flex-1 min-h-0">
+            <Panel title="全體活動量（今日 / 本週）" icon={Activity} tone="text-violet-300">{activityList(30)}</Panel>
+            <div className="flex flex-col gap-3 min-h-0">
+              <KPI icon={CheckCircle2} label="今日達標" value={`${reached}/${actRows.length}`} unit="人" sub="目標 20 分" color="#34d399" />
+              <KPI icon={AlertTriangle} label="今日未建檔" value={emptyToday} unit="人" sub="需要關心" color="#fb7185" />
+              <KPI icon={Target} label="本週平均達成" value={weekAvg} unit="%" sub={`目標 ${WEEKLY_TARGET} 分`} color="#818cf8" />
+              <KPI icon={TrendingUp} label="本月全隊總分" value={monthTotal} unit="分" sub={`${members.length} 人`} color="#fbbf24" />
+            </div>
+          </div>
+        )}
+        {section === 'contest' && (
+          <div className="grid grid-cols-[1fr_280px] gap-3 flex-1 min-h-0">
+            <Panel title={`${season === 'H1' ? '上半年高峰/極峰' : '下半年新高峰/新極峰'}競賽進度`} icon={Trophy} tone="text-amber-300" right={<span className="text-[11px] text-white/45">藍＝新高峰　黃＝新極峰</span>}>{contestList(30)}</Panel>
+            <div className="flex flex-col gap-3 min-h-0">
+              <KPI icon={Trophy} label="已達新高峰" value={peakDone} unit="人" sub={`共 ${contestRows.length} 人`} color="#fbbf24" />
+              <KPI icon={Target} label="平均進度" value={contestAvg} unit="%" sub="取加權／實收較高者" color="#60a5fa" />
+              <KPI icon={Crown} label="目前領先" value={contestRows[0]?.m.name || '—'} sub={contestRows[0] ? `${contestRows[0].pk}%` : ''} color="#34d399" />
+            </div>
+          </div>
+        )}
+        {section === 'quality' && (
+          <div className="grid grid-cols-[1fr_280px] gap-3 flex-1 min-h-0">
+            <Panel title="優培狀況" icon={Award} tone="text-orange-300">{qualityList(30)}</Panel>
+            <div className="flex flex-col gap-3 min-h-0">
+              <KPI icon={Award} label="進行中" value={qualActive} unit="人" sub="每階段 3 個月" color="#fb923c" />
+              <KPI icon={AlertTriangle} label="未填期別" value={qualUnset} unit="人" sub="請到個人設定補上" color="#fb7185" />
+            </div>
+          </div>
+        )}
+        {section === 'cases' && (
+          <div className="grid grid-cols-[430px_1fr] gap-3 flex-1 min-h-0">
+            <div className="flex flex-col gap-3 min-h-0">
+              <Panel title="受理中・件數分佈" icon={ClipboardList} className="flex-1">{casesDonut}</Panel>
+              <Panel title="受理中・保費分佈" icon={DollarSign} tone="text-emerald-300" className="flex-1">
+                <div className="flex items-center gap-5 h-full"><OvDonut parts={buckets.map(b => ({ v: b.prem, color: b.color }))} centerTop={money(pendingPremium)} centerBottom="受理中保費" />
+                  <div className="flex-1 space-y-2">{buckets.map(b => <div key={b.key} className="flex items-center gap-2 text-[13px]"><i className="w-2.5 h-2.5 rounded-sm" style={{ background: b.color }} /><span className="text-white/80">{b.label}</span><span className="ml-auto tabular-nums">{money(b.prem)}</span></div>)}</div></div>
+              </Panel>
+            </div>
+            <Panel title="團隊案件列表" icon={Users}>{caseTable(40)}</Panel>
+          </div>
+        )}
+        {section === 'recruit' && (
+          <div className="grid grid-cols-[1fr_300px] gap-3 flex-1 min-h-0">
+            <div className="flex flex-col gap-3 min-h-0">
+              <Panel title="準增員轉換" icon={Filter} tone="text-teal-300" className="shrink-0">{recruitFunnel}</Panel>
+              <Panel title="準增員名單" icon={Users} tone="text-teal-300" className="flex-1">{recruitList(40)}</Panel>
+            </div>
+            <div className="flex flex-col gap-3 min-h-0">
+              <KPI icon={UserPlus} label="本月登錄" value={monthReg} unit="人" sub={`年度 ${yearReg} / ${GOAL_REGISTER}`} color="#2dd4bf" />
+              <KPI icon={Users} label="名單總數" value={recList.filter(r => !r.isPromoted).length} unit="人" sub="含新名單到考試中" color="#60a5fa" />
+              <Panel title="個人目標" icon={Target} tone="text-fuchsia-300" className="flex-1">{goalPanel}</Panel>
+            </div>
+          </div>
+        )}
+      </section>
     </div>
   );
 };
@@ -6184,7 +6367,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   const crmFilterActive = Object.values(filters).some(v => v && v !== false);
 
   return (
-    <div className="max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+    <div className="max-w-6xl md:max-w-none md:h-full mx-auto space-y-6 md:space-y-0 animate-fade-in pb-12 md:pb-0">
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除客戶" message="確定要刪除此客戶資料嗎？此動作無法復原。" />
       <IGImportModal isOpen={isIGOpen} onClose={() => setIsIGOpen(false)} loggedInUser={loggedInUser} existingNames={existingNames} onImported={() => {}} />
       <RelationshipNetworkModal isOpen={!!networkFocusId} onClose={() => setNetworkFocusId(null)} focusId={networkFocusId} setFocusId={setNetworkFocusId} customers={customers} relationships={relationships || []} loggedInUser={loggedInUser} />
@@ -6223,7 +6406,18 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
         />
       </div>
 
-      <div className="hidden md:block space-y-6">
+      <DesktopCustomerBoard
+        customers={customers} list={filteredCustomers} records={records} search={search} setSearch={setSearch} filters={filters} setFilters={setFilters}
+        today={getTodayDate()} isVIP={(c) => isVIPCustomer(c, records)} isIG={isIGListCustomer} isDue={isFollowUpDue}
+        onToggleWatch={toggleSalesWatch} onToggleRecruitWatch={toggleRecruitWatch} onOpenEdit={openEdit} onNetwork={setNetworkFocusId} onMerge={openMerge} onDelete={setDeleteTarget} onLine={openLineChat} getInstagramUrl={getInstagramUrl}
+        addItems={[
+          { label: '新增客戶', icon: UserPlus, onClick: openAdd },
+          { label: 'IG 匯入', icon: Upload, onClick: () => setIsIGOpen(true) },
+          { label: 'CSV 上傳', icon: Upload, onClick: () => setIsNotionOpen(true) }
+        ]}
+        regions={TAIWAN_REGIONS} tags={CUSTOMER_TAGS} genders={GENDER_OPTIONS} incomes={INCOME_RANGES}
+      />
+      <div className="hidden space-y-6">
       <div className="flex items-center justify-between gap-4">
         <div>
           <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">客戶管理</h2>
@@ -8302,7 +8496,7 @@ const JfTechStyle = () => (
     .jf-tech h1, .jf-tech h2, .jf-tech h3 { letter-spacing: -0.02em; }
     html, body { touch-action: manipulation; -webkit-text-size-adjust: 100%; overscroll-behavior-y: none; }
     .jf-tech.jf-dark { background: #05070f; }
-    @media (max-width: 767px) { .jf-tech.jf-dark-m { background: #05070f; } }
+    .jf-tech.jf-dark-m { background: #05070f; }
     .jf-tech .bg-indigo-600, .jf-tech .bg-indigo-500 { background-color: #111114; }
     .jf-tech .hover\\:bg-indigo-700:hover, .jf-tech .hover\\:bg-indigo-600:hover { background-color: #2a2a30; }
     .jf-tech .text-indigo-600, .jf-tech .text-indigo-700, .jf-tech .text-indigo-500 { color: #111114; }
@@ -8312,8 +8506,15 @@ const JfTechStyle = () => (
     @keyframes jfRingGlow { 0%,100% { filter: drop-shadow(0 0 4px rgba(52,211,153,.35)) } 50% { filter: drop-shadow(0 0 12px rgba(52,211,153,.7)) } }
     .jf-nudge-in { animation: jfNudgeIn .45s cubic-bezier(.2,.8,.2,1) both }
     .jf-ring-done { animation: jfRingGlow 2.4s ease-in-out infinite }
+    @keyframes jfFlow { to { stroke-dashoffset: -60; } }
+    @keyframes jfLive { 0%,100% { opacity: 1; transform: scale(1) } 50% { opacity: .35; transform: scale(1.6) } }
+    .jf-flow-line .recharts-line-curve, .jf-flow-line path { stroke-dasharray: 3 57; stroke-linecap: round; animation: jfFlow 2.4s linear infinite; }
+    .jf-flow-b path { animation-duration: 3.1s; animation-delay: -.8s; } .jf-flow-c path { animation-duration: 2.8s; animation-delay: -1.4s; }
+    .jf-live-dot { animation: jfLive 1.6s ease-in-out infinite; }
+    @media (min-width: 768px) { .jf-tech.jf-dark-m input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), .jf-tech.jf-dark-m select, .jf-tech.jf-dark-m textarea { font-size: 14px !important; min-height: 0 !important; } }
+    .no-scrollbar { scrollbar-width: none; } .no-scrollbar::-webkit-scrollbar { display: none; }
     .jf-grid-bg { background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 28px 28px; }
-    @media (max-width: 767px) {
+    @media all {
       .jf-tech.jf-dark-m { color: #e6eaf5; }
       .jf-tech.jf-dark-m .bg-white { background-color: #0d1220; }
       .jf-tech.jf-dark-m .bg-gray-50 { background-color: #121829; }
@@ -9644,6 +9845,180 @@ const calGroupKey = (e) => {
   return 'activity';
 };
 
+// --- 電腦版：行事曆（深色、滿版、月/週/日/列表）---
+const DesktopCalendarView = ({ events, today, onEventClick, addItemsFor, getEventLabel, teamToggle, teamMode, filterNode }) => {
+  const [mode, setMode] = useState('month');
+  const [selectedDay, setSelectedDay] = useState(today);
+  const [menuOpen, setMenuOpen] = useState(false);
+  const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+
+  const eventsByDate = useMemo(() => {
+    const map = {};
+    events.forEach(e => {
+      const last = e.endDate && e.endDate > e.date ? e.endDate : e.date;
+      let cursor = e.date, guard = 0;
+      while (cursor <= last && guard < 62) { (map[cursor] = map[cursor] || []).push(e); cursor = dateAdd(cursor, 1); guard++; }
+    });
+    Object.values(map).forEach(l => l.sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99')));
+    return map;
+  }, [events]);
+
+  const [sy, sm] = selectedDay.split('-').map(Number);
+  const shift = (dir) => {
+    if (mode === 'month' || mode === 'list') {
+      const dim = new Date(sy, sm - 1 + dir + 1, 0).getDate();
+      const d = new Date(sy, sm - 1 + dir, Math.min(Number(selectedDay.slice(8)), dim));
+      setSelectedDay(`${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`);
+    } else setSelectedDay(dateAdd(selectedDay, mode === 'week' ? dir * 7 : dir));
+  };
+  const gridDays = useMemo(() => {
+    if (mode === 'week') { const st = weekStartOf(selectedDay); return Array.from({ length: 7 }, (_, i) => dateAdd(st, i)); }
+    const first = `${sy}-${String(sm).padStart(2, '0')}-01`;
+    const start = dateAdd(first, -dayOfWeek(first));
+    const dim = new Date(sy, sm, 0).getDate();
+    const total = Math.ceil((dayOfWeek(first) + dim) / 7) * 7;
+    return Array.from({ length: total }, (_, i) => dateAdd(start, i));
+  }, [mode, selectedDay, sy, sm]);
+  const rows = Math.ceil(gridDays.length / 7);
+
+  const dayEvents = eventsByDate[selectedDay] || [];
+  const holiday = TAIWAN_HOLIDAYS_2026[selectedDay];
+  const card = 'rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl';
+  const creatorBadge = (e, s = 16) => teamMode && e._creator ? (
+    AVATAR_FILES[e._creator]
+      ? <img src={`/avatars/${AVATAR_FILES[e._creator]}.jpg`} alt={e._creator} title={`${e._creator} 建檔`} className="rounded-full object-cover shrink-0 border border-white/50" style={{ width: s, height: s }} />
+      : <span className="rounded-full shrink-0 flex items-center justify-center text-[9px] font-bold border border-white/50 bg-black/30" style={{ width: s, height: s }} title={`${e._creator} 建檔`}>{String(e._creator).charAt(0)}</span>
+  ) : null;
+  const titleOf = (e) => e.isReminder ? e.title : getEventLabel(e);
+  const Chip = ({ e, big }) => {
+    const g = CAL_GROUPS[calGroupKey(e)];
+    const done = e.status === 'completed';
+    return (
+      <button type="button" onClick={(ev) => { ev.stopPropagation(); onEventClick(e); }} title={`${e.time || ''} ${titleOf(e)}${e.customerName ? ' · ' + e.customerName : ''}`}
+        className={`w-full flex items-center gap-1 px-1.5 rounded-md text-left text-white font-semibold truncate ${big ? 'py-1.5 text-[13px]' : 'py-[3px] text-[12px]'} ${done ? 'opacity-55' : ''}`} style={{ background: g.color + "f2" }}>
+        {done && <span>✓</span>}
+        {big && e.time && <span className="tabular-nums text-white/85 shrink-0">{e.time}</span>}
+        <span className="truncate flex-1">{titleOf(e)}{big && e.customerName ? ` · ${e.customerName}` : ''}</span>
+        {creatorBadge(e, big ? 18 : 15)}
+      </button>
+    );
+  };
+
+  const listDays = useMemo(() => Object.keys(eventsByDate).filter(d => d >= selectedDay.slice(0, 7) + '-01' && d.slice(0, 7) === selectedDay.slice(0, 7)).sort(), [eventsByDate, selectedDay]);
+  const addItems = addItemsFor(selectedDay);
+  const title = mode === 'day' ? `${sy}年${sm}月${Number(selectedDay.slice(8))}日` : `${sy}年${sm}月`;
+
+  return (
+    <div className="hidden md:flex flex-col gap-3 h-full md:min-h-[840px] text-white animate-fade-in">
+      <div className="flex items-end justify-between shrink-0 px-1">
+        <div>
+          <h1 className="text-[28px] font-black leading-tight">行事曆</h1>
+          <p className="text-[13px] text-white/55">{today}　週{dayNames[dayOfWeek(today)]}</p>
+        </div>
+        <div className="flex items-center gap-3 relative">
+          {filterNode}
+          {teamToggle}
+          <button type="button" onClick={() => setMenuOpen(v => !v)} className="flex items-center gap-2 px-5 h-11 rounded-xl bg-blue-600 hover:bg-blue-500 font-bold text-[14px] shadow-[0_0_20px_rgba(37,99,235,.5)]"><Plus size={18} />新增行程</button>
+          {menuOpen && (
+            <>
+              <div className="fixed inset-0 z-40" onClick={() => setMenuOpen(false)} />
+              <div className="absolute right-0 top-12 z-50 w-52 rounded-2xl border border-white/15 bg-[#0d1124]/95 backdrop-blur-xl p-1.5 shadow-2xl">
+                {addItems.map(it => { const Ic = it.icon; return <button key={it.label} type="button" onClick={() => { setMenuOpen(false); it.onClick(); }} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-white/10 text-[14px] text-left"><Ic size={16} className="text-blue-300" />{it.label}</button>; })}
+              </div>
+            </>
+          )}
+        </div>
+      </div>
+
+      <div className={`${card} p-4 flex-1 min-h-0 flex flex-col`}>
+        <div className="flex items-center justify-between shrink-0 mb-3">
+          <div className="flex items-center gap-2.5">
+            <button type="button" onClick={() => setSelectedDay(today)} className="px-4 h-10 rounded-xl border border-white/20 bg-white/[0.06] text-[14px] font-semibold">今天</button>
+            <button type="button" onClick={() => shift(-1)} className="w-10 h-10 rounded-full border border-white/15 bg-white/[0.06] flex items-center justify-center"><ChevronLeft size={18} /></button>
+            <span className="text-[22px] font-black px-2 min-w-[170px] text-center">{title}</span>
+            <button type="button" onClick={() => shift(1)} className="w-10 h-10 rounded-full border border-white/15 bg-white/[0.06] flex items-center justify-center"><ChevronRight size={18} /></button>
+          </div>
+          <div className="flex items-center gap-5">
+            <div className="hidden xl:flex items-center gap-3 text-[12px] text-white/65">
+              {['appt', 'interview', 'submit', 'recruit', 'meeting', 'activity', 'personal'].map(k => <span key={k} className="flex items-center gap-1.5"><i className="w-2.5 h-2.5 rounded-sm" style={{ background: CAL_GROUPS[k].color }} />{CAL_GROUPS[k].label}</span>)}
+            </div>
+            <div className="flex rounded-xl border border-white/10 bg-white/[0.05] p-1">
+              {[['month', '月'], ['week', '週'], ['day', '日'], ['list', '列表']].map(([k, l]) => <button key={k} type="button" onClick={() => setMode(k)} className={`px-5 h-9 rounded-lg text-[14px] font-semibold ${mode === k ? 'bg-blue-600 shadow-[0_0_14px_rgba(37,99,235,.55)]' : 'text-white/60'}`}>{l}</button>)}
+            </div>
+          </div>
+        </div>
+
+        {(mode === 'month' || mode === 'week') && (
+          <div className="flex-1 min-h-0 flex flex-col rounded-xl border border-white/10 overflow-hidden">
+            <div className="grid grid-cols-7 shrink-0 bg-white/[0.04] text-center text-[13px] text-white/55">{dayNames.map(w => <div key={w} className="py-2">{w}</div>)}</div>
+            <div className="grid grid-cols-7 flex-1 min-h-0" style={{ gridTemplateRows: `repeat(${mode === 'week' ? 1 : rows}, minmax(0, 1fr))` }}>
+              {gridDays.map(d => {
+                const evs = eventsByDate[d] || [];
+                const sel = d === selectedDay, isToday = d === today;
+                const inMonth = mode === 'week' || Number(d.slice(5, 7)) === sm;
+                const hol = TAIWAN_HOLIDAYS_2026[d];
+                const cap = mode === 'week' ? 12 : rows >= 6 ? 2 : 3;
+                return (
+                  <div key={d} onClick={() => setSelectedDay(d)} className={`border-t border-l border-white/[0.08] p-1.5 min-h-0 overflow-hidden cursor-pointer flex flex-col gap-[3px] ${sel ? 'bg-blue-500/10 ring-1 ring-inset ring-blue-400/70' : 'hover:bg-white/[0.03]'}`}>
+                    <div className="flex items-center justify-between shrink-0">
+                      <span className={`text-[13px] w-6 h-6 flex items-center justify-center rounded-full ${isToday ? 'bg-blue-600 text-white font-bold' : hol ? 'text-rose-300' : inMonth ? 'text-white' : 'text-white/25'}`}>{Number(d.slice(8))}</span>
+                      {hol && <span className="text-[10px] text-rose-300 truncate ml-1">{hol}</span>}
+                    </div>
+                    {evs.slice(0, cap).map(e => <Chip key={e.id + d} e={e} />)}
+                    {evs.length > cap && <span className="text-[11px] text-white/50 pl-1">+{evs.length - cap} 項</span>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+        {mode === 'day' && (
+          <div className="flex-1 min-h-0 overflow-y-auto space-y-2 pr-1">
+            {dayEvents.length === 0 && <p className="text-center text-white/45 py-16">這天沒有安排</p>}
+            {dayEvents.map(e => <Chip key={e.id} e={e} big />)}
+          </div>
+        )}
+        {mode === 'list' && (
+          <div className="flex-1 min-h-0 overflow-y-auto pr-1 grid grid-cols-2 gap-x-6">
+            {listDays.length === 0 && <p className="text-center text-white/45 py-16 col-span-2">這個月沒有安排</p>}
+            {listDays.map(d => (
+              <div key={d} className="mb-3">
+                <p className="text-[13px] text-white/55 mb-1.5">{Number(d.slice(5, 7))}/{Number(d.slice(8))}　週{dayNames[dayOfWeek(d)]}</p>
+                <div className="space-y-1.5">{eventsByDate[d].map(e => <Chip key={e.id + d} e={e} big />)}</div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <div className={`${card} p-4 shrink-0`} style={{ height: 196 }}>
+        <div className="flex items-center justify-between mb-2">
+          <p className="text-[17px] font-bold">{selectedDay} 的行程 <span className="text-white/45 text-[13px] font-normal ml-2">共 {dayEvents.length} 項{holiday ? `　${holiday}` : ''}</span></p>
+          <button type="button" onClick={() => addItems[0]?.onClick()} className="flex items-center gap-1.5 px-4 h-9 rounded-xl bg-blue-600 text-white font-bold text-[13px]"><Plus size={15} />新增</button>
+        </div>
+        <div className="space-y-1.5 overflow-y-auto no-scrollbar" style={{ maxHeight: 128 }}>
+          {dayEvents.length === 0 && <p className="text-white/40 text-[13px] py-5 text-center">這天沒有安排</p>}
+          {dayEvents.map(e => {
+            const g = CAL_GROUPS[calGroupKey(e)];
+            const done = e.status === 'completed';
+            const sub = e.isReminder ? (e.note && !/^\d{1,2}:\d{2}/.test(e.note) ? e.note : '') : (e.customerName || '');
+            return (
+              <div key={e.id} className={`grid grid-cols-[18px_minmax(120px,1.2fr)_130px_1.4fr_1fr_90px] items-center gap-3 px-3 py-2 rounded-xl border border-white/[0.07] bg-white/[0.04] text-[13.5px] ${done ? 'opacity-55' : ''}`}>
+                <i className="w-3 h-3 rounded-full" style={{ background: g.color, boxShadow: `0 0 8px ${g.color}99` }} />
+                <span className={`font-bold truncate ${done ? 'line-through' : ''}`}>{titleOf(e)}<span className="ml-2 text-[11px] font-normal rounded px-1.5 py-0.5 border" style={{ color: g.color, borderColor: g.color + '77' }}>{g.label}</span></span>
+                <span className="text-white/75 tabular-nums flex items-center gap-1.5"><Clock size={14} className="text-white/45" />{e.time ? `${e.time}${e.endTime ? '-' + e.endTime : ''}` : '全天'}</span>
+                <span className="text-white/65 truncate flex items-center gap-1.5">{e.address ? <><MapPin size={14} className="text-white/45 shrink-0" />{e.address}</> : sub ? <><Users size={14} className="text-white/45 shrink-0" />{sub}</> : ''}</span>
+                <span className="text-white/50 truncate flex items-center gap-1.5">{creatorBadge(e, 20)}{teamMode && e._creator ? e._creator : (sub && e.address ? sub : '')}</span>
+                <button type="button" onClick={() => onEventClick(e)} className="flex items-center justify-center gap-1.5 h-8 rounded-lg border border-white/15 bg-white/[0.06] hover:bg-white/10 text-[12.5px] font-semibold"><Edit3 size={13} />{teamMode ? '查看' : '編輯'}</button>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearch, onFilter, filterActive, addItemsFor, getEventLabel, teamToggle, teamMode }) => {
   const [mode, setMode] = useState('month');
   const [selectedDay, setSelectedDay] = useState(today);
@@ -9821,6 +10196,168 @@ const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearc
       <button onClick={() => setMenuOpen(v => !v)} aria-label="新增" className="fixed right-4 z-40 w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 shadow-[0_8px_30px_rgba(59,130,246,.55)] flex items-center justify-center active:scale-95 transition" style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 86px)' }}>
         <Plus size={30} className={`transition-transform ${menuOpen ? 'rotate-45' : ''}`} />
       </button>
+    </div>
+  );
+};
+
+// --- 電腦版：客戶管理（深色看板＋新增趨勢）---
+const DesktopCustomerBoard = ({ customers, list, records, search, setSearch, filters, setFilters, today, isVIP, isIG, isDue, onToggleWatch, onToggleRecruitWatch, onOpenEdit, onNetwork, onMerge, onDelete, onLine, getInstagramUrl, addItems, regions, tags, genders, incomes }) => {
+  const [menuId, setMenuId] = useState(null);
+  const [showAdd, setShowAdd] = useState(false);
+  const [range, setRange] = useState(6);
+  const glass = 'rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl';
+  const tagCls = (t) => t === '準客戶' ? 'text-sky-300 border-sky-400/40 bg-sky-500/10' : t === '準增員' ? 'text-violet-300 border-violet-400/40 bg-violet-500/10' : t === '既有客戶' ? 'text-emerald-300 border-emerald-400/40 bg-emerald-500/10' : (t === '重點客戶' || t === 'VIP') ? 'text-amber-300 border-amber-400/40 bg-amber-500/10' : t === 'IG名單' ? 'text-pink-300 border-pink-400/40 bg-pink-500/10' : 'text-white/70 border-white/20 bg-white/5';
+  const monthOf = (c) => (c.createdAt || '').slice(0, 7);
+  const thisM = today.slice(0, 7);
+  const prevM = (() => { const [y, m] = thisM.split('-').map(Number); const d = new Date(y, m - 2, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
+  const dealMonth = (m) => { const names = new Set((records || []).filter(r => (r.date || '').startsWith(m)).map(r => String(r.insuredName || '').trim()).filter(Boolean)); return customers.filter(c => names.has(String(c.name || '').trim())).length; };
+  const addThis = customers.filter(c => monthOf(c) === thisM).length;
+  const addPrev = customers.filter(c => monthOf(c) === prevM).length;
+  const dealThis = dealMonth(thisM), dealPrev = dealMonth(prevM);
+  const recruitN = customers.filter(c => (c.tags || []).includes('準增員')).length;
+  const totalPrev = customers.filter(c => monthOf(c) && monthOf(c) < thisM).length;
+  const growth = (a, b) => b > 0 ? Math.round((a - b) / b * 100) : (a > 0 ? 100 : 0);
+  const series = useMemo(() => {
+    const [y, m] = thisM.split('-').map(Number);
+    return Array.from({ length: range }, (_, i) => {
+      const d = new Date(y, m - 1 - (range - 1 - i), 1);
+      const key = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+      return { name: `${d.getMonth() + 1}月`, v: customers.filter(c => monthOf(c) === key).length };
+    });
+  }, [customers, range, thisM]);
+  const Delta = ({ v }) => <span className={`text-[12px] font-semibold ${v >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{v >= 0 ? '↑' : '↓'} {Math.abs(v)}% <span className="text-white/40 font-normal">較上月</span></span>;
+  const KPI = ({ icon: Ic, label, value, delta, color }) => (
+    <div className={`${glass} p-3.5 flex items-center gap-3`}>
+      <span className="w-12 h-12 rounded-2xl flex items-center justify-center shrink-0" style={{ background: color + '26', color }}><Ic size={24} /></span>
+      <div className="min-w-0"><p className="text-[12.5px] text-white/60">{label}</p><p className="text-[28px] font-black leading-none my-1">{value}</p>{delta}</div>
+    </div>
+  );
+
+  const cols = [
+    { k: '準客戶', color: '#38bdf8', pick: c => (c.tags || []).includes('準客戶') },
+    { k: '既有客戶', color: '#34d399', pick: c => (c.tags || []).includes('既有客戶') },
+    { k: '準增員', color: '#a78bfa', pick: c => (c.tags || []).includes('準增員') },
+    { k: 'IG名單', color: '#f472b6', pick: c => isIG(c) },
+    { k: '未分類', color: '#94a3b8', pick: c => !(c.tags || []).some(t => ['準客戶', '既有客戶', '準增員'].includes(t)) && !isIG(c) },
+  ].map(col => ({ ...col, items: list.filter(col.pick) }));
+  const lastContact = (c) => {
+    const last = (c.visitLog || []).reduce((m, v) => (v.date && v.date > m ? v.date : m), '');
+    if (!last) return null;
+    const diff = Math.round((new Date(today) - new Date(last)) / 86400000);
+    return { diff, text: diff <= 0 ? '今天' : `${diff} 天前` };
+  };
+  const menuCustomer = customers.find(c => c.id === menuId);
+  const sel = 'h-11 rounded-xl text-[13px] font-semibold px-3';
+
+  return (
+    <div className="hidden md:flex flex-col gap-3 h-full md:min-h-[840px] text-white animate-fade-in">
+      <div className="flex items-end justify-between shrink-0 px-1">
+        <div>
+          <h1 className="text-[28px] font-black leading-tight">客戶管理</h1>
+          <p className="text-[13px] text-white/55">有效管理客戶、追蹤進度、提升成交與增員機會　·　共 {customers.length.toLocaleString()} 位</p>
+        </div>
+        <div className="relative">
+          <button type="button" onClick={() => setShowAdd(v => !v)} className="flex items-center gap-2 px-5 h-11 rounded-xl bg-blue-600 hover:bg-blue-500 font-bold text-[14px] shadow-[0_0_20px_rgba(37,99,235,.5)]"><Plus size={18} />新增客戶</button>
+          {showAdd && (<>
+            <div className="fixed inset-0 z-40" onClick={() => setShowAdd(false)} />
+            <div className="absolute right-0 top-12 z-50 w-48 rounded-2xl border border-white/15 bg-[#0d1124]/95 backdrop-blur-xl p-1.5 shadow-2xl">
+              {addItems.map(it => { const Ic = it.icon; return <button key={it.label} type="button" onClick={() => { setShowAdd(false); it.onClick(); }} className="w-full flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-white/10 text-[14px] text-left"><Ic size={16} className="text-blue-300" />{it.label}</button>; })}
+            </div></>)}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-[1fr_1fr_1fr_1fr_1.7fr] gap-3 shrink-0">
+        <KPI icon={Users} label="客戶總數" value={customers.length.toLocaleString()} delta={<Delta v={growth(customers.length, totalPrev)} />} color="#60a5fa" />
+        <KPI icon={UserPlus} label="本月新增" value={addThis} delta={<Delta v={growth(addThis, addPrev)} />} color="#2dd4bf" />
+        <KPI icon={CheckCircle2} label="本月成交" value={dealThis} delta={<Delta v={growth(dealThis, dealPrev)} />} color="#fbbf24" />
+        <KPI icon={Award} label="潛在增員" value={recruitN} delta={<span className="text-[12px] text-white/45">標籤「準增員」</span>} color="#a78bfa" />
+        <div className={`${glass} p-3 pb-1`}>
+          <div className="flex items-center justify-between"><p className="font-bold text-[14px]">客戶新增趨勢</p>
+            <select value={range} onChange={e => setRange(Number(e.target.value))} className="h-7 rounded-lg text-[12px] px-2" style={{ minHeight: 0 }}><option value={6}>近 6 個月</option><option value={12}>近 12 個月</option></select></div>
+          <div style={{ height: 82 }}>
+            <ResponsiveContainer width="100%" height="100%">
+              <AreaChart data={series} margin={{ top: 14, right: 12, left: 12, bottom: 0 }}>
+                <defs><linearGradient id="custTrend" x1="0" y1="0" x2="0" y2="1"><stop offset="0%" stopColor="#3b82f6" stopOpacity={0.55} /><stop offset="100%" stopColor="#3b82f6" stopOpacity={0} /></linearGradient></defs>
+                <XAxis dataKey="name" tick={{ fill: 'rgba(255,255,255,.5)', fontSize: 11 }} axisLine={false} tickLine={false} />
+                <Tooltip cursor={{ stroke: 'rgba(255,255,255,.2)' }} contentStyle={{ background: '#0d1124', border: '1px solid rgba(255,255,255,.15)', borderRadius: 10, color: '#fff', fontSize: 12 }} formatter={(v) => [v + ' 位', '新增']} />
+                <Area type="monotone" dataKey="v" stroke="#60a5fa" strokeWidth={2.5} fill="url(#custTrend)" dot={{ r: 3, fill: '#60a5fa', strokeWidth: 0 }} activeDot={{ r: 6, fill: '#fff', stroke: '#3b82f6', strokeWidth: 3 }} isAnimationActive animationDuration={1200} />
+              </AreaChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+      </div>
+
+      <div className="flex items-center gap-2.5 shrink-0">
+        <div className={`${glass} flex-1 flex items-center gap-2.5 px-4 h-11`}>
+          <Search size={17} className="text-white/50 shrink-0" />
+          <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜尋姓名、電話、IG 帳號、標籤、備註…" className="flex-1 bg-transparent outline-none text-[14px] placeholder:text-white/35 min-w-0" />
+        </div>
+        <select className={sel} value={filters.tag} onChange={e => setFilters({ ...filters, tag: e.target.value })}><option value="">全部標籤</option>{tags.map(t => <option key={t} value={t}>{t}</option>)}</select>
+        <select className={sel} value={filters.region} onChange={e => setFilters({ ...filters, region: e.target.value })}><option value="">全部地區</option>{regions.map(r => <option key={r} value={r}>{r}</option>)}</select>
+        <select className={sel} value={filters.gender} onChange={e => setFilters({ ...filters, gender: e.target.value })}><option value="">全部性別</option>{genders.map(g => <option key={g} value={g}>{g}</option>)}</select>
+        <select className={sel} value={filters.incomeRange} onChange={e => setFilters({ ...filters, incomeRange: e.target.value })}><option value="">全部年收入</option>{incomes.map(r => <option key={r} value={r}>{r}</option>)}</select>
+        {[['vipOnly', 'VIP'], ['igOnly', '有 IG'], ['salesWatchOnly', '關注銷售'], ['recruitWatchOnly', '關注增員']].map(([k, l]) => (
+          <button key={k} type="button" onClick={() => setFilters({ ...filters, [k]: !filters[k] })} className={`h-11 px-3.5 rounded-xl text-[13px] font-semibold border whitespace-nowrap ${filters[k] ? 'bg-blue-500/25 border-blue-400/70 text-white' : 'border-white/12 bg-white/[0.05] text-white/65'}`}>{l}</button>
+        ))}
+      </div>
+
+      <div className="grid gap-3 flex-1 min-h-0" style={{ gridTemplateColumns: `repeat(${cols.filter(c => c.k !== '未分類' || c.items.length > 0).length}, minmax(0, 1fr))` }}>
+        {cols.filter(c => c.k !== '未分類' || c.items.length > 0).map(col => (
+          <div key={col.k} className="rounded-2xl border bg-white/[0.03] flex flex-col min-h-0" style={{ borderColor: col.color + '66', boxShadow: `inset 0 1px 0 ${col.color}33, 0 0 22px ${col.color}12` }}>
+            <div className="px-3.5 pt-3 pb-2.5 shrink-0 flex items-center justify-between">
+              <p className="font-black text-[16px] flex items-center gap-2" style={{ color: col.color }}>{col.k}<span className="text-[12px] rounded-full px-2 py-0.5 bg-white/10 text-white/80 font-semibold">{col.items.length}</span></p>
+            </div>
+            <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar px-2.5 pb-2.5 space-y-2">
+              {col.items.length === 0 && <p className="text-center text-white/35 text-[13px] py-8">沒有客戶</p>}
+              {col.items.slice(0, 80).map(c => {
+                const lc = lastContact(c);
+                const chips = [...(c.tags || []).filter(t => t !== col.k), ...(isVIP(c) ? ['VIP'] : []), ...(isIG(c) && col.k !== 'IG名單' ? ['IG名單'] : [])];
+                return (
+                  <div key={c.id} className={`rounded-xl border bg-white/[0.05] p-2.5 hover:bg-white/[0.08] transition ${isDue(c) ? 'border-amber-400/60' : 'border-white/10'}`}>
+                    <div className="flex items-start gap-2.5">
+                      <button type="button" onClick={() => onOpenEdit(c)} className="w-10 h-10 rounded-full bg-gradient-to-br from-white/15 to-white/5 border border-white/15 flex items-center justify-center font-bold shrink-0">{String(c.name || '?').charAt(0)}</button>
+                      <button type="button" onClick={() => onOpenEdit(c)} className="min-w-0 flex-1 text-left">
+                        <p className="font-bold text-[14.5px] truncate">{c.name}</p>
+                        {chips.length > 0 && <div className="flex flex-wrap gap-1 mt-1">{chips.slice(0, 3).map(t => <span key={t} className={`text-[10px] rounded px-1.5 py-px border ${tagCls(t)}`}>{t}</span>)}</div>}
+                        <p className="text-[11.5px] text-white/50 mt-1 truncate">{[c.region, c.age ? c.age + '歲' : '', c.incomeRange].filter(Boolean).join(' · ') || '—'}</p>
+                      </button>
+                      <div className="flex flex-col items-end gap-1 shrink-0">
+                        <div className="flex items-center gap-1">
+                          <button type="button" onClick={() => onToggleWatch(c)} title="關注銷售"><Star size={15} className={c.specialFocus ? 'fill-amber-400 text-amber-400' : 'text-white/30'} /></button>
+                          <button type="button" onClick={() => setMenuId(c.id)}><MoreVertical size={16} className="text-white/55" /></button>
+                        </div>
+                      </div>
+                    </div>
+                    <div className="flex items-center justify-between mt-2 pt-2 border-t border-white/[0.07]">
+                      <span className="text-[11px] text-white/45">上次聯繫 <b className={lc ? (lc.diff <= 0 ? 'text-emerald-300' : lc.diff <= 7 ? 'text-amber-300' : 'text-rose-300') : 'text-white/40'}>{lc ? lc.text : '無'}</b></span>
+                      <span className="flex items-center gap-1.5">
+                        {c.phone ? <a href={`tel:${c.phone}`} className="w-7 h-7 rounded-full bg-white/[0.08] border border-white/10 flex items-center justify-center"><Phone size={13} /></a> : null}
+                        {c.lineId ? <button type="button" onClick={() => onLine(c.lineId)} className="h-7 px-2 rounded-full bg-white/[0.08] border border-white/10 text-[9px] font-extrabold text-emerald-300">LINE</button> : null}
+                        {c.igHandle ? <a href={getInstagramUrl(c.igHandle)} target="_blank" rel="noopener noreferrer" className="h-7 px-2 rounded-full bg-white/[0.08] border border-white/10 text-[10px] font-extrabold text-pink-300 flex items-center">IG</a> : null}
+                      </span>
+                    </div>
+                    {isDue(c) && <p className="text-[11px] font-semibold text-amber-300 mt-1.5">⚠ 追蹤日期已到：{c.nextFollowUpDate}</p>}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        ))}
+      </div>
+
+      {menuCustomer && (
+        <div className="fixed inset-0 z-[120] flex items-center justify-center" onClick={() => setMenuId(null)}>
+          <div className="absolute inset-0 bg-black/55 backdrop-blur-sm" />
+          <div className="relative w-[320px] rounded-3xl border border-white/15 bg-[#0c1020] p-3 text-white" onClick={e => e.stopPropagation()}>
+            <p className="px-3 pt-2 pb-3 font-bold text-[16px] truncate">{menuCustomer.name}</p>
+            {[['關聯網', GitBranch, () => onNetwork(menuCustomer.id)], ['合併客戶', Users, () => onMerge(menuCustomer.id)], ['編輯', Edit3, () => onOpenEdit(menuCustomer)], [menuCustomer.specialFocusRecruit ? '取消關注增員' : '關注增員', Star, () => onToggleRecruitWatch(menuCustomer)]].map(([l, Ic, fn]) => (
+              <button key={l} type="button" onClick={() => { setMenuId(null); fn(); }} className="w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-white/10 text-[15px] text-left"><Ic size={17} className="text-blue-300" />{l}</button>
+            ))}
+            <button type="button" onClick={() => { const id = menuCustomer.id; setMenuId(null); onDelete(id); }} className="w-full flex items-center gap-3 px-3 py-3 rounded-xl hover:bg-rose-500/15 text-[15px] text-left text-rose-300"><Trash2 size={17} />刪除</button>
+            <button type="button" onClick={() => setMenuId(null)} className="w-full mt-1 py-3 rounded-xl bg-white/10 text-[15px] font-semibold">取消</button>
+          </div>
+        </div>
+      )}
     </div>
   );
 };
@@ -10437,7 +10974,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   const isEmpty = dueEvents.length === 0 && upcoming.length === 0;
 
   return (
-    <div className="max-w-4xl lg:max-w-6xl mx-auto space-y-6 animate-fade-in pb-12">
+    <div className="max-w-4xl md:max-w-none md:h-full mx-auto space-y-6 md:space-y-0 animate-fade-in pb-12 md:pb-0">
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除行程" message="確定要刪除這筆行程嗎？" />
       <BatchScheduleModal isOpen={showBatchSchedule} onClose={() => setShowBatchSchedule(false)} loggedInUser={loggedInUser} team={team} />
       <BatchActivityImportModal isOpen={showBatchActivity} onClose={() => setShowBatchActivity(false)} loggedInUser={loggedInUser} customers={customers} team={team} />
@@ -10494,7 +11031,37 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
         )}
       </div>
 
-      <div className="hidden md:block space-y-6">
+      <DesktopCalendarView
+        events={mobTeam ? teamDisplayEvents.filter(matchesFilter) : calendarEvents.filter(matchesFilter)}
+        teamMode={mobTeam}
+        today={today}
+        getEventLabel={getEventLabel}
+        onEventClick={mobTeam ? (() => {}) : handleEventTap}
+        filterNode={(
+          <div className="flex items-center gap-2">
+            <select className="h-11 rounded-xl text-[13px] font-semibold px-3" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
+              <option value="">全部分類</option>
+              {EVENT_CATEGORY_OPTIONS.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+            </select>
+          </div>
+        )}
+        teamToggle={(
+          <div className="flex items-center gap-2">
+            {mobTeam && <span className="text-[12px] text-white/45">{isTeamScheduleViewer ? '全員行程・頭像＝建檔人' : '吳政翰的分類行程＋直屬業務'}</span>}
+            <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">
+              {[[false, '我的'], [true, '團隊']].map(([k, l]) => <button key={l} type="button" onClick={() => setMobTeam(k)} className={`px-5 h-9 rounded-lg text-[14px] font-bold ${mobTeam === k ? 'bg-blue-600 text-white shadow-[0_0_14px_rgba(37,99,235,.5)]' : 'text-white/55'}`}>{l}</button>)}
+            </div>
+          </div>
+        )}
+        addItemsFor={(d) => [
+          { label: '新增行程', icon: CalendarPlus, onClick: () => { setForm({ ...emptyForm, date: d }); setShowForm(true); } },
+          { label: '純提醒', icon: Bell, onClick: () => { setReminderDate(d); setShowReminderForm(true); } },
+          { label: '批次新增行程', icon: ListPlus, onClick: () => setShowBatchActivity(true) },
+          { label: '批次新增提醒', icon: ListPlus, onClick: () => setShowBatchSchedule(true) },
+          { label: '固定行程管理', icon: Repeat, onClick: () => setShowRecurringManage(true) }
+        ]}
+      />
+      <div className="hidden space-y-6">
       <div className="flex items-center justify-between flex-wrap gap-3">
         <div>
           <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900">行事曆</h2>
@@ -11609,6 +12176,7 @@ const LoginScreen = ({ team, onLogin }) => {
 };
 
 // --- Main App ---
+const FIT_TABS = ['overview', 'calendar', 'customers', 'activity'];
 const App = () => {
   const [activeTab, setActiveTab] = useState('todo');
 
@@ -11708,6 +12276,7 @@ const App = () => {
   }, [user]);
 
   const isTeamScheduleViewer = loggedInUser?.name === '吳政翰';
+  useEffect(() => { if (isTeamScheduleViewer && typeof window !== 'undefined' && window.innerWidth >= 768) setActiveTab(t => t === 'todo' ? 'overview' : t); }, [isTeamScheduleViewer]);
   // 團隊行程要讀取的對象：吳政翰讀全部；其他人只讀「吳政翰」與「自己的直屬業務員」
   const teamViewOwnerKey = useMemo(() => {
     if (!loggedInUser || isTeamScheduleViewer) return '';
@@ -11977,6 +12546,7 @@ const App = () => {
     : 0;
 
   const navItems = [
+    ...(isTeamScheduleViewer ? [{ id: 'overview', label: '總覽', icon: LayoutGrid, desktopOnly: true }] : []),
     { id: 'todo', label: '今日待辦', icon: CheckSquare, badge: todoCount },
     { id: 'calendar', label: '行事曆', icon: Calendar },
     { id: 'customers', label: '客戶管理', icon: Phone },
@@ -11995,7 +12565,7 @@ const App = () => {
   // 手機版底部導覽列：只放最常用的4個 + 「更多」，其餘收進更多選單裡，才不會塞成一長排
   const PRIMARY_TAB_IDS = ['todo', 'calendar', 'customers', 'warroom'];
   const primaryNavItems = navItems.filter(item => PRIMARY_TAB_IDS.includes(item.id));
-  const moreNavItems = navItems.filter(item => !PRIMARY_TAB_IDS.includes(item.id));
+  const moreNavItems = navItems.filter(item => !PRIMARY_TAB_IDS.includes(item.id) && !item.desktopOnly);
   const isMoreActive = moreNavItems.some(item => item.id === activeTab);
   const currentNavItem = navItems.find(item => item.id === activeTab);
 
@@ -12010,57 +12580,38 @@ const App = () => {
   }
 
   return (
-    <div className={`jf-tech ${activeTab === 'todo' ? 'jf-dark' : ''} jf-dark-m min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 md:pb-8 relative`}>
+    <div className={`jf-tech ${activeTab === 'todo' ? 'jf-dark' : ''} jf-dark-m min-h-screen bg-[#F5F7FA] font-sans text-gray-900 pb-24 ${FIT_TABS.includes(activeTab) ? 'md:pb-0 md:overflow-hidden md:h-screen' : 'md:pb-8'} relative`}>
       <JfTechStyle />
-      {(activeTab === 'todo' || activeTab === 'warroom') && <div className={`fixed inset-0 pointer-events-none ${activeTab === 'todo' ? '' : 'md:hidden'}`} style={{ backgroundColor: '#05070f', backgroundImage: 'linear-gradient(180deg, rgba(5,7,15,0) 0%, rgba(5,7,15,.35) 38%, rgba(5,7,15,.82) 100%), url(/bg-mountain.jpg), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%)', backgroundSize: 'cover, cover, auto', backgroundPosition: 'top center', backgroundRepeat: 'no-repeat' }}></div>}
-      {(activeTab !== 'todo' && activeTab !== 'warroom') && <div className="fixed inset-0 pointer-events-none md:hidden" style={{ background: 'radial-gradient(ellipse 70% 40% at 85% 6%, rgba(251,146,60,.34), transparent 60%), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%), radial-gradient(ellipse 90% 40% at 50% 100%, rgba(99,102,241,.14), transparent 60%)' }}></div>}
+      {(activeTab === 'todo' || activeTab === 'warroom' || activeTab === 'overview') && <div className={`fixed inset-0 pointer-events-none ${activeTab === 'todo' ? '' : activeTab === 'overview' ? 'hidden md:block' : 'md:hidden'}`} style={{ backgroundColor: '#05070f', backgroundImage: 'linear-gradient(180deg, rgba(5,7,15,0) 0%, rgba(5,7,15,.35) 38%, rgba(5,7,15,.82) 100%), url(/bg-mountain.jpg), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%)', backgroundSize: 'cover, cover, auto', backgroundPosition: 'top center', backgroundRepeat: 'no-repeat' }}></div>}
+      {(activeTab !== 'todo' && activeTab !== 'overview') && <div className={`fixed inset-0 pointer-events-none ${activeTab === 'warroom' ? 'hidden md:block' : ''}`} style={{ background: 'radial-gradient(ellipse 70% 40% at 85% 6%, rgba(251,146,60,.34), transparent 60%), radial-gradient(ellipse 80% 50% at 10% 0%, rgba(59,91,219,.38), transparent 62%), radial-gradient(ellipse 90% 40% at 50% 100%, rgba(99,102,241,.14), transparent 60%)' }}></div>}
       <DailyNudge loggedInUser={loggedInUser} activities={activities} onGo={setActiveTab} />
-      {/* 桌機版：完整頂部導覽（Logo、置中分頁選單、使用者資訊） */}
-      <nav className="hidden md:block sticky top-0 z-50 bg-white/80 backdrop-blur-xl border-b border-white/20 shadow-sm overflow-x-auto">
-        <div className="max-w-7xl mx-auto px-6 h-20 flex items-center justify-between min-w-max gap-8">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-gradient-to-tr from-gray-900 to-gray-700 rounded-xl flex items-center justify-center shadow-lg"><span className="text-amber-400 font-serif font-bold text-lg">JF</span></div>
-            <div><h1 className="text-lg font-bold tracking-tight text-gray-900">極豐通訊處</h1><p className="text-[10px] text-gray-400 uppercase tracking-[0.2em]">Ji Feng Agency</p></div>
+      {/* 桌機版：全寬深色頂部導覽 */}
+      <nav className="hidden md:flex sticky top-0 z-50 h-16 items-center gap-4 px-5 bg-[#070b17]/85 backdrop-blur-xl border-b border-white/10">
+        <div className="flex items-center gap-3 shrink-0">
+          <div className="w-10 h-10 rounded-xl flex items-center justify-center border border-amber-400/40 bg-gradient-to-br from-[#14192b] to-[#0a0e1a]"><span className="text-amber-400 font-serif font-bold text-lg">JF</span></div>
+          <div className="leading-tight"><h1 className="text-[15px] font-bold text-white tracking-wide">極豐通訊處</h1><p className="text-[9px] text-white/45 tracking-[0.22em]">JI FENG AGENCY</p></div>
+        </div>
+        <div className="flex-1 min-w-0 overflow-x-auto no-scrollbar">
+          <div className="flex items-center gap-1 w-max mx-auto rounded-2xl border border-white/10 bg-white/[0.04] p-1">
+            {navItems.map(item => {
+              const ItemIcon = item.icon;
+              const active = activeTab === item.id;
+              return (
+                <button key={item.id} onClick={() => setActiveTab(item.id)} title={item.label} className={`relative flex items-center gap-1.5 px-2.5 h-9 rounded-xl text-[13px] font-semibold whitespace-nowrap transition ${active ? 'bg-blue-500/20 text-white border border-blue-400/60 shadow-[0_0_16px_rgba(59,130,246,.45)]' : 'text-white/65 hover:text-white hover:bg-white/[0.06] border border-transparent'}`}>
+                  <ItemIcon size={15} /><span className={active ? '' : 'hidden min-[1480px]:inline'}>{item.label}</span>
+                  {!!item.badge && <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[17px] h-[17px] flex items-center justify-center px-1">{item.badge > 99 ? '99+' : item.badge}</span>}
+                </button>
+              );
+            })}
           </div>
-          <div className="flex items-center gap-4">
-            <div className="flex bg-gray-100/60 p-1.5 rounded-full backdrop-blur-sm">
-              {navItems.map(item => {
-                const ItemIcon = item.icon;
-                return (
-                  <button
-                    key={item.id}
-                    onClick={() => setActiveTab(item.id)}
-                    className={`relative flex items-center gap-2 px-6 py-2.5 rounded-full text-sm font-bold transition-all ${activeTab === item.id ? 'bg-gray-900 text-white shadow-lg' : 'text-gray-500 hover:text-gray-900'}`}
-                  >
-                    <ItemIcon size={16} />
-                    {item.label}
-                    {!!item.badge && (
-                      <span className="absolute -top-1 -right-1 bg-red-500 text-white text-[10px] font-bold rounded-full min-w-[18px] h-[18px] flex items-center justify-center px-1">{item.badge > 99 ? '99+' : item.badge}</span>
-                    )}
-                  </button>
-                );
-              })}
-            </div>
-            <div className="flex items-center gap-2 border-l border-gray-200 pl-4">
-              <button
-                onClick={() => setShowGlobalSearch(true)}
-                title="全域搜尋"
-                className="p-2 rounded-full text-gray-400 hover:bg-gray-100 hover:text-gray-700 transition"
-              >
-                <Search size={18} />
-              </button>
-              <div className="text-right">
-                <p className="text-xs font-bold text-gray-900">{loggedInUser.name}</p>
-                <p className="text-[10px] text-gray-400">{loggedInUser.role}</p>
-              </div>
-              <button
-                onClick={handleLogout}
-                title="登出"
-                className="p-2 rounded-full text-gray-400 hover:bg-red-50 hover:text-red-500 transition"
-              >
-                <LogOut size={18} />
-              </button>
-            </div>
+        </div>
+        <div className="flex items-center gap-1.5 shrink-0">
+          <button onClick={() => setShowGlobalSearch(true)} title="全域搜尋" className="w-9 h-9 rounded-full flex items-center justify-center text-white/70 hover:bg-white/10"><Search size={18} /></button>
+          <button onClick={() => setActiveTab('todo')} title="今日待辦" className="relative w-9 h-9 rounded-full flex items-center justify-center text-white/70 hover:bg-white/10"><Bell size={18} />{!!todoCount && <span className="absolute top-0 right-0 bg-red-500 text-white text-[9px] font-bold rounded-full min-w-[15px] h-[15px] flex items-center justify-center px-1">{todoCount}</span>}</button>
+          <div className="flex items-center gap-2 pl-2 ml-1 border-l border-white/10">
+            <Avatar name={loggedInUser.name} size={34} />
+            <div className="leading-tight"><p className="text-[13px] font-semibold text-white">{loggedInUser.name}</p><p className="text-[10px] text-white/45">{loggedInUser.role}</p></div>
+            <button onClick={handleLogout} title="登出" className="w-8 h-8 rounded-full flex items-center justify-center text-white/50 hover:bg-red-500/15 hover:text-red-300"><LogOut size={16} /></button>
           </div>
         </div>
       </nav>
@@ -12079,7 +12630,8 @@ const App = () => {
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
-      <main className={`relative z-10 max-w-7xl mx-auto px-4 md:px-6 ${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment'].includes(activeTab) ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-8`}>
+      <main className={`relative z-10 max-w-7xl md:max-w-none mx-auto px-4 md:px-5 ${FIT_TABS.includes(activeTab) ? 'md:h-[calc(100vh-64px)] md:overflow-y-auto no-scrollbar md:!pt-3 md:pb-3' : ''} ${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment'].includes(activeTab) ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-6`}>
+        {activeTab === 'overview' && isTeamScheduleViewer && <OverviewPage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} season={season} rankTargets={rankTargets} />}
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
