@@ -1,5 +1,6 @@
 import React, { useState, useMemo } from 'react';
-import { X, Check, GitCompare, Filter } from 'lucide-react';
+import { createPortal } from 'react-dom';
+import { X, Check, GitCompare, Filter, ChevronLeft, ChevronRight } from 'lucide-react';
 import { CATALOG, CATALOG_CATEGORIES, NA } from './productCatalog.js';
 
 // 各類型用色（固定字串，Tailwind 才掃得到）
@@ -11,7 +12,7 @@ const TONE = {
   amber:   { head: 'bg-amber-400/15 text-amber-200 border-amber-400/30',       cell: 'bg-amber-400/[0.07] text-amber-50',     dot: 'bg-amber-400' },
 };
 
-const ProductCatalog = () => {
+const DesktopCatalog = () => {
   const [cat, setCat] = useState('癌險');
   const [groupId, setGroupId] = useState('all');
   const [onlyDiff, setOnlyDiff] = useState(false);
@@ -202,5 +203,310 @@ const ProductCatalog = () => {
     </div>
   );
 };
+
+
+
+// ───────────────── 手機版：商品卡片 → 比較頁 → 商品詳情 ─────────────────
+// 卡片三格：險種＋兩個特色（依險種挑選的重點列）
+const FEATURE_KEYS = {
+  '癌險': ['sum', 'wait'],
+  '重大疾病・精選傷病': ['sum', 'wait'],
+  '住院・手術': ['hosp', 'sum'],
+  '長照險': ['lump', 'sum'],
+  '意外險': ['death', 'sum'],
+};
+const firstLine = (v) => String(v ?? '').split('\n')[0];
+const kindOf = (p) => firstLine(p.cells.kind).split('・')[0] || '—';
+const getRow = (data, key) => { for (const sec of data.rows) { const r = sec.rows.find(x => x.key === key); if (r) return r; } return null; };
+const valOf = (p, key) => p.cells[key] ?? (key === 'cur' ? '新台幣' : NA);
+const rowLabelShort = (l) => (l || '').replace(/[（(].*$/, '');
+
+const FeatureTiles = ({ p, cat, data }) => {
+  const keys = FEATURE_KEYS[cat] || ['sum', 'wait'];
+  const tiles = [{ v: kindOf(p), l: '險種' }, ...keys.map(k => ({ v: firstLine(valOf(p, k)), l: rowLabelShort(getRow(data, k)?.label || '') }))];
+  return (
+    <div className="grid grid-cols-3 gap-2 mt-3">
+      {tiles.map((t, i) => (
+        <div key={i} className="rounded-xl bg-white/[0.06] border border-white/[0.06] px-2 py-2 text-center min-w-0">
+          <div className="text-[12px] font-bold text-white leading-snug line-clamp-2 break-words">{t.v === NA ? '—' : t.v}</div>
+          <div className="text-[10px] text-white/45 mt-0.5 truncate">{t.l}</div>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+const CodeBadge = ({ p, size = 'md' }) => (
+  <div className={`shrink-0 rounded-xl border font-black flex items-center justify-center text-center leading-tight ${size === 'lg' ? 'w-16 h-16 text-lg' : 'min-w-[52px] h-[52px] px-1.5 text-[13px]'} ${TONE[p.color].head}`}>{p.code}</div>
+);
+
+const MobileCatalog = () => {
+  const [cat, setCat] = useState('癌險');
+  const [groupId, setGroupId] = useState('all');
+  const [picked, setPicked] = useState([]);
+  const [view, setView] = useState('list');        // list | compare
+  const [cmpTab, setCmpTab] = useState('key');     // key | cover | fit
+  const [detail, setDetail] = useState(null);
+  const [dTab, setDTab] = useState('intro');
+  const data = CATALOG[cat];
+  const list = useMemo(() => !data ? [] : groupId === 'all' ? data.products : data.products.filter(p => p.group === groupId), [data, groupId]);
+  const pickedProducts = useMemo(() => data ? data.products.filter(p => picked.includes(p.id)) : [], [data, picked]);
+  const toggle = (id) => setPicked(prev => prev.includes(id) ? prev.filter(x => x !== id) : prev.length >= 3 ? prev : [...prev, id]);
+  const groupLabel = (p) => data.groups.find(g => g.id === p.group)?.label;
+  const openDetail = (p) => { setDetail(p); setDTab('intro'); };
+
+  // 比較表資料
+  const keySec = data?.rows[0];
+  const keyRows = keySec ? keySec.rows.filter(r => r.key !== 'cur') : [];
+  const coverSecs = data ? data.rows.slice(1).map(sec => ({ ...sec, rows: sec.rows.filter(r => !pickedProducts.every(p => valOf(p, r.key) === NA)) })).filter(s => s.rows.length) : [];
+
+  const Tabs = ({ items, cur, set }) => (
+    <div className="flex gap-1.5 p-1 rounded-2xl bg-white/[0.06] border border-white/10">
+      {items.map(([k, l]) => (
+        <button key={k} onClick={() => set(k)} className={`flex-1 py-2 rounded-xl text-[13px] font-bold transition ${cur === k ? 'bg-white text-gray-900' : 'text-white/60'}`}>{l}</button>
+      ))}
+    </div>
+  );
+
+  return (
+    <div className="space-y-3 pb-24">
+      {/* 類別 */}
+      <div className="flex gap-2 overflow-x-auto no-scrollbar pb-1">
+        {CATALOG_CATEGORIES.map(c => {
+          const has = !!CATALOG[c];
+          return (
+            <button key={c} onClick={() => has && (setCat(c), setGroupId('all'), setPicked([]))}
+              className={`shrink-0 px-4 py-2 rounded-full text-sm font-bold border ${cat === c ? 'bg-white text-gray-900 border-white' : has ? 'bg-white/[0.06] text-white/80 border-white/10' : 'bg-white/[0.03] text-white/30 border-white/5'}`}>
+              {c}{!has && <span className="ml-1.5 text-[10px] font-medium">即將上線</span>}
+            </button>
+          );
+        })}
+      </div>
+
+      {!data ? (
+        <div className="rounded-3xl border border-white/10 bg-white/[0.045] py-16 text-center text-white/40 text-sm">「{cat}」的商品總表準備中，提供 DM 後即可上線</div>
+      ) : (
+        <>
+          <div className="flex gap-1.5 overflow-x-auto no-scrollbar">
+            {[{ id: 'all', label: '全部' }, ...data.groups].map(g => (
+              <button key={g.id} onClick={() => setGroupId(g.id)}
+                className={`shrink-0 px-3 py-1.5 rounded-full text-xs font-bold border ${groupId === g.id ? 'bg-sky-400/20 text-sky-200 border-sky-400/40' : 'bg-white/[0.06] text-white/60 border-white/10'}`}>{g.label}</button>
+            ))}
+          </div>
+          <div className="flex items-center justify-between px-1 text-[12px] text-white/50">
+            <span>共 {list.length} 款商品</span>
+            <span>勾選右上圓圈，最多 3 款比較</span>
+          </div>
+
+          {/* 商品卡片 */}
+          <div className="space-y-3">
+            {list.map(p => {
+              const on = picked.includes(p.id);
+              const full = !on && picked.length >= 3;
+              return (
+                <div key={p.id} className={`rounded-2xl border p-3.5 bg-white/[0.045] ${on ? 'border-amber-400/60' : 'border-white/10'}`}>
+                  <div className="flex items-start gap-3">
+                    <button onClick={() => openDetail(p)} className="flex items-start gap-3 flex-1 min-w-0 text-left">
+                      <CodeBadge p={p} />
+                      <div className="min-w-0 flex-1">
+                        <div className="text-[15px] font-bold text-white leading-snug">{p.short || p.name}</div>
+                        <div className="flex flex-wrap gap-1.5 mt-1.5">
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white/10 text-white/70">{groupLabel(p)}</span>
+                          <span className="px-2 py-0.5 rounded-md text-[10px] font-bold bg-white/10 text-white/70">{kindOf(p)}</span>
+                        </div>
+                      </div>
+                    </button>
+                    <button onClick={() => toggle(p.id)} disabled={full} aria-label={`選取 ${p.code}`}
+                      className={`shrink-0 w-7 h-7 rounded-full border flex items-center justify-center ${on ? 'bg-amber-400 border-amber-400 text-gray-900' : full ? 'border-white/10 text-transparent' : 'border-white/30 text-transparent'}`}>
+                      <Check size={15} />
+                    </button>
+                  </div>
+                  <button onClick={() => openDetail(p)} className="block w-full text-left">
+                    <p className="text-[12px] text-white/60 mt-2 leading-relaxed line-clamp-2">{p.func}</p>
+                    <FeatureTiles p={p} cat={cat} data={data} />
+                  </button>
+                </div>
+              );
+            })}
+          </div>
+          <p className="text-[10px] text-white/30 px-1">保障結束年齡超過 90 歲者為「終身型」，其餘為「定期型」。實際承保以保單條款與最新費率為準。</p>
+        </>
+      )}
+
+      {/* 比較列 */}
+      {data && picked.length > 0 && view === 'list' && !detail && (
+        <div className="fixed left-4 right-4 bottom-[84px] z-40 flex items-center gap-2 rounded-2xl bg-[#1b1e26]/95 backdrop-blur border border-white/15 p-2 shadow-2xl">
+          <button onClick={() => setPicked([])} className="px-3 py-2 text-xs font-bold text-white/60">清除</button>
+          <div className="flex-1 text-[12px] text-white/70 truncate">已選 {picked.length}/3　{pickedProducts.map(p => p.code).join('、')}</div>
+          <button disabled={picked.length < 2} onClick={() => { setView('compare'); setCmpTab('key'); }}
+            className={`px-4 py-2 rounded-xl text-sm font-bold ${picked.length >= 2 ? 'bg-blue-600 text-white' : 'bg-white/10 text-white/30'}`}>{picked.length >= 2 ? '開始比較' : '再選 1 款'}</button>
+        </div>
+      )}
+
+      {/* 比較頁 */}
+      {view === 'compare' && data && createPortal(
+        <div className="fixed inset-0 z-[400] bg-[#0b0e16] text-white overflow-y-auto" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+          <div className="sticky top-0 z-10 bg-[#0b0e16]/95 backdrop-blur px-4 pt-3 pb-3 border-b border-white/10">
+            <div className="flex items-center justify-between">
+              <button onClick={() => setView('list')} className="p-1 -ml-1"><ChevronLeft size={24} /></button>
+              <div className="font-bold text-[15px]">商品比較 ({pickedProducts.length}/3)</div>
+              <button onClick={() => { setPicked([]); setView('list'); }} className="px-3 py-1 rounded-lg bg-white/10 text-xs font-bold text-white/80">清除</button>
+            </div>
+            <div className={`grid gap-2 mt-3`} style={{ gridTemplateColumns: `repeat(${pickedProducts.length}, minmax(0,1fr))` }}>
+              {pickedProducts.map(p => (
+                <div key={p.id} className={`relative rounded-xl border p-2 text-left ${TONE[p.color].head}`}>
+                  <button onClick={() => toggle(p.id)} aria-label={`移除 ${p.code}`} className="absolute top-1 right-1 w-5 h-5 rounded-full bg-black/40 flex items-center justify-center"><X size={11} /></button>
+                  <button onClick={() => openDetail(p)} className="block text-left w-full">
+                    <div className="text-sm font-black leading-tight pr-4">{p.code}</div>
+                    <div className="text-[10px] opacity-80 mt-0.5 line-clamp-2 leading-snug">{p.short || p.name}</div>
+                  </button>
+                </div>
+              ))}
+            </div>
+            <div className="mt-3"><Tabs items={[['key', '重點比較'], ['cover', '保障內容'], ['fit', '適合對象']]} cur={cmpTab} set={setCmpTab} /></div>
+          </div>
+
+          <div className="px-4 py-4 pb-28">
+            {pickedProducts.length < 2 ? (
+              <div className="text-center text-white/50 text-sm py-16">請至少選 2 款商品，才能比較</div>
+            ) : cmpTab === 'fit' ? (
+              <div className="space-y-3">
+                {pickedProducts.map(p => (
+                  <div key={p.id} className="rounded-2xl border border-white/10 bg-white/[0.045] p-3.5">
+                    <div className="flex items-center gap-2 mb-2"><span className={`px-2 py-0.5 rounded-md text-[11px] font-black border ${TONE[p.color].head}`}>{p.code}</span><span className="text-[12px] text-white/60">{groupLabel(p)}</span></div>
+                    <p className="text-[13px] leading-relaxed text-white/90">{p.fit}</p>
+                    <p className="text-[12px] leading-relaxed text-white/50 mt-2">{p.func}</p>
+                  </div>
+                ))}
+              </div>
+            ) : (
+              <div className="rounded-2xl border border-white/10 overflow-hidden">
+                <table className="w-full table-fixed border-collapse text-left">
+                  <colgroup><col style={{ width: '24%' }} />{pickedProducts.map(p => <col key={p.id} />)}</colgroup>
+                  <tbody>
+                    {(cmpTab === 'key' ? [{ section: null, rows: keyRows }] : coverSecs).map((sec, si) => (
+                      <React.Fragment key={si}>
+                        {sec.section && <tr><td colSpan={pickedProducts.length + 1} className="bg-[#1b1e26] px-3 py-1.5 text-[11px] font-black text-white/70 tracking-wider">{sec.section}</td></tr>}
+                        {sec.rows.map(r => (
+                          <tr key={r.key}>
+                            <td className="bg-[#14161c] border-t border-white/[0.07] px-2 py-2 text-[11px] font-bold text-white/55 align-top break-words">{r.label}</td>
+                            {pickedProducts.map(p => {
+                              const v = valOf(p, r.key); const none = v === NA;
+                              return <td key={p.id} className={`border-t border-l border-white/[0.07] px-2 py-2 text-[11px] leading-relaxed whitespace-pre-line break-words align-top ${none ? 'text-white/20 text-center' : TONE[p.color].cell}`}>{v}</td>;
+                            })}
+                          </tr>
+                        ))}
+                      </React.Fragment>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            )}
+          </div>
+          {cmpTab === 'key' && pickedProducts.length >= 2 && (
+            <div className="fixed left-4 right-4 bottom-5 z-20" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+              <button onClick={() => setCmpTab('cover')} className="w-full py-3.5 rounded-2xl bg-blue-600 text-white font-bold text-[15px] shadow-xl">查看完整比較（含保障內容）</button>
+            </div>
+          )}
+        </div>, document.body
+      )}
+
+      {/* 商品詳情 */}
+      {detail && data && (() => {
+        const p = detail; const on = picked.includes(p.id); const full = !on && picked.length >= 3;
+        const ruleRows = keyRows.filter(r => !['kind'].includes(r.key) && valOf(p, r.key) !== NA);
+        const coverSec = data.rows.slice(1).map(sec => ({ ...sec, rows: sec.rows.filter(r => valOf(p, r.key) !== NA) })).filter(s => s.rows.length);
+        const feats = [p.func, data.groups.find(g => g.id === p.group)?.hint, `${kindOf(p)}：${firstLine(valOf(p, 'term'))}`].filter(x => x && x !== NA);
+        return createPortal(
+          <div className="fixed inset-0 z-[410] bg-[#0b0e16] text-white overflow-y-auto" style={{ paddingTop: 'env(safe-area-inset-top)' }}>
+            <div className="sticky top-0 z-10 bg-[#0b0e16]/95 backdrop-blur px-4 py-3 flex items-center justify-between border-b border-white/10">
+              <button onClick={() => setDetail(null)} className="p-1 -ml-1"><ChevronLeft size={24} /></button>
+              <div className="font-bold text-[15px]">商品詳情</div>
+              <div className="w-6" />
+            </div>
+            <div className="px-4 py-4 pb-32 space-y-4">
+              <div className="rounded-3xl border border-white/10 bg-white/[0.045] p-4">
+                <div className="flex items-center gap-3">
+                  <CodeBadge p={p} size="lg" />
+                  <div className="min-w-0">
+                    <div className="text-lg font-black leading-snug">{p.short || p.name}</div>
+                    <div className="text-[12px] text-white/55 mt-0.5">{groupLabel(p)}・{kindOf(p)}</div>
+                  </div>
+                </div>
+                <p className="text-[13px] text-white/75 mt-3 leading-relaxed">{p.func}</p>
+                <FeatureTiles p={p} cat={cat} data={data} />
+              </div>
+              <Tabs items={[['intro', '商品介紹'], ['cover', '保障內容'], ['fit', '適合對象'], ['rule', '投保規則']]} cur={dTab} set={setDTab} />
+
+              {dTab === 'intro' && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-4">
+                  <div className="text-[15px] font-black mb-3">商品特色</div>
+                  <div className="space-y-2">
+                    {feats.map((f, i) => (
+                      <div key={i} className="flex items-start gap-2.5 rounded-xl bg-white/[0.05] px-3 py-2.5">
+                        <span className="mt-0.5 w-5 h-5 rounded-full bg-emerald-500/90 flex items-center justify-center shrink-0"><Check size={12} /></span>
+                        <span className="text-[13px] leading-relaxed text-white/90">{f}</span>
+                      </div>
+                    ))}
+                  </div>
+                  <div className="text-[11px] text-white/35 mt-3">全名：{p.name}</div>
+                </div>
+              )}
+              {dTab === 'cover' && (
+                <div className="space-y-3">
+                  {coverSec.length === 0 && <div className="text-center text-white/40 text-sm py-10">此商品沒有其他給付項目</div>}
+                  {coverSec.map(sec => (
+                    <div key={sec.section} className="rounded-2xl border border-white/10 bg-white/[0.045] overflow-hidden">
+                      <div className="px-4 py-2 bg-[#1b1e26] text-[11px] font-black text-white/70 tracking-wider">{sec.section}</div>
+                      {sec.rows.map(r => (
+                        <div key={r.key} className="px-4 py-2.5 border-t border-white/[0.06]">
+                          <div className="text-[11px] text-white/45">{r.label}</div>
+                          <div className="text-[13px] leading-relaxed mt-0.5 whitespace-pre-line">{valOf(p, r.key)}</div>
+                        </div>
+                      ))}
+                    </div>
+                  ))}
+                </div>
+              )}
+              {dTab === 'fit' && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-4">
+                  <div className="text-[15px] font-black mb-2">適合對象</div>
+                  <p className="text-[14px] leading-relaxed text-white/90">{p.fit}</p>
+                </div>
+              )}
+              {dTab === 'rule' && (
+                <div className="rounded-2xl border border-white/10 bg-white/[0.045] p-4">
+                  <div className="text-[15px] font-black mb-3">投保規則</div>
+                  <div className="space-y-2">
+                    {ruleRows.map(r => (
+                      <div key={r.key} className="flex items-start justify-between gap-3 rounded-xl bg-white/[0.05] px-3 py-2.5">
+                        <span className="text-[12px] text-white/55 shrink-0">{r.label}</span>
+                        <span className="text-[13px] font-bold text-right whitespace-pre-line">{valOf(p, r.key)}</span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              <div className="text-[10px] text-white/30">DM 版本：{p.doc}。實際承保以保單條款與最新費率為準。</div>
+            </div>
+            <div className="fixed left-4 right-4 bottom-5 z-20" style={{ paddingBottom: 'env(safe-area-inset-bottom)' }}>
+              <button disabled={full} onClick={() => toggle(p.id)}
+                className={`w-full py-3.5 rounded-2xl font-bold text-[15px] shadow-xl ${on ? 'bg-amber-400 text-gray-900' : full ? 'bg-white/10 text-white/30' : 'bg-blue-600 text-white'}`}>
+                {on ? '已加入比較（點此移除）' : full ? '最多比較 3 款' : '加入比較'}
+              </button>
+            </div>
+          </div>, document.body
+        );
+      })()}
+    </div>
+  );
+};
+
+const ProductCatalog = () => (
+  <>
+    <div className="hidden md:block"><DesktopCatalog /></div>
+    <div className="md:hidden"><MobileCatalog /></div>
+  </>
+);
 
 export default ProductCatalog;
