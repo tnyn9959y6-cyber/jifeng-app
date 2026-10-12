@@ -3830,6 +3830,8 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
   const [agentFilter, setAgentFilter] = useState('');
   const [showFilter, setShowFilter] = useState(false);
   const [detail, setDetail] = useState(null);
+  const [confirmIssueId, setConfirmIssueId] = useState(null);
+  useEffect(() => { if (!confirmIssueId) return; const t = setTimeout(() => setConfirmIssueId(null), 3500); return () => clearTimeout(t); }, [confirmIssueId]);
 
   const months = useMemo(() => {
     const set = new Set(records.map(r => (r.date || '').slice(0, 7)).filter(Boolean));
@@ -3949,7 +3951,7 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
           {filtered.slice(0, 40).map((r, i, arr) => {
             const st = STATE[stateOf(r)];
             return (
-              <button key={r.id} onClick={() => setDetail(r)} className={`w-full flex items-center gap-3 py-3 text-left ${i < arr.length - 1 ? 'border-b border-white/10' : ''}`}>
+              <div key={r.id} role="button" tabIndex={0} onClick={() => setDetail(r)} className={`w-full flex items-center gap-3 py-3 text-left cursor-pointer ${i < arr.length - 1 ? 'border-b border-white/10' : ''}`}>
                 <Avatar name={r.agentName} size={36} />
                 <div className="min-w-0 flex-1">
                   <p className="text-[14px] font-bold truncate">{r.agentName}<span className="text-white/40 font-normal text-[12px]"> · {r.insuredName || '—'}</span></p>
@@ -3959,8 +3961,10 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
                   <p className="text-[14px] font-bold tabular-nums text-blue-300">{money(r.premium || 0)}</p>
                   <span className={`inline-block mt-0.5 text-[10px] font-bold px-2 py-0.5 rounded-full ${st.chip}`}>{st.label}</span>
                 </div>
-                <ChevronRight size={14} className="text-white/25 shrink-0" />
-              </button>
+                {stateOf(r) !== 'issued'
+                  ? <button type="button" disabled={issuingId === r.id} onClick={(ev) => { ev.stopPropagation(); if (confirmIssueId === r.id) { setConfirmIssueId(null); onMarkIssued(r); } else setConfirmIssueId(r.id); }} className={`shrink-0 h-9 px-3 rounded-full text-[12px] font-bold flex items-center gap-1 active:scale-95 disabled:opacity-50 ${confirmIssueId === r.id ? 'bg-amber-400 text-black' : 'bg-emerald-500'}`}><CheckCircle2 size={14} />{issuingId === r.id ? '處理中' : confirmIssueId === r.id ? '再點確認' : '發單'}</button>
+                  : <ChevronRight size={14} className="text-white/25 shrink-0" />}
+              </div>
             );
           })}
         </div>
@@ -4057,12 +4061,12 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
         </div>
       </div>
 
-      {detail && (() => {
+      {detail && createPortal((() => {
         const r = records.find(x => x.id === detail.id) || detail;
         const st = STATE[stateOf(r)];
         return (
-          <div className="fixed inset-0 z-[100] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setDetail(null)}>
-            <div className="w-full max-w-md rounded-t-[28px] md:rounded-[28px] border-t md:border border-white/10 bg-[#0c1020] p-5 pb-8 md:pb-5" onClick={e => e.stopPropagation()}>
+          <div className="fixed inset-0 z-[300] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setDetail(null)}>
+            <div className="w-full max-w-md rounded-t-[28px] md:rounded-[28px] border-t md:border border-white/10 bg-[#0c1020] text-white p-5 md:pb-5" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 1.25rem)' }} onClick={e => e.stopPropagation()}>
               <div className="flex items-start justify-between gap-3 mb-4">
                 <div className="min-w-0"><p className="text-[18px] font-bold truncate">{r.agentName}</p><p className="text-[12px] text-white/45">{r.date} · {r.insuredName || '—'}</p></div>
                 <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${st.chip}`}>{st.label}</span>
@@ -4073,14 +4077,14 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
                 ))}
               </div>
               <div className="flex gap-2.5 mt-4">
-                {r.status && r.status !== '已發單' && <button disabled={issuingId === r.id} onClick={() => { onMarkIssued(r); setDetail(null); }} className="flex-1 py-3 rounded-2xl bg-emerald-500 font-bold text-[14px] disabled:opacity-50">標記已發單</button>}
+                {stateOf(r) !== 'issued' && <button disabled={issuingId === r.id} onClick={() => { onMarkIssued(r); setDetail(null); }} className="flex-1 py-3 rounded-2xl bg-emerald-500 font-bold text-[14px] disabled:opacity-50 flex items-center justify-center gap-1.5"><CheckCircle2 size={16} />標記已發單</button>}
                 <button onClick={() => { onEdit(r); setDetail(null); }} className="flex-1 py-3 rounded-2xl bg-white/10 font-bold text-[14px]">編輯</button>
                 <button onClick={() => { onDelete(r.id); setDetail(null); }} className="px-5 py-3 rounded-2xl bg-rose-500/20 text-rose-300 font-bold text-[14px]">刪除</button>
               </div>
             </div>
           </div>
         );
-      })()}
+      })(), document.body)}
     </>
   );
 };const SalesEntry = ({ team, records, setRecords, user, loggedInUser, onSearch }) => {
