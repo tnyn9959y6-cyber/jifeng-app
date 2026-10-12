@@ -7,7 +7,8 @@ import {
   BookOpen, 
   TrendingUp, 
   Plus, 
-  Trash2, 
+  Trash2,
+  RotateCcw, 
   Edit3,
   Target,
   Crown,
@@ -3160,31 +3161,42 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const targets = (season === 'H1' ? rankTargets?.H1 : rankTargets?.H2) || {};
   // 組績：每個組長一列（政翰自己 + 起算日當天不是主任以上的人），目標用組長職級
   const unitLeaders = useMemo(() => members.filter(m => String(m.id) === String(loggedInUser?.id) || !wasRepAtSeasonStart(m, season)), [members, season, loggedInUser?.id]);
-  const contestRows = useMemo(() => unitLeaders.map(m => {
-    const unit = getUnitMembers(team, m, season);
-    const uids = new Set(unit.map(u => String(u.id)));
-    const mates = unit.filter(u => u.id !== m.id).map(u => u.name);
-    const role = (season === 'H2' && H2_ROLE_MAPPING[m.name]) ? H2_ROLE_MAPPING[m.name] : m.role;
-    const t = targets[role] || targets['業務代表'] || { peak: { total: 0 }, summit: { total: 0 } };
-    let w = 0, p = 0, aw = 0;
-    distRecords.forEach(r => { if (uids.has(String(r.agentId)) && seasonMonths.includes((r.date || '').slice(0, 7))) { w += r.weighted || 0; p += r.premium || 0; if (r.isAH) aw += r.weighted || 0; } });
-    const pk = Math.max(pct(w, t.peak?.total), t.peak?.actualPremium > 0 ? pct(p, t.peak.actualPremium) : 0);
-    const sm = Math.max(pct(w, t.summit?.total), t.summit?.actualPremium > 0 ? pct(p, t.summit.actualPremium) : 0);
-    // 差額：H1 = 加權 + A&H 都要達標；H2 = 加權 或 實收 任一達標
-    const gapOf = (k) => {
-      const tt = t[k] || {};
-      const gW = Math.max(0, (tt.total || 0) - w);
-      const gAH = season === 'H1' ? Math.max(0, (tt.ah || 0) - aw) : 0;
-      const hasA = season === 'H2' && tt.actualPremium > 0;
-      const gP = hasA ? Math.max(0, tt.actualPremium - p) : null;
-      const done = season === 'H1' ? (gW === 0 && gAH === 0) : (gW === 0 || (hasA && gP === 0));
-      // 主要顯示的差額：H1 取加權差；H2 取「完成比例較高」那一條路徑的差額
-      let main = gW, via = '加權';
-      if (season === 'H2' && hasA && (p / tt.actualPremium) > (w / (tt.total || 1))) { main = gP; via = '實收'; }
-      return { done, gW, gAH, gP, hasA, main, via, target: tt.total || 0, targetP: tt.actualPremium || 0, targetAH: tt.ah || 0 };
+  const contestRows = useMemo(() => {
+    const roleFor = (m) => (season === 'H2' && H2_ROLE_MAPPING[m.name]) ? H2_ROLE_MAPPING[m.name] : m.role;
+    const sumOf = (uids) => {
+      let w = 0, p = 0, aw = 0;
+      distRecords.forEach(r => { if (uids.has(String(r.agentId)) && seasonMonths.includes((r.date || '').slice(0, 7))) { w += r.weighted || 0; p += r.premium || 0; if (r.isAH) aw += r.weighted || 0; } });
+      return { w, p, aw };
     };
-    return { m, role, w, p, aw, t, pk, sm, mates, gp: gapOf('peak'), gs: gapOf('summit') };
-  }).sort((a, b) => b.pk - a.pk), [unitLeaders, team, distRecords, season, rankTargets]);
+    // 差額：H1 = 加權 + A&H 都要達標；H2 = 加權 或 實收 任一達標
+    const build = (m, uids) => {
+      const { w, p, aw } = sumOf(uids);
+      const role = roleFor(m);
+      const t = targets[role] || targets['業務代表'] || { peak: { total: 0 }, summit: { total: 0 } };
+      const pk = Math.max(pct(w, t.peak?.total), t.peak?.actualPremium > 0 ? pct(p, t.peak.actualPremium) : 0);
+      const sm = Math.max(pct(w, t.summit?.total), t.summit?.actualPremium > 0 ? pct(p, t.summit.actualPremium) : 0);
+      const gapOf = (k) => {
+        const tt = t[k] || {};
+        const gW = Math.max(0, (tt.total || 0) - w);
+        const gAH = season === 'H1' ? Math.max(0, (tt.ah || 0) - aw) : 0;
+        const hasA = season === 'H2' && tt.actualPremium > 0;
+        const gP = hasA ? Math.max(0, tt.actualPremium - p) : null;
+        const done = season === 'H1' ? (gW === 0 && gAH === 0) : (gW === 0 || (hasA && gP === 0));
+        let main = gW, via = '加權';
+        if (season === 'H2' && hasA && (p / tt.actualPremium) > (w / (tt.total || 1))) { main = gP; via = '實收'; }
+        return { done, gW, gAH, gP, hasA, main, via, target: tt.total || 0, targetP: tt.actualPremium || 0, targetAH: tt.ah || 0 };
+      };
+      return { m, role, w, p, aw, t, pk, sm, gp: gapOf('peak'), gs: gapOf('summit') };
+    };
+    return unitLeaders.map(m => {
+      const unit = getUnitMembers(team, m, season);
+      const row = build(m, new Set(unit.map(u => String(u.id))));
+      // 組內每個人自己的進度（含組長本人，各自用自己的職級目標）
+      row.people = unit.map(u => build(u, new Set([String(u.id)]))).sort((a, b) => (a.m.id === m.id ? -1 : b.m.id === m.id ? 1 : b.pk - a.pk));
+      row.mates = unit.filter(u => u.id !== m.id).map(u => u.name);
+      return row;
+    }).sort((a, b) => b.pk - a.pk);
+  }, [unitLeaders, team, distRecords, season, rankTargets]);
   const peakDone = contestRows.filter(r => r.pk >= 100).length;
   const contestAvg = contestRows.length ? Math.round(contestRows.reduce((s, r) => s + r.pk, 0) / contestRows.length) : 0;
 
@@ -3247,13 +3259,24 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
     ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold border text-emerald-300 border-emerald-400/50 bg-emerald-500/10 whitespace-nowrap"><CheckCircle2 size={11} />{label}達標</span>
     : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] border whitespace-nowrap tabular-nums" style={{ color, borderColor: color + '55', background: color + '14' }}>{label}差 <b className="text-[12px]">{gapFmt(g.main)}</b></span>;
   const contestList = (limit) => (
-    <div className="space-y-2.5">
+    <div className="space-y-3.5">
       {contestRows.slice(0, limit).map(r => (
-        <div key={r.m.id} className="flex items-center gap-3">
-          <Avatar name={r.m.name} size={32} />
-          <div className="flex-1 min-w-0">
-            <div className="flex justify-between items-center gap-2 text-[12.5px] mb-1"><span className="font-semibold truncate" title={r.mates.length ? `含 ${r.mates.join('、')}` : '僅本人'}>{r.m.name} 組<span className="text-white/40 font-normal ml-1.5">{r.mates.length + 1} 人</span></span><span className="flex items-center gap-1 shrink-0"><GapChip label="高峰" g={r.gp} color="#93c5fd" /><GapChip label="極峰" g={r.gs} color="#fcd34d" /></span></div>
-            <div className="relative"><Bar v={r.pk} color={r.pk >= 100 ? '#34d399' : 'linear-gradient(90deg,#60a5fa,#818cf8)'} h={7} />{r.sm > 0 && <div className="absolute top-0 h-[7px] rounded-full bg-amber-300/80" style={{ width: `${Math.min(100, r.sm)}%`, opacity: .55 }} />}</div>
+        <div key={r.m.id}>
+          <div className="flex items-center gap-3">
+            <Avatar name={r.m.name} size={32} />
+            <div className="flex-1 min-w-0">
+              <div className="flex justify-between items-center gap-2 text-[12.5px] mb-1"><span className="font-semibold truncate">{r.m.name} 組<span className="text-white/40 font-normal ml-1.5">組績・{r.people.length} 人</span></span><span className="flex items-center gap-1 shrink-0"><GapChip label="高峰" g={r.gp} color="#93c5fd" /><GapChip label="極峰" g={r.gs} color="#fcd34d" /></span></div>
+              <div className="relative"><Bar v={r.pk} color={r.pk >= 100 ? '#34d399' : 'linear-gradient(90deg,#60a5fa,#818cf8)'} h={7} />{r.sm > 0 && <div className="absolute top-0 h-[7px] rounded-full bg-amber-300/80" style={{ width: `${Math.min(100, r.sm)}%`, opacity: .55 }} />}</div>
+            </div>
+          </div>
+          <div className="ml-[44px] mt-1.5 space-y-1 border-l border-white/10 pl-3">
+            {r.people.map(x => (
+              <div key={x.m.id} className="flex items-center gap-2 text-[11.5px]">
+                <span className="w-[88px] truncate text-white/75">{x.m.name}{x.m.id === r.m.id && <span className="text-white/35 text-[10px] ml-0.5">本人</span>}</span>
+                <div className="flex-1 min-w-0"><Bar v={x.pk} color={x.pk >= 100 ? '#34d399' : '#60a5fa'} h={4} /></div>
+                <span className="shrink-0 flex items-center gap-1"><GapChip label="高" g={x.gp} color="#93c5fd" /><GapChip label="極" g={x.gs} color="#fcd34d" /></span>
+              </div>
+            ))}
           </div>
         </div>
       ))}
@@ -3283,15 +3306,29 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
       <div className="grid grid-cols-[26px_minmax(110px,1fr)_84px_84px_minmax(0,1.25fr)_minmax(0,1.25fr)] gap-3 px-1 pb-2 text-[11px] text-white/40">
         <span>#</span><span>組別（組績）</span><span className="text-right">組累計加權</span><span className="text-right">組累計實收</span><span>新高峰 差額 / 目標</span><span>新極峰 差額 / 目標</span>
       </div>
-      <div className="divide-y divide-white/[0.07]">
+      <div className="space-y-3">
         {contestRows.map((r, i) => (
-          <div key={r.m.id} className="grid grid-cols-[26px_minmax(110px,1fr)_84px_84px_minmax(0,1.25fr)_minmax(0,1.25fr)] gap-3 items-center px-1 py-2">
-            <span className={`text-[13px] font-bold ${i < 3 ? 'text-amber-300' : 'text-white/35'}`}>{i + 1}</span>
-            <span className="flex items-center gap-2 min-w-0"><Avatar name={r.m.name} size={28} /><span className="min-w-0"><b className="block text-[13px] truncate">{r.m.name} 組<span className="text-white/40 font-normal text-[11px] ml-1">{r.role}標準</span></b><span className="block text-[10.5px] text-white/40 truncate" title={r.mates.join('、')}>{r.mates.length ? '含 ' + r.mates.join('、') : '僅本人'}</span></span></span>
-            <span className="text-right text-[13px] tabular-nums">{money(r.w)}</span>
-            <span className="text-right text-[13px] tabular-nums text-white/70">{money(r.p)}</span>
-            {gapCell(r.gp, '#93c5fd')}
-            {gapCell(r.gs, '#fcd34d')}
+          <div key={r.m.id} className="rounded-xl border border-white/[0.08] overflow-hidden">
+            <div className="grid grid-cols-[26px_minmax(110px,1fr)_84px_84px_minmax(0,1.25fr)_minmax(0,1.25fr)] gap-3 items-center px-2 py-2.5 bg-white/[0.06]">
+              <span className={`text-[13px] font-bold ${i < 3 ? 'text-amber-300' : 'text-white/35'}`}>{i + 1}</span>
+              <span className="flex items-center gap-2 min-w-0"><Avatar name={r.m.name} size={30} /><span className="min-w-0"><b className="block text-[13.5px] truncate">{r.m.name} 組<span className="text-amber-300/80 font-normal text-[11px] ml-1">組績</span></b><span className="block text-[10.5px] text-white/40 truncate">{r.role}標準・{r.people.length} 人</span></span></span>
+              <span className="text-right text-[13px] tabular-nums font-bold">{money(r.w)}</span>
+              <span className="text-right text-[13px] tabular-nums text-white/70">{money(r.p)}</span>
+              {gapCell(r.gp, '#93c5fd')}
+              {gapCell(r.gs, '#fcd34d')}
+            </div>
+            <div className="divide-y divide-white/[0.05]">
+              {r.people.map(x => (
+                <div key={x.m.id} className="grid grid-cols-[26px_minmax(110px,1fr)_84px_84px_minmax(0,1.25fr)_minmax(0,1.25fr)] gap-3 items-center px-2 py-1.5">
+                  <span />
+                  <span className="flex items-center gap-2 min-w-0"><Avatar name={x.m.name} size={22} /><span className="min-w-0"><b className="block text-[12.5px] truncate">{x.m.name}{x.m.id === r.m.id && <span className="text-white/35 font-normal text-[10.5px] ml-1">本人</span>}</b><span className="block text-[10px] text-white/35 truncate">{x.role}標準</span></span></span>
+                  <span className="text-right text-[12px] tabular-nums">{money(x.w)}</span>
+                  <span className="text-right text-[12px] tabular-nums text-white/60">{money(x.p)}</span>
+                  {gapCell(x.gp, '#93c5fd')}
+                  {gapCell(x.gs, '#fcd34d')}
+                </div>
+              ))}
+            </div>
           </div>
         ))}
       </div>
@@ -12133,31 +12170,30 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                 {e.note && <p className="text-gray-500 whitespace-pre-wrap">{e.note}</p>}
                 {creator && <p className="text-xs text-gray-400">建檔人：{creator}</p>}
               </div>
-              {done ? (
-                <div className="space-y-2">
-                  {!e.isVirtual && <button onClick={() => { setActionEvent(null); openEditEvent(e); }} className="w-full py-3.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2"><Edit3 size={17} /> 修改</button>}
-                  <div className="grid grid-cols-2 gap-2">
-                    <button onClick={() => { setActionEvent(null); handleUndoComplete(e); }} className="py-3 rounded-xl bg-indigo-50 text-indigo-600 font-bold text-sm">取消完成</button>
-                    {!e.isVirtual && <button onClick={() => { setActionEvent(null); setDeleteTarget(e.id); }} className="py-3 rounded-xl bg-red-50 text-red-600 font-bold text-sm flex items-center justify-center gap-1.5"><Trash2 size={15} /> 刪除</button>}
-                  </div>
-                </div>
-              ) : (
-                <div className="space-y-2">
+              <div className="space-y-2">
+                {done ? (
+                  <button onClick={() => { setActionEvent(null); handleUndoComplete(e); }} className="w-full py-3.5 rounded-xl bg-indigo-50 text-indigo-600 font-bold flex items-center justify-center gap-2"><RotateCcw size={17} /> 取消完成</button>
+                ) : (
                   <button onClick={() => { setActionEvent(null); handleCompleteEvent(e); }} className="w-full py-3.5 rounded-xl bg-emerald-500 hover:bg-emerald-600 text-white font-bold flex items-center justify-center gap-2"><CheckCircle2 size={18} /> 完成</button>
-                  {e.isVirtual ? (
-                    <>
-                      <button onClick={() => { setActionEvent(null); const rule = (recurringRules || []).find(r => r.id === e.ruleId); if (rule) openEditRecurring(rule); else setShowRecurringManage(true); }} className="w-full py-3.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2"><Edit3 size={17} /> 修改這個固定行程</button>
-                      <p className="text-xs text-gray-400 text-center pt-1">這是固定行程自動產生的場次，修改會套用到整個固定行程</p>
-                    </>
-                  ) : (
-                    <div className={`grid gap-2 ${e.isReminder ? 'grid-cols-2' : 'grid-cols-3'}`}>
+                )}
+                {e.isVirtual ? (
+                  <>
+                    <button onClick={() => { setActionEvent(null); const rule = (recurringRules || []).find(r => r.id === e.ruleId); if (rule) openEditRecurring(rule); else setShowRecurringManage(true); }} className="w-full py-3.5 rounded-xl bg-blue-600 text-white font-bold flex items-center justify-center gap-2"><Edit3 size={17} /> 修改這個固定行程</button>
+                    <button onClick={() => { setActionEvent(null); setShowRecurringManage(true); }} className="w-full py-3.5 rounded-xl border-2 border-red-300 text-red-600 font-bold flex items-center justify-center gap-2"><Trash2 size={17} /> 刪除固定行程（到管理頁）</button>
+                    <p className="text-xs text-gray-400 text-center pt-1">這是固定行程自動產生的場次，修改或刪除會套用到整個固定行程</p>
+                  </>
+                ) : (
+                  <>
+                    <div className={`grid gap-2 ${e.isReminder ? 'grid-cols-1' : 'grid-cols-2'}`}>
                       <button onClick={() => { setActionEvent(null); openEditEvent(e); }} className="py-3 rounded-xl bg-blue-600 text-white font-bold text-sm flex items-center justify-center gap-1.5"><Edit3 size={15} /> 修改</button>
                       {!e.isReminder && <button onClick={() => { setActionEvent(null); handleDuplicateEvent(e); }} className="py-3 rounded-xl bg-gray-100 hover:bg-gray-200 text-gray-700 font-bold text-sm flex items-center justify-center gap-1.5"><Copy size={15} /> 複製</button>}
-                      <button onClick={() => { setActionEvent(null); setDeleteTarget(e.id); }} className="py-3 rounded-xl bg-red-50 hover:bg-red-100 text-red-600 font-bold text-sm flex items-center justify-center gap-1.5"><Trash2 size={15} /> 刪除</button>
                     </div>
-                  )}
-                </div>
-              )}
+                    <div className="pt-2 mt-1 border-t border-gray-100">
+                      <button onClick={() => { setActionEvent(null); setDeleteTarget(e.id); }} className="w-full py-3.5 rounded-xl border-2 border-red-400 text-red-600 bg-red-50 font-bold flex items-center justify-center gap-2 active:bg-red-100"><Trash2 size={18} /> 刪除這筆{e.isReminder ? '提醒' : '行程'}</button>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
         );
@@ -12224,6 +12260,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                 </select>
               </div>
               <div className="flex gap-2 mt-2">
+                <button type="button" onClick={() => { const id = editingEvent.id; setEditingEvent(null); setDeleteTarget(id); }} className="shrink-0 w-12 flex items-center justify-center rounded-lg border-2 border-red-300 text-red-500 bg-red-50 active:bg-red-100" aria-label="刪除"><Trash2 size={18} /></button>
                 {!editingEvent.isReminder && (
                   <button onClick={() => handleDuplicateEvent(editingEvent)} className="flex-1 flex items-center justify-center gap-1.5 bg-gray-100 hover:bg-gray-200 text-gray-700 py-3 rounded-lg font-bold transition"><Copy size={15} /> 複製</button>
                 )}
