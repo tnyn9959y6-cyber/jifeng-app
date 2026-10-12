@@ -457,10 +457,10 @@ const MobileDashboardView = ({ team, records, season, setSeason, activeTargets, 
 
   const members = useMemo(() => {
     if (!me) return [];
-    if (curOpt.key === 'group') return [me, ...directs];
+    if (curOpt.key === 'group') return getUnitMembers(team, me, season);
     if (curOpt.key === 'district') return getDistrictMembers(team, '吳政翰');
     return [me];
-  }, [curOpt.key, team, me]);
+  }, [curOpt.key, team, me, season]);
 
   const d = useMemo(() => {
     const ids = new Set(members.map(m => String(m.id)));
@@ -852,15 +852,7 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
     const currentManager = team.find(m => m.id === selectedManagerId);
     
     if (currentManager) {
-      unitMemberIds.add(currentManager.id);
-      team.filter(t => t.parentId === currentManager.id).forEach(sub => {
-        if (!MANAGER_RANKS.includes(sub.role)) {
-          unitMemberIds.add(sub.id);
-          team.filter(ss => ss.parentId === sub.id).forEach(ss => {
-             if (!MANAGER_RANKS.includes(ss.role)) unitMemberIds.add(ss.id);
-          });
-        }
-      });
+      getUnitMembers(team, currentManager, season).forEach(m => unitMemberIds.add(m.id));
     }
 
     let unitTotalWeighted = 0; 
@@ -3166,11 +3158,16 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   // ---- 競賽 ----
   const seasonMonths = (season === 'H1' ? AVAILABLE_MONTHS_H1 : AVAILABLE_MONTHS_H2).map(m => m.value);
   const targets = (season === 'H1' ? rankTargets?.H1 : rankTargets?.H2) || {};
-  const contestRows = useMemo(() => members.map(m => {
+  // 組績：每個組長一列（政翰自己 + 起算日當天不是主任以上的人），目標用組長職級
+  const unitLeaders = useMemo(() => members.filter(m => String(m.id) === String(loggedInUser?.id) || !wasRepAtSeasonStart(m, season)), [members, season, loggedInUser?.id]);
+  const contestRows = useMemo(() => unitLeaders.map(m => {
+    const unit = getUnitMembers(team, m, season);
+    const uids = new Set(unit.map(u => String(u.id)));
+    const mates = unit.filter(u => u.id !== m.id).map(u => u.name);
     const role = (season === 'H2' && H2_ROLE_MAPPING[m.name]) ? H2_ROLE_MAPPING[m.name] : m.role;
     const t = targets[role] || targets['業務代表'] || { peak: { total: 0 }, summit: { total: 0 } };
     let w = 0, p = 0, aw = 0;
-    distRecords.forEach(r => { if (String(r.agentId) === String(m.id) && seasonMonths.includes((r.date || '').slice(0, 7))) { w += r.weighted || 0; p += r.premium || 0; if (r.isAH) aw += r.weighted || 0; } });
+    distRecords.forEach(r => { if (uids.has(String(r.agentId)) && seasonMonths.includes((r.date || '').slice(0, 7))) { w += r.weighted || 0; p += r.premium || 0; if (r.isAH) aw += r.weighted || 0; } });
     const pk = Math.max(pct(w, t.peak?.total), t.peak?.actualPremium > 0 ? pct(p, t.peak.actualPremium) : 0);
     const sm = Math.max(pct(w, t.summit?.total), t.summit?.actualPremium > 0 ? pct(p, t.summit.actualPremium) : 0);
     // 差額：H1 = 加權 + A&H 都要達標；H2 = 加權 或 實收 任一達標
@@ -3186,8 +3183,8 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
       if (season === 'H2' && hasA && (p / tt.actualPremium) > (w / (tt.total || 1))) { main = gP; via = '實收'; }
       return { done, gW, gAH, gP, hasA, main, via, target: tt.total || 0, targetP: tt.actualPremium || 0, targetAH: tt.ah || 0 };
     };
-    return { m, role, w, p, aw, t, pk, sm, gp: gapOf('peak'), gs: gapOf('summit') };
-  }).sort((a, b) => b.pk - a.pk), [members, distRecords, season, rankTargets]);
+    return { m, role, w, p, aw, t, pk, sm, mates, gp: gapOf('peak'), gs: gapOf('summit') };
+  }).sort((a, b) => b.pk - a.pk), [unitLeaders, team, distRecords, season, rankTargets]);
   const peakDone = contestRows.filter(r => r.pk >= 100).length;
   const contestAvg = contestRows.length ? Math.round(contestRows.reduce((s, r) => s + r.pk, 0) / contestRows.length) : 0;
 
@@ -3255,7 +3252,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
         <div key={r.m.id} className="flex items-center gap-3">
           <Avatar name={r.m.name} size={32} />
           <div className="flex-1 min-w-0">
-            <div className="flex justify-between items-center gap-2 text-[12.5px] mb-1"><span className="font-semibold truncate">{r.m.name}<span className="text-white/40 font-normal ml-1.5">{r.role}</span></span><span className="flex items-center gap-1 shrink-0"><GapChip label="高峰" g={r.gp} color="#93c5fd" /><GapChip label="極峰" g={r.gs} color="#fcd34d" /></span></div>
+            <div className="flex justify-between items-center gap-2 text-[12.5px] mb-1"><span className="font-semibold truncate" title={r.mates.length ? `含 ${r.mates.join('、')}` : '僅本人'}>{r.m.name} 組<span className="text-white/40 font-normal ml-1.5">{r.mates.length + 1} 人</span></span><span className="flex items-center gap-1 shrink-0"><GapChip label="高峰" g={r.gp} color="#93c5fd" /><GapChip label="極峰" g={r.gs} color="#fcd34d" /></span></div>
             <div className="relative"><Bar v={r.pk} color={r.pk >= 100 ? '#34d399' : 'linear-gradient(90deg,#60a5fa,#818cf8)'} h={7} />{r.sm > 0 && <div className="absolute top-0 h-[7px] rounded-full bg-amber-300/80" style={{ width: `${Math.min(100, r.sm)}%`, opacity: .55 }} />}</div>
           </div>
         </div>
@@ -3284,13 +3281,13 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const gapTable = (
     <div>
       <div className="grid grid-cols-[26px_minmax(110px,1fr)_84px_84px_minmax(0,1.25fr)_minmax(0,1.25fr)] gap-3 px-1 pb-2 text-[11px] text-white/40">
-        <span>#</span><span>同仁</span><span className="text-right">累計加權</span><span className="text-right">累計實收</span><span>新高峰 差額 / 目標</span><span>新極峰 差額 / 目標</span>
+        <span>#</span><span>組別（組績）</span><span className="text-right">組累計加權</span><span className="text-right">組累計實收</span><span>新高峰 差額 / 目標</span><span>新極峰 差額 / 目標</span>
       </div>
       <div className="divide-y divide-white/[0.07]">
         {contestRows.map((r, i) => (
           <div key={r.m.id} className="grid grid-cols-[26px_minmax(110px,1fr)_84px_84px_minmax(0,1.25fr)_minmax(0,1.25fr)] gap-3 items-center px-1 py-2">
             <span className={`text-[13px] font-bold ${i < 3 ? 'text-amber-300' : 'text-white/35'}`}>{i + 1}</span>
-            <span className="flex items-center gap-2 min-w-0"><Avatar name={r.m.name} size={28} /><span className="min-w-0"><b className="block text-[13px] truncate">{r.m.name}</b><span className="block text-[10.5px] text-white/40 truncate">{r.role}</span></span></span>
+            <span className="flex items-center gap-2 min-w-0"><Avatar name={r.m.name} size={28} /><span className="min-w-0"><b className="block text-[13px] truncate">{r.m.name} 組<span className="text-white/40 font-normal text-[11px] ml-1">{r.role}標準</span></b><span className="block text-[10.5px] text-white/40 truncate" title={r.mates.join('、')}>{r.mates.length ? '含 ' + r.mates.join('、') : '僅本人'}</span></span></span>
             <span className="text-right text-[13px] tabular-nums">{money(r.w)}</span>
             <span className="text-right text-[13px] tabular-nums text-white/70">{money(r.p)}</span>
             {gapCell(r.gp, '#93c5fd')}
@@ -3442,13 +3439,13 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
               <KPI icon={FileText} label="受理中案件" value={pending.length} unit="件" sub={stuck ? `逾期追蹤 ${stuck} 件` : '沒有逾期'} color="#60a5fa" />
               <KPI icon={DollarSign} label="受理中保費" value={money(pendingPremium)} sub={`本月已發單 ${money(monthIssuedPremium)}`} color="#34d399" />
               <KPI icon={Activity} label="今日活動量達標" value={`${reached}/${actRows.length}`} unit="人" sub={`${emptyToday} 人今日未建檔`} color="#a78bfa" />
-              <KPI icon={Trophy} label="競賽平均進度" value={contestAvg} unit="%" sub={`${peakDone} 人已達新高峰`} color="#fbbf24" />
+              <KPI icon={Trophy} label="組績平均進度" value={contestAvg} unit="%" sub={`${peakDone} 組已達新高峰`} color="#fbbf24" />
               <KPI icon={Award} label="優培進行中" value={qualActive} unit="人" sub={qualUnset ? `${qualUnset} 人未填期別` : '期別皆已填寫'} color="#fb923c" />
               <KPI icon={UserPlus} label="本月增員登錄" value={monthReg} unit="人" sub={`年度累積 ${yearReg} / ${GOAL_REGISTER}`} color="#2dd4bf" />
             </div>
             <div className="grid grid-cols-[1.15fr_1fr_.9fr] gap-3 flex-[1.05] min-h-0">
               <Panel title="案件狀態分佈" icon={ClipboardList} right={more('cases')}>{casesDonut}</Panel>
-              <Panel title="競賽狀況" icon={Trophy} tone="text-amber-300" right={more('contest')}>{contestList(6)}</Panel>
+              <Panel title="競賽狀況（組績）" icon={Trophy} tone="text-amber-300" right={more('contest')}>{contestList(6)}</Panel>
               <div className="min-h-0 min-w-0 overflow-y-auto no-scrollbar"><HomeTodoCard loggedInUser={loggedInUser} /></div>
             </div>
             <div className="grid grid-cols-[1.35fr_1fr_1fr_.95fr] gap-3 flex-[1.2] min-h-0">
@@ -3478,10 +3475,10 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
         )}
         {section === 'contest' && (
           <div className="grid grid-cols-[1fr_280px] gap-3 flex-1 min-h-0">
-            <Panel title={`${season === 'H1' ? '上半年高峰/極峰' : '下半年新高峰/新極峰'}競賽差額`} icon={Trophy} tone="text-amber-300" right={<span className="text-[11px] text-white/45">{season === 'H1' ? '加權＋A&H 皆須達標' : '加權／實收任一達標即可'}</span>}>{gapTable}</Panel>
+            <Panel title={`${season === 'H1' ? '上半年高峰/極峰' : '下半年新高峰/新極峰'}組績競賽差額`} icon={Trophy} tone="text-amber-300" right={<span className="text-[11px] text-white/45">{season === 'H1' ? '加權＋A&H 皆須達標' : '加權／實收任一達標即可'}</span>}>{gapTable}</Panel>
             <div className="flex flex-col gap-3 min-h-0">
-              <KPI icon={Trophy} label="已達新高峰" value={peakDone} unit="人" sub={`共 ${contestRows.length} 人`} color="#fbbf24" />
-              <KPI icon={Crown} label="已達新極峰" value={contestRows.filter(r => r.gs.done).length} unit="人" sub={`共 ${contestRows.length} 人`} color="#fb923c" />
+              <KPI icon={Trophy} label="已達新高峰" value={peakDone} unit="組" sub={`共 ${contestRows.length} 組`} color="#fbbf24" />
+              <KPI icon={Crown} label="已達新極峰" value={contestRows.filter(r => r.gs.done).length} unit="組" sub={`共 ${contestRows.length} 組`} color="#fb923c" />
               <KPI icon={Target} label="平均進度" value={contestAvg} unit="%" sub="取加權／實收較高者" color="#60a5fa" />
               <KPI icon={Crown} label="目前領先" value={contestRows[0]?.m.name || '—'} sub={contestRows[0] ? `${contestRows[0].pk}%` : ''} color="#34d399" />
             </div>
@@ -8984,6 +8981,32 @@ const streakDays = (activities, agentId, today) => {
     else break;
   }
   return streak;
+};
+
+// ===== 組績規則：組員 = 組長自己 + 「賽季起算日(上半年1/1、下半年7/1)當天還是業務代表」或「起算日後才登錄」的人 =====
+// 起算日當天已經是主任以上的人自己帶組，不併入上層的組績，他們底下的人也跟著他們。
+const SEASON_START_DATE = { H1: '2026-01-01', H2: '2026-07-01' };
+const wasRepAtSeasonStart = (m, season) => {
+  const start = SEASON_START_DATE[season] || SEASON_START_DATE.H2;
+  const pd = m.promotionDates || {};
+  if (pd.registered && pd.registered > start) return true;
+  const promos = ['supervisor', 'asstManager', 'distManager', 'agencyManager'].map(k => pd[k]).filter(Boolean).sort();
+  if (promos.length) return promos[0] > start;
+  if (season === 'H2' && H2_ROLE_MAPPING[m.name]) return !MANAGER_RANKS.includes(H2_ROLE_MAPPING[m.name]);
+  return !MANAGER_RANKS.includes(m.role);
+};
+const getUnitMembers = (team, leader, season) => {
+  if (!leader) return [];
+  const seen = new Set([String(leader.id)]);
+  const out = [leader];
+  const queue = [leader];
+  while (queue.length) {
+    const cur = queue.shift();
+    team.forEach(m => {
+      if (m.parentId && String(m.parentId) === String(cur.id) && !seen.has(String(m.id)) && wasRepAtSeasonStart(m, season)) { seen.add(String(m.id)); out.push(m); queue.push(m); }
+    });
+  }
+  return out;
 };
 
 const getDistrictMembers = (team, rootName) => {
