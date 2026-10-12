@@ -2726,6 +2726,61 @@ const RECRUIT_STAGE_TONE = {
   '登錄': { c: '#34d399', g: 'from-emerald-500 to-green-400' },
   '優培': { c: '#fbbf24', g: 'from-amber-500 to-orange-400' },
 };
+
+// 增員「本月新增 vs 上月」：各階段以該階段的日期欄位落在哪個月份計算（新名單用建檔日）
+const RECRUIT_STAGE_DATE_KEY = [null, 'tempAccountDate', 'internalExamDate', 'externalExamDate', 'registeredDate', 'trainingDate'];
+const recruitCreatedMonth = (r) => {
+  const c = r.createdAt; let t = '';
+  if (c && typeof c.toDate === 'function') t = c.toDate().toISOString();
+  else if (c && c.seconds) t = new Date(c.seconds * 1000).toISOString();
+  else if (typeof c === 'string') t = c;
+  return t.slice(0, 7);
+};
+const shiftYM = (ym, delta) => { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 1 + delta, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+const recruitMonthStats = (list, month) => {
+  const prev = shiftYM(month, -1);
+  return RECRUIT_STATUSES.map((st, i) => {
+    const key = RECRUIT_STAGE_DATE_KEY[i];
+    const monthOf = (r) => key ? (r.dates?.[key] || '').slice(0, 7) : recruitCreatedMonth(r);
+    const cur = list.filter(r => monthOf(r) === month);
+    const pre = list.filter(r => monthOf(r) === prev);
+    return { st, cur: cur.length, pre: pre.length, names: cur.map(r => r.name).filter(Boolean) };
+  });
+};
+const RecruitMonthCompare = ({ list, month, compact = false }) => {
+  const stats = recruitMonthStats(list, month);
+  const prev = shiftYM(month, -1);
+  const label = (ym) => `${Number(ym.slice(5))}月`;
+  const totCur = stats.reduce((a, x) => a + x.cur, 0), totPre = stats.reduce((a, x) => a + x.pre, 0);
+  const Delta = ({ cur, pre }) => {
+    const d = cur - pre;
+    return <span className={`inline-flex items-center justify-center min-w-[52px] px-1.5 py-0.5 rounded-md text-[11.5px] font-bold tabular-nums ${d > 0 ? 'bg-emerald-500/15 text-emerald-300' : d < 0 ? 'bg-rose-500/15 text-rose-300' : 'bg-white/10 text-white/50'}`}>{d > 0 ? '▲ ' + d : d < 0 ? '▼ ' + Math.abs(d) : '持平'}</span>;
+  };
+  return (
+    <div>
+      <div className="grid grid-cols-[1fr_46px_46px_62px] gap-2 text-[11px] text-white/40 pb-1.5 px-0.5"><span>階段</span><span className="text-right">{label(month)}</span><span className="text-right">{label(prev)}</span><span className="text-center">較上月</span></div>
+      <div className="divide-y divide-white/[0.07]">
+        {stats.map(x => (
+          <div key={x.st} className={`grid grid-cols-[1fr_46px_46px_62px] gap-2 items-center ${compact ? 'py-1.5' : 'py-2'} px-0.5`}>
+            <span className="min-w-0">
+              <span className="flex items-center gap-1.5 text-[13px] font-semibold"><i className="w-2 h-2 rounded-full shrink-0" style={{ background: RECRUIT_STAGE_TONE[x.st].c }} />{x.st}</span>
+              {x.names.length > 0 && <span className="block text-[10.5px] text-white/40 truncate pl-3.5">{x.names.join('、')}</span>}
+            </span>
+            <span className="text-right text-[18px] font-black tabular-nums leading-none">{x.cur}</span>
+            <span className="text-right text-[13px] text-white/50 tabular-nums">{x.pre}</span>
+            <span className="text-center"><Delta cur={x.cur} pre={x.pre} /></span>
+          </div>
+        ))}
+      </div>
+      <div className="grid grid-cols-[1fr_46px_46px_62px] gap-2 items-center pt-2 mt-1 border-t border-white/15 px-0.5">
+        <span className="text-[12px] text-white/60">合計</span>
+        <span className="text-right text-[15px] font-black tabular-nums">{totCur}</span>
+        <span className="text-right text-[13px] text-white/50 tabular-nums">{totPre}</span>
+        <span className="text-center"><Delta cur={totCur} pre={totPre} /></span>
+      </div>
+    </div>
+  );
+};
 const RECRUIT_DATE_FIELDS = [
   { label: '臨時帳號', key: 'tempAccountDate' }, { label: '內考日期', key: 'internalExamDate' },
   { label: '外考日期', key: 'externalExamDate' }, { label: '預計登錄', key: 'registeredDate' }, { label: '優培開始', key: 'trainingDate' },
@@ -2827,6 +2882,11 @@ const MobileRecruitView = ({ recruits, team, status, updateRecruit, toggleDoc, o
                 <p className="leading-none mt-1"><span className="text-[22px] font-black">{v}</span><span className="text-[11px] text-white/50"> 人</span></p>
               </div>
             ))}
+          </div>
+
+          <div className={`${card} mt-3 p-3.5`}>
+            <p className="font-bold text-[15px] flex items-center gap-2 mb-2"><TrendingUp size={16} className="text-fuchsia-300" />{Number(month.slice(5))} 月新增 vs 上月</p>
+            <RecruitMonthCompare list={list} month={month} compact />
           </div>
 
           <div className={`${card} mt-3 p-3.5`}>
@@ -3489,7 +3549,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
               <Panel title="團隊案件列表" icon={Users} right={more('cases')}>{caseTable(7)}</Panel>
               <Panel title="全體活動量" icon={Activity} tone="text-violet-300" right={<span className="flex items-center gap-2">{weekSelect}{more('activity')}</span>}>{isCurWeek ? activityList(7) : <div className="max-h-full">{weekList}</div>}</Panel>
               <Panel title="優培狀況" icon={Award} tone="text-orange-300" right={more('quality')}>{qualityList(5)}</Panel>
-              <Panel title="增員狀況" icon={UserPlus} tone="text-teal-300" right={more('recruit')}>{recruitFunnel}<div className="mt-3">{goalPanel}</div></Panel>
+              <Panel title="增員狀況" icon={UserPlus} tone="text-teal-300" right={more('recruit')}>{recruitFunnel}<div className="mt-3"><RecruitMonthCompare list={recList} month={month} compact /></div></Panel>
             </div>
           </>
         )}
@@ -3551,7 +3611,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
             <div className="flex flex-col gap-3 min-h-0">
               <KPI icon={UserPlus} label="本月登錄" value={monthReg} unit="人" sub={`年度 ${yearReg} / ${GOAL_REGISTER}`} color="#2dd4bf" />
               <KPI icon={Users} label="名單總數" value={recList.filter(r => !r.isPromoted).length} unit="人" sub="含新名單到考試中" color="#60a5fa" />
-              <Panel title="個人目標" icon={Target} tone="text-fuchsia-300" className="flex-1">{goalPanel}</Panel>
+              <Panel title={`本月新增 vs 上月`} icon={TrendingUp} tone="text-fuchsia-300" className="flex-1"><RecruitMonthCompare list={recList} month={month} /></Panel>
             </div>
           </div>
         )}
