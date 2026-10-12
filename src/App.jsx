@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useMemo, useRef } from 'react';
+import { createPortal } from 'react-dom';
 import { 
   LayoutDashboard, 
   Users, 
@@ -3107,6 +3108,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const today = getTodayDate();
   const month = today.slice(0, 7);
   const [section, setSection] = useState('overview');
+  const [actWeek, setActWeek] = useState(() => weekStartOf(getTodayDate()));
   const [goals, setGoals] = useState(PERSONAL_GOALS_DEFAULT);
 
   useEffect(() => {
@@ -3139,10 +3141,26 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const recentCases = useMemo(() => distRecords.slice(0, 40), [distRecords]);
 
   // ---- 活動量 ----
-  const actRows = useMemo(() => members.map(m => ({ m, today: pointsOnDate(activities, m.id, today), week: weekPoints(activities, m.id, today), month: monthPoints(activities, m.id, today) })).sort((a, b) => b.today - a.today || b.week - a.week), [members, activities, today]);
+  const curWeekStart = weekStartOf(today);
+  const isCurWeek = actWeek === curWeekStart;
+  const weekOptions = useMemo(() => Array.from({ length: 20 }, (_, i) => {
+    const st = dateAdd(curWeekStart, -7 * i), en = dateAdd(st, 6);
+    const f = (d) => `${Number(d.slice(5, 7))}/${Number(d.slice(8, 10))}`;
+    return { value: st, label: `${i === 0 ? '本週 ' : i === 1 ? '上週 ' : ''}${f(st)}–${Number(en.slice(8, 10))}` };
+  }), [curWeekStart]);
+  const actRows = useMemo(() => members.map(m => ({
+    m, today: pointsOnDate(activities, m.id, today), week: weekPoints(activities, m.id, today), month: monthPoints(activities, m.id, today),
+    selWeek: weekPoints(activities, m.id, actWeek),
+    days: Array.from({ length: 7 }, (_, i) => { const d = dateAdd(actWeek, i); return { d, p: pointsOnDate(activities, m.id, d), future: d > today }; }),
+  })).sort((a, b) => b.today - a.today || b.week - a.week), [members, activities, today, actWeek]);
+  const weekRows = useMemo(() => [...actRows].sort((a, b) => b.selWeek - a.selWeek), [actRows]);
   const reached = actRows.filter(r => r.today >= DAILY_TARGET).length;
   const emptyToday = actRows.filter(r => r.today === 0).length;
   const weekAvg = actRows.length ? Math.round(actRows.reduce((s, r) => s + Math.min(1, r.week / WEEKLY_TARGET), 0) / actRows.length * 100) : 0;
+  const selWeekAvg = actRows.length ? Math.round(actRows.reduce((s, r) => s + Math.min(1, r.selWeek / WEEKLY_TARGET), 0) / actRows.length * 100) : 0;
+  const selWeekReached = actRows.filter(r => r.selWeek >= WEEKLY_TARGET).length;
+  const selWeekZero = actRows.filter(r => r.selWeek === 0).length;
+  const selWeekTotal = actRows.reduce((s, r) => s + r.selWeek, 0);
   const monthTotal = actRows.reduce((s, r) => s + r.month, 0);
 
   // ---- 競賽 ----
@@ -3151,11 +3169,24 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const contestRows = useMemo(() => members.map(m => {
     const role = (season === 'H2' && H2_ROLE_MAPPING[m.name]) ? H2_ROLE_MAPPING[m.name] : m.role;
     const t = targets[role] || targets['業務代表'] || { peak: { total: 0 }, summit: { total: 0 } };
-    let w = 0, p = 0;
-    distRecords.forEach(r => { if (String(r.agentId) === String(m.id) && seasonMonths.includes((r.date || '').slice(0, 7))) { w += r.weighted || 0; p += r.premium || 0; } });
+    let w = 0, p = 0, aw = 0;
+    distRecords.forEach(r => { if (String(r.agentId) === String(m.id) && seasonMonths.includes((r.date || '').slice(0, 7))) { w += r.weighted || 0; p += r.premium || 0; if (r.isAH) aw += r.weighted || 0; } });
     const pk = Math.max(pct(w, t.peak?.total), t.peak?.actualPremium > 0 ? pct(p, t.peak.actualPremium) : 0);
     const sm = Math.max(pct(w, t.summit?.total), t.summit?.actualPremium > 0 ? pct(p, t.summit.actualPremium) : 0);
-    return { m, role, w, p, t, pk, sm };
+    // 差額：H1 = 加權 + A&H 都要達標；H2 = 加權 或 實收 任一達標
+    const gapOf = (k) => {
+      const tt = t[k] || {};
+      const gW = Math.max(0, (tt.total || 0) - w);
+      const gAH = season === 'H1' ? Math.max(0, (tt.ah || 0) - aw) : 0;
+      const hasA = season === 'H2' && tt.actualPremium > 0;
+      const gP = hasA ? Math.max(0, tt.actualPremium - p) : null;
+      const done = season === 'H1' ? (gW === 0 && gAH === 0) : (gW === 0 || (hasA && gP === 0));
+      // 主要顯示的差額：H1 取加權差；H2 取「完成比例較高」那一條路徑的差額
+      let main = gW, via = '加權';
+      if (season === 'H2' && hasA && (p / tt.actualPremium) > (w / (tt.total || 1))) { main = gP; via = '實收'; }
+      return { done, gW, gAH, gP, hasA, main, via, target: tt.total || 0, targetP: tt.actualPremium || 0, targetAH: tt.ah || 0 };
+    };
+    return { m, role, w, p, aw, t, pk, sm, gp: gapOf('peak'), gs: gapOf('summit') };
   }).sort((a, b) => b.pk - a.pk), [members, distRecords, season, rankTargets]);
   const peakDone = contestRows.filter(r => r.pk >= 100).length;
   const contestAvg = contestRows.length ? Math.round(contestRows.reduce((s, r) => s + r.pk, 0) / contestRows.length) : 0;
@@ -3186,12 +3217,12 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const Panel = ({ title, icon: Ic, tone = 'text-blue-300', right, children, className = '' }) => (
     <div className={`${card} p-4 flex flex-col min-h-0 min-w-0 ${className}`}>
       <div className="flex items-center justify-between mb-2.5 shrink-0">
-        <p className="font-bold text-[15px] flex items-center gap-2"><Ic size={17} className={tone} />{title}</p>{right}
+        <p className="font-bold text-[15px] flex items-center gap-2 whitespace-nowrap"><Ic size={17} className={tone} />{title}</p>{right}
       </div>
       <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar">{children}</div>
     </div>
   );
-  const more = (k) => <button type="button" onClick={() => setSection(k)} className="text-[12px] text-white/50 hover:text-white flex items-center">詳情<ChevronRight size={14} /></button>;
+  const more = (k) => <button type="button" onClick={() => setSection(k)} className="text-[12px] text-white/50 hover:text-white flex items-center whitespace-nowrap shrink-0">詳情<ChevronRight size={14} /></button>;
   const Bar = ({ v, color, h = 6 }) => <div className="rounded-full bg-white/10 overflow-hidden" style={{ height: h }}><div className="h-full rounded-full transition-all duration-700" style={{ width: `${Math.min(100, v)}%`, background: color }} /></div>;
   const StatusPill = ({ s }) => <span className={`px-2 py-0.5 rounded-md text-[11px] font-bold border ${s === '已發單' ? 'text-emerald-300 border-emerald-400/50 bg-emerald-500/10' : 'text-amber-300 border-amber-400/50 bg-amber-500/10'}`}>{s}</span>;
 
@@ -3213,17 +3244,60 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
       </div>
     </div>
   );
+  const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
+  const gapFmt = (n) => n >= 10000 ? (n / 10000).toFixed(1).replace(/\.0$/, '') + '萬' : Math.round(n).toLocaleString();
+  const GapChip = ({ label, g, color }) => g.done
+    ? <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] font-bold border text-emerald-300 border-emerald-400/50 bg-emerald-500/10 whitespace-nowrap"><CheckCircle2 size={11} />{label}達標</span>
+    : <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[11px] border whitespace-nowrap tabular-nums" style={{ color, borderColor: color + '55', background: color + '14' }}>{label}差 <b className="text-[12px]">{gapFmt(g.main)}</b></span>;
   const contestList = (limit) => (
     <div className="space-y-2.5">
       {contestRows.slice(0, limit).map(r => (
         <div key={r.m.id} className="flex items-center gap-3">
           <Avatar name={r.m.name} size={32} />
           <div className="flex-1 min-w-0">
-            <div className="flex justify-between text-[12.5px] mb-1"><span className="font-semibold truncate">{r.m.name}<span className="text-white/40 font-normal ml-1.5">{r.role}</span></span><span className="tabular-nums text-white/70">{money(r.w)} · <b className={r.pk >= 100 ? 'text-emerald-300' : 'text-white'}>{r.pk}%</b></span></div>
+            <div className="flex justify-between items-center gap-2 text-[12.5px] mb-1"><span className="font-semibold truncate">{r.m.name}<span className="text-white/40 font-normal ml-1.5">{r.role}</span></span><span className="flex items-center gap-1 shrink-0"><GapChip label="高峰" g={r.gp} color="#93c5fd" /><GapChip label="極峰" g={r.gs} color="#fcd34d" /></span></div>
             <div className="relative"><Bar v={r.pk} color={r.pk >= 100 ? '#34d399' : 'linear-gradient(90deg,#60a5fa,#818cf8)'} h={7} />{r.sm > 0 && <div className="absolute top-0 h-[7px] rounded-full bg-amber-300/80" style={{ width: `${Math.min(100, r.sm)}%`, opacity: .55 }} />}</div>
           </div>
         </div>
       ))}
+      {contestRows.length === 0 && <p className="text-white/40 text-sm text-center py-6">目前沒有資料</p>}
+    </div>
+  );
+  // 競賽差額明細表：每人 × 高峰/極峰，列出各條件的差額
+  const gapCell = (g, color) => {
+    const items = [];
+    items.push({ k: '加權', gap: g.gW, tgt: g.target });
+    if (season === 'H1') items.push({ k: 'A&H', gap: g.gAH, tgt: g.targetAH, skip: !g.targetAH });
+    if (g.hasA) items.push({ k: '實收', gap: g.gP, tgt: g.targetP });
+    return (
+      <div className="space-y-0.5 min-w-0">
+        {items.filter(x => !x.skip).map(x => (
+          <div key={x.k} className="flex items-center justify-between gap-2 text-[12px] tabular-nums">
+            <span className="text-white/45 w-8 shrink-0">{x.k}</span>
+            {x.gap === 0 ? <span className="text-emerald-300 font-bold flex items-center gap-1"><CheckCircle2 size={12} />已達</span> : <span style={{ color }} className="font-bold">差 {gapFmt(x.gap)}</span>}
+            <span className="text-white/30 text-[10.5px] w-14 text-right">/{gapFmt(x.tgt)}</span>
+          </div>
+        ))}
+      </div>
+    );
+  };
+  const gapTable = (
+    <div>
+      <div className="grid grid-cols-[26px_minmax(110px,1fr)_84px_84px_minmax(0,1.25fr)_minmax(0,1.25fr)] gap-3 px-1 pb-2 text-[11px] text-white/40">
+        <span>#</span><span>同仁</span><span className="text-right">累計加權</span><span className="text-right">累計實收</span><span>新高峰 差額 / 目標</span><span>新極峰 差額 / 目標</span>
+      </div>
+      <div className="divide-y divide-white/[0.07]">
+        {contestRows.map((r, i) => (
+          <div key={r.m.id} className="grid grid-cols-[26px_minmax(110px,1fr)_84px_84px_minmax(0,1.25fr)_minmax(0,1.25fr)] gap-3 items-center px-1 py-2">
+            <span className={`text-[13px] font-bold ${i < 3 ? 'text-amber-300' : 'text-white/35'}`}>{i + 1}</span>
+            <span className="flex items-center gap-2 min-w-0"><Avatar name={r.m.name} size={28} /><span className="min-w-0"><b className="block text-[13px] truncate">{r.m.name}</b><span className="block text-[10.5px] text-white/40 truncate">{r.role}</span></span></span>
+            <span className="text-right text-[13px] tabular-nums">{money(r.w)}</span>
+            <span className="text-right text-[13px] tabular-nums text-white/70">{money(r.p)}</span>
+            {gapCell(r.gp, '#93c5fd')}
+            {gapCell(r.gs, '#fcd34d')}
+          </div>
+        ))}
+      </div>
       {contestRows.length === 0 && <p className="text-white/40 text-sm text-center py-6">目前沒有資料</p>}
     </div>
   );
@@ -3251,6 +3325,30 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
           <div className="flex-1 min-w-0 grid grid-cols-2 gap-4">
             <div><div className="flex justify-between text-[12px] mb-1"><span className="font-semibold truncate">{r.m.name}</span><span className="tabular-nums text-white/70">今日 {r.today}/{DAILY_TARGET}</span></div><Bar v={r.today / DAILY_TARGET * 100} color={tone} /></div>
             <div><div className="flex justify-between text-[12px] mb-1"><span className="text-white/45">本週</span><span className="tabular-nums text-white/70">{r.week}/{WEEKLY_TARGET}</span></div><Bar v={r.week / WEEKLY_TARGET * 100} color="#818cf8" /></div>
+          </div>
+        </div>); })}
+    </div>
+  );
+  const weekSelect = (
+    <select value={actWeek} onChange={e => setActWeek(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg pl-2 pr-1 py-1 text-[12px] text-white outline-none cursor-pointer w-[128px]">
+      {weekOptions.map(o => <option key={o.value} value={o.value} style={{ color: '#111' }}>{o.label}</option>)}
+    </select>
+  );
+  const weekList = (
+    <div className="space-y-2.5">
+      {weekRows.map(r => { const ok = r.selWeek >= WEEKLY_TARGET; return (
+        <div key={r.m.id} className="flex items-center gap-3">
+          <Avatar name={r.m.name} size={32} style={{ border: `2px solid ${(ok ? '#34d399' : r.selWeek > 0 ? '#fbbf24' : '#fb7185')}88` }} />
+          <div className="flex-1 min-w-0 grid grid-cols-[1fr_1.3fr] gap-4 items-center">
+            <div><div className="flex justify-between text-[12px] mb-1"><span className="font-semibold truncate">{r.m.name}</span><span className="tabular-nums text-white/70">{r.selWeek}/{WEEKLY_TARGET}</span></div><Bar v={r.selWeek / WEEKLY_TARGET * 100} color={ok ? '#34d399' : '#818cf8'} /></div>
+            <div className="grid grid-cols-7 gap-1">
+              {r.days.map((d, i) => (
+                <div key={d.d} title={`${d.d} ${d.p} 分`} className={`rounded-md text-center py-0.5 ${d.future ? 'bg-white/[0.03] text-white/20' : d.p >= DAILY_TARGET ? 'bg-emerald-500/25 text-emerald-200' : d.p > 0 ? 'bg-amber-400/20 text-amber-200' : 'bg-white/[0.06] text-white/35'}`}>
+                  <span className={`block text-[9px] leading-none ${d.d === today ? 'text-sky-300 font-bold' : 'text-white/35'}`}>{dayNames[i]}</span>
+                  <span className="block text-[12px] font-bold tabular-nums leading-tight">{d.future ? '·' : d.p}</span>
+                </div>
+              ))}
+            </div>
           </div>
         </div>); })}
     </div>
@@ -3314,7 +3412,6 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
 
   const hour = new Date().getHours();
   const greet = hour < 5 ? '夜深了' : hour < 12 ? '早安' : hour < 18 ? '午安' : '晚安';
-  const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
   const sections = [
     ['overview', '總覽', LayoutGrid], ['activity', '全體活動量', Activity], ['contest', '競賽狀況', Trophy],
     ['quality', '優培狀況', Award], ['cases', '案件狀況', ClipboardList], ['recruit', '增員狀況', UserPlus],
@@ -3356,7 +3453,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
             </div>
             <div className="grid grid-cols-[1.35fr_1fr_1fr_.95fr] gap-3 flex-[1.2] min-h-0">
               <Panel title="團隊案件列表" icon={Users} right={more('cases')}>{caseTable(7)}</Panel>
-              <Panel title="全體活動量" icon={Activity} tone="text-violet-300" right={more('activity')}>{activityList(7)}</Panel>
+              <Panel title="全體活動量" icon={Activity} tone="text-violet-300" right={<span className="flex items-center gap-2">{weekSelect}{more('activity')}</span>}>{isCurWeek ? activityList(7) : <div className="max-h-full">{weekList}</div>}</Panel>
               <Panel title="優培狀況" icon={Award} tone="text-orange-300" right={more('quality')}>{qualityList(5)}</Panel>
               <Panel title="增員狀況" icon={UserPlus} tone="text-teal-300" right={more('recruit')}>{recruitFunnel}<div className="mt-3">{goalPanel}</div></Panel>
             </div>
@@ -3365,20 +3462,26 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
 
         {section === 'activity' && (
           <div className="grid grid-cols-[1fr_280px] gap-3 flex-1 min-h-0">
-            <Panel title="全體活動量（今日 / 本週）" icon={Activity} tone="text-violet-300">{activityList(30)}</Panel>
+            <Panel title={isCurWeek ? '全體活動量（今日 / 本週）' : '全體活動量（單週明細）'} icon={Activity} tone="text-violet-300" right={weekSelect}>{isCurWeek ? activityList(30) : weekList}</Panel>
             <div className="flex flex-col gap-3 min-h-0">
-              <KPI icon={CheckCircle2} label="今日達標" value={`${reached}/${actRows.length}`} unit="人" sub="目標 20 分" color="#34d399" />
-              <KPI icon={AlertTriangle} label="今日未建檔" value={emptyToday} unit="人" sub="需要關心" color="#fb7185" />
-              <KPI icon={Target} label="本週平均達成" value={weekAvg} unit="%" sub={`目標 ${WEEKLY_TARGET} 分`} color="#818cf8" />
-              <KPI icon={TrendingUp} label="本月全隊總分" value={monthTotal} unit="分" sub={`${members.length} 人`} color="#fbbf24" />
+              {isCurWeek ? (<>
+                <KPI icon={CheckCircle2} label="今日達標" value={`${reached}/${actRows.length}`} unit="人" sub="目標 20 分" color="#34d399" />
+                <KPI icon={AlertTriangle} label="今日未建檔" value={emptyToday} unit="人" sub="需要關心" color="#fb7185" />
+              </>) : (<>
+                <KPI icon={CheckCircle2} label="當週達標" value={`${selWeekReached}/${actRows.length}`} unit="人" sub={`目標 ${WEEKLY_TARGET} 分`} color="#34d399" />
+                <KPI icon={AlertTriangle} label="當週零活動" value={selWeekZero} unit="人" sub="整週沒有建檔" color="#fb7185" />
+              </>)}
+              <KPI icon={Target} label={isCurWeek ? '本週平均達成' : '當週平均達成'} value={isCurWeek ? weekAvg : selWeekAvg} unit="%" sub={`目標 ${WEEKLY_TARGET} 分`} color="#818cf8" />
+              <KPI icon={TrendingUp} label={isCurWeek ? '本月全隊總分' : '當週全隊總分'} value={isCurWeek ? monthTotal : selWeekTotal} unit="分" sub={`${members.length} 人`} color="#fbbf24" />
             </div>
           </div>
         )}
         {section === 'contest' && (
           <div className="grid grid-cols-[1fr_280px] gap-3 flex-1 min-h-0">
-            <Panel title={`${season === 'H1' ? '上半年高峰/極峰' : '下半年新高峰/新極峰'}競賽進度`} icon={Trophy} tone="text-amber-300" right={<span className="text-[11px] text-white/45">藍＝新高峰　黃＝新極峰</span>}>{contestList(30)}</Panel>
+            <Panel title={`${season === 'H1' ? '上半年高峰/極峰' : '下半年新高峰/新極峰'}競賽差額`} icon={Trophy} tone="text-amber-300" right={<span className="text-[11px] text-white/45">{season === 'H1' ? '加權＋A&H 皆須達標' : '加權／實收任一達標即可'}</span>}>{gapTable}</Panel>
             <div className="flex flex-col gap-3 min-h-0">
               <KPI icon={Trophy} label="已達新高峰" value={peakDone} unit="人" sub={`共 ${contestRows.length} 人`} color="#fbbf24" />
+              <KPI icon={Crown} label="已達新極峰" value={contestRows.filter(r => r.gs.done).length} unit="人" sub={`共 ${contestRows.length} 人`} color="#fb923c" />
               <KPI icon={Target} label="平均進度" value={contestAvg} unit="%" sub="取加權／實收較高者" color="#60a5fa" />
               <KPI icon={Crown} label="目前領先" value={contestRows[0]?.m.name || '—'} sub={contestRows[0] ? `${contestRows[0].pk}%` : ''} color="#34d399" />
             </div>
@@ -10991,6 +11094,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   const [reminderCategory, setReminderCategory] = useState('personal');
   const [reminderPriority, setReminderPriority] = useState('normal');
   const [reminderSaving, setReminderSaving] = useState(false);
+  const [reminderError, setReminderError] = useState('');
   const [reminderParticipantIds, setReminderParticipantIds] = useState(() => loggedInUser ? [loggedInUser.id] : []);
 
   const [editingEvent, setEditingEvent] = useState(null);
@@ -11278,8 +11382,9 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
   };
 
   const handleAddReminder = async () => {
-    if (!loggedInUser || !reminderTitle || !reminderDate || reminderParticipantIds.length === 0) return;
+    if (!loggedInUser || !reminderTitle.trim() || !reminderDate || reminderParticipantIds.length === 0) return;
     setReminderSaving(true);
+    setReminderError('');
     try {
       const batch = writeBatch(db);
       reminderParticipantIds.forEach(pid => {
@@ -11290,7 +11395,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
           customerName: '',
           type: 'reminder',
           isReminder: true,
-          title: reminderTitle,
+          title: reminderTitle.trim(),
           category: reminderCategory,
           priority: reminderPriority,
           date: reminderDate,
@@ -11318,7 +11423,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
       setReminderPriority('normal');
       setReminderParticipantIds(loggedInUser ? [loggedInUser.id] : []);
       setShowReminderForm(false);
-    } catch (e) { console.error(e); } finally { setReminderSaving(false); }
+    } catch (e) { console.error(e); setReminderError('建立失敗，請檢查網路後再試一次'); } finally { setReminderSaving(false); }
   };
 
   const [actionEvent, setActionEvent] = useState(null);
@@ -11878,61 +11983,104 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
         </div>
       )}
 
-      {/* 新增純提醒 */}
-      {showReminderForm && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-sm shadow-2xl animate-scale-up">
-            <div className="flex justify-between items-center mb-4">
-              <h3 className="text-lg font-bold text-gray-900">新增純提醒</h3>
-              <button onClick={() => setShowReminderForm(false)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
-            </div>
-            <p className="text-xs text-gray-400 mb-4">純提醒不會計入 MEA 分數，也不會寫入客戶軌跡，單純提醒自己完成事項。</p>
-            <div className="space-y-3">
-              <div><label className="text-xs font-bold text-gray-500 block mb-1">提醒內容</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" placeholder="例如：交報表給總公司" value={reminderTitle} onChange={e => setReminderTitle(e.target.value)} /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">開始日期</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderDate} onChange={e => setReminderDate(e.target.value)} /></div>
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">結束日期（選填）</label><input type="date" className="w-full p-2 border border-gray-200 rounded-lg" min={reminderDate} value={reminderEndDate} onChange={e => setReminderEndDate(e.target.value)} /></div>
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">開始時間</label><TimeSelect value={reminderTime} onChange={setReminderTime} /></div>
-                <div><label className="text-xs font-bold text-gray-500 block mb-1">結束時間</label><TimeSelect value={reminderEndTime} onChange={setReminderEndTime} /></div>
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">分類</label>
-                <select className="w-full p-2 border border-gray-200 rounded-lg" value={reminderCategory} onChange={e => setReminderCategory(e.target.value)}>
-                  {Object.entries(REMINDER_CATEGORIES).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                </select>
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">優先度</label>
-                <select className="w-full p-2 border border-gray-200 rounded-lg" value={reminderPriority} onChange={e => setReminderPriority(e.target.value)}>
-                  {Object.entries(PRIORITY_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.label}</option>)}
-                </select>
-              </div>
-              <div><label className="text-xs font-bold text-gray-500 block mb-1">地點（選填）</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={reminderAddress} onChange={e => setReminderAddress(e.target.value)} /></div>
-              <div><label className="text-xs font-bold text-gray-500 block mb-1">備註（選填）</label><textarea className="w-full p-2 border border-gray-200 rounded-lg h-16 resize-none" value={reminderNote} onChange={e => setReminderNote(e.target.value)} /></div>
-              <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">參與人員（每個人各自獨立在自己的今日待辦中看到）</label>
-                <div className="grid grid-cols-2 gap-1.5 max-h-32 overflow-y-auto border border-gray-100 rounded-lg p-2">
-                  {(team || []).map(m => (
-                    <label key={m.id} className="flex items-center gap-1.5 text-xs text-gray-700 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={reminderParticipantIds.includes(m.id)}
-                        onChange={() => setReminderParticipantIds(prev => prev.includes(m.id) ? prev.filter(id => id !== m.id) : [...prev, m.id])}
-                        className="w-3.5 h-3.5"
-                      /> {m.name}
-                    </label>
-                  ))}
+      {/* 新增純提醒：手機為底部抽屜（標題/按鈕固定、內容可捲動），電腦為置中視窗 */}
+      {showReminderForm && createPortal((() => {
+        const inp = 'w-full h-11 px-3 border border-gray-200 rounded-xl text-base bg-white outline-none focus:border-gray-400';
+        const lab = 'text-xs font-bold text-gray-500 block mb-1.5';
+        const allIds = (team || []).map(m => m.id);
+        const allSelected = allIds.length > 0 && allIds.every(id => reminderParticipantIds.includes(id));
+        const multiDay = reminderEndDate !== '';
+        return (
+          <div className="fixed inset-0 z-[300] flex items-end md:items-center justify-center bg-black/50" onClick={() => setShowReminderForm(false)}>
+            <div className="bg-white w-full md:max-w-md rounded-t-3xl md:rounded-2xl shadow-2xl flex flex-col animate-scale-up" style={{ maxHeight: '92dvh' }} onClick={e => e.stopPropagation()}>
+              <div className="shrink-0 px-5 pt-3 pb-3 border-b border-gray-100">
+                <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3 md:hidden"></div>
+                <div className="flex items-center justify-between">
+                  <div>
+                    <h3 className="text-lg font-bold text-gray-900 flex items-center gap-2"><Bell size={18} className="text-gray-500" />新增純提醒</h3>
+                    <p className="text-[11px] text-gray-400 mt-0.5">不計 MEA 分數、不寫入客戶軌跡，只提醒自己完成事項</p>
+                  </div>
+                  <button type="button" onClick={() => setShowReminderForm(false)} className="w-10 h-10 -mr-2 rounded-full flex items-center justify-center hover:bg-gray-100"><X size={20} /></button>
                 </div>
               </div>
-              <button onClick={handleAddReminder} disabled={!reminderTitle || reminderParticipantIds.length === 0 || reminderSaving} className="w-full bg-gray-800 text-white py-3 rounded-lg font-bold hover:bg-gray-900 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
-                {reminderSaving ? <Loader2 className="animate-spin" size={16} /> : '新增提醒'}
-              </button>
+
+              <div className="flex-1 min-h-0 overflow-y-auto overscroll-contain px-5 py-4 space-y-4" style={{ WebkitOverflowScrolling: 'touch' }}>
+                <div>
+                  <label className={lab}>提醒內容</label>
+                  <input type="text" className={inp} placeholder="例如：交報表給總公司" value={reminderTitle} onChange={e => setReminderTitle(e.target.value)} />
+                </div>
+
+                <div>
+                  <label className={lab}>分類</label>
+                  <div className="flex flex-wrap gap-2">
+                    {Object.entries(REMINDER_CATEGORIES).map(([k, v]) => (
+                      <button key={k} type="button" onClick={() => setReminderCategory(k)} className={`h-9 px-3.5 rounded-full text-sm font-bold border flex items-center gap-1.5 transition ${reminderCategory === k ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-600 border-gray-200'}`}>
+                        <span className={`w-2 h-2 rounded-full ${v.color} ${reminderCategory === k ? 'ring-1 ring-white' : ''}`}></span>{v.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div>
+                  <label className={lab}>優先度</label>
+                  <div className="grid grid-cols-2 gap-2">
+                    {Object.entries(PRIORITY_LEVELS).sort((a, b) => a[1].order - b[1].order).map(([k, v]) => (
+                      <button key={k} type="button" onClick={() => setReminderPriority(k)} className={`h-10 rounded-xl text-sm font-bold border flex items-center justify-center gap-2 transition ${reminderPriority === k ? 'bg-gray-800 text-white border-gray-800' : 'bg-white text-gray-600 border-gray-200'}`}>
+                        <span className={`w-2.5 h-2.5 rounded-full ${v.color}`}></span>{v.label}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+
+                <div className="rounded-2xl bg-gray-50 p-3 space-y-3">
+                  <div>
+                    <label className={lab}>{multiDay ? '開始日期' : '日期'}</label>
+                    <input type="date" className={inp} style={{ minWidth: 0 }} value={reminderDate} onChange={e => setReminderDate(e.target.value)} />
+                  </div>
+                  <div className="grid grid-cols-2 gap-3">
+                    <div className="min-w-0"><label className={lab}>開始時間（選填）</label><TimeSelect value={reminderTime} onChange={setReminderTime} /></div>
+                    <div className="min-w-0"><label className={lab}>結束時間（選填）</label><TimeSelect value={reminderEndTime} onChange={setReminderEndTime} /></div>
+                  </div>
+                  {multiDay ? (
+                    <div>
+                      <div className="flex items-center justify-between mb-1.5"><label className="text-xs font-bold text-gray-500">結束日期</label><button type="button" onClick={() => setReminderEndDate('')} className="text-xs text-gray-400 underline">改為單日</button></div>
+                      <input type="date" className={inp} style={{ minWidth: 0 }} min={reminderDate} value={reminderEndDate} onChange={e => setReminderEndDate(e.target.value)} />
+                    </div>
+                  ) : (
+                    <button type="button" onClick={() => setReminderEndDate(reminderDate)} className="text-sm font-bold text-gray-500 flex items-center gap-1.5"><Plus size={14} />設定結束日期（多日提醒）</button>
+                  )}
+                </div>
+
+                <div><label className={lab}>地點（選填）</label><input type="text" className={inp} value={reminderAddress} onChange={e => setReminderAddress(e.target.value)} /></div>
+                <div><label className={lab}>備註（選填）</label><textarea className="w-full h-20 p-3 border border-gray-200 rounded-xl text-base resize-none outline-none focus:border-gray-400" value={reminderNote} onChange={e => setReminderNote(e.target.value)} /></div>
+
+                <div>
+                  <div className="flex items-center justify-between mb-1.5">
+                    <label className="text-xs font-bold text-gray-500">參與人員（各自在今日待辦看到）</label>
+                    <div className="flex gap-3 text-xs">
+                      <button type="button" onClick={() => setReminderParticipantIds(loggedInUser ? [loggedInUser.id] : [])} className="text-gray-400 underline">只有我</button>
+                      <button type="button" onClick={() => setReminderParticipantIds(allSelected ? (loggedInUser ? [loggedInUser.id] : []) : allIds)} className="text-gray-500 font-bold underline">{allSelected ? '取消全選' : '全選'}</button>
+                    </div>
+                  </div>
+                  <div className="flex flex-wrap gap-2">
+                    {(team || []).map(m => { const on = reminderParticipantIds.includes(m.id); return (
+                      <button key={m.id} type="button" onClick={() => setReminderParticipantIds(prev => prev.includes(m.id) ? prev.filter(id => id !== m.id) : [...prev, m.id])} className={`h-9 px-3 rounded-full text-sm border transition ${on ? 'bg-gray-800 text-white border-gray-800 font-bold' : 'bg-white text-gray-600 border-gray-200'}`}>{m.name}</button>
+                    ); })}
+                  </div>
+                </div>
+              </div>
+
+              <div className="shrink-0 px-5 pt-3 border-t border-gray-100 bg-white md:rounded-b-2xl" style={{ paddingBottom: 'calc(env(safe-area-inset-bottom, 0px) + 0.9rem)' }}>
+                {reminderError && <p className="text-xs text-red-500 mb-2">{reminderError}</p>}
+                <button type="button" onClick={handleAddReminder} disabled={!reminderTitle.trim() || !reminderDate || reminderParticipantIds.length === 0 || reminderSaving} className="w-full h-12 bg-gray-800 text-white rounded-xl font-bold text-base active:scale-[.99] transition disabled:opacity-40 flex items-center justify-center gap-2">
+                  {reminderSaving ? <Loader2 className="animate-spin" size={18} /> : '新增提醒'}
+                </button>
+                {(!reminderTitle.trim() || reminderParticipantIds.length === 0) && <p className="text-[11px] text-gray-400 text-center mt-1.5">{!reminderTitle.trim() ? '請先輸入提醒內容' : '請至少選一位參與人員'}</p>}
+              </div>
             </div>
           </div>
-        </div>
-      )}
+        );
+      })(), document.body)}
 
       {/* 行程操作選單：點行程先到這裡，再選擇完成／編輯／複製／刪除，不會一碰就直接完成 */}
       {actionEvent && (() => {
