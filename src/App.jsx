@@ -5510,8 +5510,41 @@ const WarDonut = ({ title, centerTop, centerBottom, parts }) => {
 };
 
 // --- 面談追蹤（尚豐領航 同步過來的準增員面談紀錄；只有吳政翰帳號看得到）---
-const INTERVIEW_STAGES = ['面談', '二面', '報名考照', '考上', '報聘', '暫不考慮'];
-const INTERVIEW_STAGE_COLOR = { '面談': '#60a5fa', '二面': '#a78bfa', '報名考照': '#fbbf24', '考上': '#34d399', '報聘': '#f472b6', '暫不考慮': '#94a3b8' };
+// 進度只看考照：準備中 → 內考通過 → 外考通過 → 已登錄（由尚豐領航的 doneInner／doneOuter／doneReg 決定）
+const INTERVIEW_STAGES = ['準備中', '內考通過', '外考通過', '已登錄'];
+const INTERVIEW_STAGE_COLOR = { '準備中': '#94a3b8', '內考通過': '#60a5fa', '外考通過': '#a78bfa', '已登錄': '#34d399' };
+const interviewStageOf = (r) => r.doneReg ? '已登錄' : r.doneOuter ? '外考通過' : r.doneInner ? '內考通過' : '準備中';
+
+const InterviewCardModal = ({ html, name, onClose }) => {
+  const boxRef = useRef(null);
+  const frameRef = useRef(null);
+  const [h, setH] = useState(900);
+  const [k, setK] = useState(0.5);
+  useEffect(() => {
+    const fit = () => { if (boxRef.current) setK(Math.min(1, boxRef.current.clientWidth / 1536)); };
+    fit();
+    const ro = new ResizeObserver(fit);
+    if (boxRef.current) ro.observe(boxRef.current);
+    return () => ro.disconnect();
+  }, []);
+  const onLoad = () => {
+    try { const d = frameRef.current.contentDocument; const p = d && d.querySelector('.cp'); setH(Math.max(600, (p ? p.offsetHeight : d.body.scrollHeight) + 4)); } catch (e) { /* ignore */ }
+  };
+  const doc = `<!doctype html><html><head><meta charset="utf-8"><style>body{margin:0;background:#eef1f8;font-family:"Noto Sans TC","PingFang TC","Microsoft JhengHei",sans-serif}.cp{position:relative!important;transform:none!important}</style></head><body>${html}</body></html>`;
+  return createPortal(
+    <div className="fixed inset-0 z-[200] bg-black/70 backdrop-blur-sm flex items-start justify-center p-3 md:p-8 overflow-y-auto" onClick={onClose}>
+      <div className="w-full max-w-[1200px] rounded-3xl bg-[#0f1838] border border-white/10 p-3 md:p-4" onClick={e => e.stopPropagation()}>
+        <div className="flex items-center justify-between mb-3 px-1">
+          <p className="text-white text-[15px] font-bold">{name} 的職涯卡</p>
+          <button onClick={onClose} className="w-8 h-8 rounded-full bg-white/10 flex items-center justify-center text-white"><X size={16} /></button>
+        </div>
+        <div ref={boxRef} className="w-full overflow-hidden rounded-2xl" style={{ height: h * k }}>
+          <iframe ref={frameRef} title="職涯卡" sandbox="allow-same-origin" srcDoc={doc} onLoad={onLoad} style={{ width: 1536, height: h, border: 0, transform: `scale(${k})`, transformOrigin: '0 0', display: 'block' }} />
+        </div>
+      </div>
+    </div>, document.body);
+};
+
 const InterviewTrackerPage = ({ loggedInUser }) => {
   const [rows, setRows] = useState([]);
   const [loaded, setLoaded] = useState(false);
@@ -5519,13 +5552,14 @@ const InterviewTrackerPage = ({ loggedInUser }) => {
   const [byF, setByF] = useState('');
   const [q, setQ] = useState('');
   const [openId, setOpenId] = useState(null);
+  const [cardOf, setCardOf] = useState(null);
   const [drafts, setDrafts] = useState({});
   const allowed = loggedInUser?.name === '吳政翰';
 
   useEffect(() => {
     if (!allowed) return;
     const unsub = onSnapshot(collection(db, 'interview_records'), (snap) => {
-      setRows(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))));
+      setRows(snap.docs.map(d => { const x = { id: d.id, ...d.data() }; return { ...x, st: interviewStageOf(x) }; }).sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))));
       setLoaded(true);
     }, (err) => { console.error(err); setLoaded(true); });
     return () => unsub();
@@ -5537,19 +5571,21 @@ const InterviewTrackerPage = ({ loggedInUser }) => {
   const pd = new Date(nowD.getFullYear(), nowD.getMonth() - 1, 1);
   const prevM = `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`;
   const fmtD = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getMonth() + 1}/${d.getDate()}`; };
+  const fmtYmd = (s) => { if (!s) return '—'; const [y, m, d] = String(s).split('-'); return `${+m}/${+d}`; };
 
   const monthN = rows.filter(r => monthKey(r.at) === thisM).length;
   const prevN = rows.filter(r => monthKey(r.at) === prevM).length;
-  const second = rows.filter(r => INTERVIEW_STAGES.indexOf(r.stage) >= 1 && r.stage !== '暫不考慮').length;
-  const hired = rows.filter(r => r.stage === '報聘').length;
-  const stageCount = INTERVIEW_STAGES.map(s => ({ s, n: rows.filter(r => (r.stage || '面談') === s).length }));
+  const examN = rows.filter(r => r.st === '內考通過' || r.st === '外考通過').length;
+  const regN = rows.filter(r => r.st === '已登錄').length;
+  const prepN = rows.filter(r => r.st === '準備中').length;
+  const stageCount = INTERVIEW_STAGES.map(s => ({ s, n: rows.filter(r => r.st === s).length }));
   const maxStage = Math.max(1, ...stageCount.map(x => x.n));
   const byList = useMemo(() => {
     const m = {};
-    rows.forEach(r => { const k = r.by || '未具名'; (m[k] = m[k] || { by: k, month: 0, all: 0, hired: 0 }); m[k].all++; if (monthKey(r.at) === thisM) m[k].month++; if (r.stage === '報聘') m[k].hired++; });
+    rows.forEach(r => { const k = r.by || '未具名'; (m[k] = m[k] || { by: k, month: 0, all: 0, reg: 0 }); m[k].all++; if (monthKey(r.at) === thisM) m[k].month++; if (r.st === '已登錄') m[k].reg++; });
     return Object.values(m).sort((a, b) => b.month - a.month || b.all - a.all);
   }, [rows, thisM]);
-  const shown = rows.filter(r => (!stageF || (r.stage || '面談') === stageF) && (!byF || r.by === byF) && (!q.trim() || String(r.cand || '').includes(q.trim()) || String(r.note || '').includes(q.trim()) || String(r.bossNote || '').includes(q.trim())));
+  const shown = rows.filter(r => (!stageF || r.st === stageF) && (!byF || r.by === byF) && (!q.trim() || String(r.cand || '').includes(q.trim()) || String(r.note || '').includes(q.trim()) || String(r.bossNote || '').includes(q.trim())));
 
   const saveBossNote = async (id) => {
     const text = drafts[id];
@@ -5562,10 +5598,11 @@ const InterviewTrackerPage = ({ loggedInUser }) => {
   const delta = monthN - prevN;
   const tiles = [
     { l: '本月面談', v: monthN, u: '位', s: prevN ? `上月 ${prevN} 位（${delta >= 0 ? '+' : ''}${delta}）` : '上月 0 位', c: 'bg-blue-500/25 text-blue-300' },
-    { l: '累計紀錄', v: rows.length, u: '位', s: '尚豐領航 同步', c: 'bg-violet-500/25 text-violet-300' },
-    { l: '二面以上', v: second, u: '位', s: rows.length ? `佔 ${Math.round(second / rows.length * 100)}%` : '', c: 'bg-amber-500/25 text-amber-300' },
-    { l: '報聘', v: hired, u: '位', s: rows.length ? `轉換率 ${Math.round(hired / rows.length * 100)}%` : '', c: 'bg-pink-500/25 text-pink-300' },
+    { l: '準備中', v: prepN, u: '位', s: `累計 ${rows.length} 位`, c: 'bg-slate-500/30 text-slate-200' },
+    { l: '考試中', v: examN, u: '位', s: '內考或外考已通過', c: 'bg-violet-500/25 text-violet-300' },
+    { l: '已登錄', v: regN, u: '位', s: rows.length ? `轉換率 ${Math.round(regN / rows.length * 100)}%` : '', c: 'bg-emerald-500/25 text-emerald-300' },
   ];
+  const STEPS = [['dPrep', '準備內考', null], ['dInner', '內考', 'doneInner'], ['dOuter', '外考', 'doneOuter'], ['dReg', '登錄', 'doneReg']];
 
   return (
     <div className="text-white animate-fade-in space-y-3 pb-6">
@@ -5584,14 +5621,14 @@ const InterviewTrackerPage = ({ loggedInUser }) => {
       </div>
       <div className="grid md:grid-cols-2 gap-2.5">
         <div className={`${glass} p-4`}>
-          <p className="text-[14px] font-bold mb-3">階段分佈</p>
+          <p className="text-[14px] font-bold mb-3">考照進度分佈</p>
           <div className="space-y-2">
             {stageCount.map(x => (
-              <div key={x.s} className="flex items-center gap-2.5">
-                <span className="w-16 text-[12px] text-white/70 shrink-0">{x.s}</span>
+              <button key={x.s} onClick={() => setStageF(stageF === x.s ? '' : x.s)} className={`w-full flex items-center gap-2.5 rounded-lg px-1 py-0.5 ${stageF === x.s ? 'bg-white/10' : ''}`}>
+                <span className="w-16 text-left text-[12px] text-white/70 shrink-0">{x.s}</span>
                 <div className="flex-1 h-2 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${x.n / maxStage * 100}%`, background: INTERVIEW_STAGE_COLOR[x.s] }}></div></div>
                 <span className="w-7 text-right text-[13px] font-bold tabular-nums">{x.n}</span>
-              </div>
+              </button>
             ))}
           </div>
         </div>
@@ -5599,13 +5636,13 @@ const InterviewTrackerPage = ({ loggedInUser }) => {
           <p className="text-[14px] font-bold mb-3">各主管面談數</p>
           {byList.length === 0 ? <p className="text-[12px] text-white/40 py-3">目前沒有資料</p> : (
             <div className="space-y-1.5 max-h-[220px] overflow-y-auto no-scrollbar">
-              <div className="grid grid-cols-[1fr_44px_44px_44px] gap-1 text-[10px] font-bold text-white/35 px-1"><span>主管</span><span className="text-center">本月</span><span className="text-center">累計</span><span className="text-center">報聘</span></div>
+              <div className="grid grid-cols-[1fr_44px_44px_44px] gap-1 text-[10px] font-bold text-white/35 px-1"><span>主管</span><span className="text-center">本月</span><span className="text-center">累計</span><span className="text-center">登錄</span></div>
               {byList.map(b => (
                 <button key={b.by} onClick={() => setByF(byF === b.by ? '' : b.by)} className={`w-full grid grid-cols-[1fr_44px_44px_44px] gap-1 items-center px-1 py-1.5 rounded-lg text-left ${byF === b.by ? 'bg-white/10' : 'active:bg-white/[0.05]'}`}>
                   <span className="text-[13px] font-bold truncate">{b.by}</span>
                   <span className="text-center text-[13px] tabular-nums text-blue-300 font-bold">{b.month}</span>
                   <span className="text-center text-[13px] tabular-nums">{b.all}</span>
-                  <span className="text-center text-[13px] tabular-nums text-pink-300">{b.hired}</span>
+                  <span className="text-center text-[13px] tabular-nums text-emerald-300">{b.reg}</span>
                 </button>
               ))}
             </div>
@@ -5617,7 +5654,7 @@ const InterviewTrackerPage = ({ loggedInUser }) => {
           <p className="text-[14px] font-bold mr-auto">面談紀錄 <span className="text-white/40 font-normal text-[12px]">{shown.length} 筆</span></p>
           <input value={q} onChange={e => setQ(e.target.value)} placeholder="搜尋姓名或備註" className="h-9 px-3 rounded-xl text-[13px] w-36" />
           <select value={stageF} onChange={e => setStageF(e.target.value)} className="h-9 px-2 rounded-xl text-[13px]">
-            <option value="">全部階段</option>
+            <option value="">全部進度</option>
             {INTERVIEW_STAGES.map(s => <option key={s} value={s}>{s}</option>)}
           </select>
           {(stageF || byF || q) && <button onClick={() => { setStageF(''); setByF(''); setQ(''); }} className="text-[12px] font-bold text-white/60">清除</button>}
@@ -5628,25 +5665,43 @@ const InterviewTrackerPage = ({ loggedInUser }) => {
         <div className="space-y-2">
           {shown.map(r => {
             const open = openId === r.id;
-            const st = r.stage || '面談';
+            const st = r.st;
+            const col = INTERVIEW_STAGE_COLOR[st] || '#94a3b8';
             return (
               <div key={r.id} className="rounded-2xl border border-white/10 bg-white/[0.04]">
                 <button onClick={() => setOpenId(open ? null : r.id)} className="w-full text-left px-3.5 py-3 flex items-start gap-3">
-                  <span className="w-1.5 self-stretch rounded-full shrink-0" style={{ background: INTERVIEW_STAGE_COLOR[st] || '#94a3b8' }}></span>
+                  <span className="w-1.5 self-stretch rounded-full shrink-0" style={{ background: col }}></span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-center gap-2 flex-wrap">
                       <b className="text-[15px]">{r.cand || '未具名'}</b>
-                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: `${INTERVIEW_STAGE_COLOR[st] || '#94a3b8'}33`, color: INTERVIEW_STAGE_COLOR[st] || '#94a3b8' }}>{st}</span>
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: `${col}33`, color: col }}>{st}</span>
                     </span>
                     <span className="block text-[12px] text-white/55 mt-1">{r.persona}{r.ind ? `・${r.ind}` : ''}{r.age ? `・${r.age} 歲` : ''}{r.sal ? `・月薪 ${(r.sal / 10000).toFixed(r.sal % 10000 ? 1 : 0)} 萬` : ''}</span>
-                    <span className="block text-[11px] text-white/40 mt-0.5">{fmtD(r.at)}・面談：{r.by || '—'}</span>
+                    <span className="block text-[11px] text-white/40 mt-0.5">{fmtD(r.at)}・面談：{r.by || '—'}{r.dReg ? `・預計登錄 ${fmtYmd(r.dReg)}` : ''}</span>
                     {r.note && <span className="block text-[12px] text-amber-200/80 mt-1.5">追蹤：{r.note}</span>}
                   </span>
                   <ChevronRight size={16} className={`text-white/30 shrink-0 mt-1 transition ${open ? 'rotate-90' : ''}`} />
                 </button>
                 {open && (
                   <div className="px-3.5 pb-3.5 pt-0.5 space-y-2.5 text-[12.5px] text-white/80 border-t border-white/[0.06]">
-                    {Array.isArray(r.wants) && r.wants.length > 0 && <p className="pt-2.5"><span className="text-white/40">最在意：</span>{r.wants.join('、')}</p>}
+                    <div className="grid grid-cols-4 gap-1.5 pt-2.5">
+                      {STEPS.map(([f, t, done], i) => {
+                        const ok = done ? r[done] : (r.doneInner || r.doneOuter || r.doneReg);
+                        return (
+                          <div key={f} className={`rounded-xl px-2 py-2 text-center border ${ok ? 'border-emerald-400/40 bg-emerald-500/15' : 'border-white/10 bg-white/[0.04]'}`}>
+                            <p className="text-[10.5px] text-white/50">{i + 1}. {t}</p>
+                            <p className={`text-[14px] font-bold tabular-nums ${ok ? 'text-emerald-300' : ''}`}>{fmtYmd(r[f])}</p>
+                            <p className="text-[10px] text-white/40">{done ? (r[done] ? '已完成' : '未完成') : '起點'}</p>
+                          </div>
+                        );
+                      })}
+                    </div>
+                    {r.cardHtml ? (
+                      <button onClick={() => setCardOf(r)} className="w-full h-10 rounded-xl bg-amber-400/90 text-[#1a1300] font-bold text-[13px]">看當時的職涯卡</button>
+                    ) : (
+                      <p className="text-[11.5px] text-white/40">這筆是舊版紀錄，沒有完整職涯卡</p>
+                    )}
+                    {Array.isArray(r.wants) && r.wants.length > 0 && <p><span className="text-white/40">最在意：</span>{r.wants.join('、')}</p>}
                     {Array.isArray(r.dreams) && r.dreams.length > 0 && <p><span className="text-white/40">夢想：</span>{r.dreams.join('、')}</p>}
                     {r.goal && <p><span className="text-white/40">目標：</span>「{r.goal}」</p>}
                     {r.gap != null && <p><span className="text-white/40">85 歲缺口：</span>{r.gap > 0 ? `${r.gap} 萬` : '無'}</p>}
@@ -5665,6 +5720,7 @@ const InterviewTrackerPage = ({ loggedInUser }) => {
           })}
         </div>
       </div>
+      {cardOf && <InterviewCardModal html={cardOf.cardHtml} name={cardOf.cand || ''} onClose={() => setCardOf(null)} />}
     </div>
   );
 };
