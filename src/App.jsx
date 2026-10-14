@@ -113,12 +113,12 @@ import {
 
 // --- Firebase Initialization (User Provided) ---
 const firebaseConfig = { 
-  apiKey: "AIzaSyAfRqL4VEB4zHWvQqhpMMZoa82Oe_KbxhU", 
-  authDomain: "mydatabase-66a3a.firebaseapp.com", 
-  projectId: "mydatabase-66a3a", 
-  storageBucket: "mydatabase-66a3a.firebasestorage.app", 
-  messagingSenderId: "335729896817", 
-  appId: "1:335729896817:web:78098d5189dcd5ca0b5ad0" 
+  apiKey: "AIzaSyCkk_IebXYdkpIubebrplt5d039c975xs0", 
+  authDomain: "jifeng-app.firebaseapp.com", 
+  projectId: "jifeng-app", 
+  storageBucket: "jifeng-app.firebasestorage.app", 
+  messagingSenderId: "313295673575", 
+  appId: "1:313295673575:web:e5bb7a4c6e1a5a47962a42" 
 }; 
 
 const app = initializeApp(firebaseConfig);
