@@ -5509,6 +5509,232 @@ const WarDonut = ({ title, centerTop, centerBottom, parts }) => {
   );
 };
 
+// --- 面談追蹤（尚豐領航 同步過來的準增員面談紀錄；只有吳政翰帳號看得到）---
+const INTERVIEW_STAGES = ['面談', '二面', '報名考照', '考上', '報聘', '暫不考慮'];
+const INTERVIEW_STAGE_COLOR = { '面談': '#60a5fa', '二面': '#a78bfa', '報名考照': '#fbbf24', '考上': '#34d399', '報聘': '#f472b6', '暫不考慮': '#94a3b8' };
+const InterviewTrackerPage = ({ loggedInUser }) => {
+  const [rows, setRows] = useState([]);
+  const [loaded, setLoaded] = useState(false);
+  const [stageF, setStageF] = useState('');
+  const [byF, setByF] = useState('');
+  const [q, setQ] = useState('');
+  const [openId, setOpenId] = useState(null);
+  const [drafts, setDrafts] = useState({});
+  const allowed = loggedInUser?.name === '吳政翰';
+
+  useEffect(() => {
+    if (!allowed) return;
+    const unsub = onSnapshot(collection(db, 'interview_records'), (snap) => {
+      setRows(snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => String(b.at || '').localeCompare(String(a.at || ''))));
+      setLoaded(true);
+    }, (err) => { console.error(err); setLoaded(true); });
+    return () => unsub();
+  }, [allowed]);
+
+  const monthKey = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  const nowD = new Date();
+  const thisM = `${nowD.getFullYear()}-${String(nowD.getMonth() + 1).padStart(2, '0')}`;
+  const pd = new Date(nowD.getFullYear(), nowD.getMonth() - 1, 1);
+  const prevM = `${pd.getFullYear()}-${String(pd.getMonth() + 1).padStart(2, '0')}`;
+  const fmtD = (iso) => { const d = new Date(iso); return isNaN(d) ? '' : `${d.getMonth() + 1}/${d.getDate()}`; };
+
+  const monthN = rows.filter(r => monthKey(r.at) === thisM).length;
+  const prevN = rows.filter(r => monthKey(r.at) === prevM).length;
+  const second = rows.filter(r => INTERVIEW_STAGES.indexOf(r.stage) >= 1 && r.stage !== '暫不考慮').length;
+  const hired = rows.filter(r => r.stage === '報聘').length;
+  const stageCount = INTERVIEW_STAGES.map(s => ({ s, n: rows.filter(r => (r.stage || '面談') === s).length }));
+  const maxStage = Math.max(1, ...stageCount.map(x => x.n));
+  const byList = useMemo(() => {
+    const m = {};
+    rows.forEach(r => { const k = r.by || '未具名'; (m[k] = m[k] || { by: k, month: 0, all: 0, hired: 0 }); m[k].all++; if (monthKey(r.at) === thisM) m[k].month++; if (r.stage === '報聘') m[k].hired++; });
+    return Object.values(m).sort((a, b) => b.month - a.month || b.all - a.all);
+  }, [rows, thisM]);
+  const shown = rows.filter(r => (!stageF || (r.stage || '面談') === stageF) && (!byF || r.by === byF) && (!q.trim() || String(r.cand || '').includes(q.trim()) || String(r.note || '').includes(q.trim()) || String(r.bossNote || '').includes(q.trim())));
+
+  const saveBossNote = async (id) => {
+    const text = drafts[id];
+    if (text === undefined) return;
+    try { await updateDoc(doc(db, 'interview_records', id), { bossNote: text }); setDrafts(d => { const n = { ...d }; delete n[id]; return n; }); } catch (e) { console.error(e); }
+  };
+
+  if (!allowed) return null;
+  const glass = 'rounded-3xl border border-white/10 bg-white/[0.06]';
+  const delta = monthN - prevN;
+  const tiles = [
+    { l: '本月面談', v: monthN, u: '位', s: prevN ? `上月 ${prevN} 位（${delta >= 0 ? '+' : ''}${delta}）` : '上月 0 位', c: 'bg-blue-500/25 text-blue-300' },
+    { l: '累計紀錄', v: rows.length, u: '位', s: '尚豐領航 同步', c: 'bg-violet-500/25 text-violet-300' },
+    { l: '二面以上', v: second, u: '位', s: rows.length ? `佔 ${Math.round(second / rows.length * 100)}%` : '', c: 'bg-amber-500/25 text-amber-300' },
+    { l: '報聘', v: hired, u: '位', s: rows.length ? `轉換率 ${Math.round(hired / rows.length * 100)}%` : '', c: 'bg-pink-500/25 text-pink-300' },
+  ];
+
+  return (
+    <div className="text-white animate-fade-in space-y-3 pb-6">
+      <div className="pt-1">
+        <h1 className="text-[26px] md:text-[28px] font-bold tracking-tight leading-none">面談追蹤</h1>
+        <p className="text-[12px] text-white/50 mt-2">尚豐領航同步過來的準增員面談紀錄，只有你看得到</p>
+      </div>
+      <div className="grid grid-cols-2 md:grid-cols-4 gap-2.5">
+        {tiles.map(t => (
+          <div key={t.l} className={`${glass} px-3.5 py-3`}>
+            <span className={`inline-block text-[11px] font-bold px-2 py-0.5 rounded-full ${t.c}`}>{t.l}</span>
+            <p className="mt-2 leading-none"><b className="text-[28px] font-bold tabular-nums">{t.v}</b><span className="text-[13px] text-white/60 ml-1">{t.u}</span></p>
+            <p className="text-[11px] text-white/45 mt-1.5">{t.s || ' '}</p>
+          </div>
+        ))}
+      </div>
+      <div className="grid md:grid-cols-2 gap-2.5">
+        <div className={`${glass} p-4`}>
+          <p className="text-[14px] font-bold mb-3">階段分佈</p>
+          <div className="space-y-2">
+            {stageCount.map(x => (
+              <div key={x.s} className="flex items-center gap-2.5">
+                <span className="w-16 text-[12px] text-white/70 shrink-0">{x.s}</span>
+                <div className="flex-1 h-2 rounded-full bg-white/10 overflow-hidden"><div className="h-full rounded-full" style={{ width: `${x.n / maxStage * 100}%`, background: INTERVIEW_STAGE_COLOR[x.s] }}></div></div>
+                <span className="w-7 text-right text-[13px] font-bold tabular-nums">{x.n}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+        <div className={`${glass} p-4`}>
+          <p className="text-[14px] font-bold mb-3">各主管面談數</p>
+          {byList.length === 0 ? <p className="text-[12px] text-white/40 py-3">目前沒有資料</p> : (
+            <div className="space-y-1.5 max-h-[220px] overflow-y-auto no-scrollbar">
+              <div className="grid grid-cols-[1fr_44px_44px_44px] gap-1 text-[10px] font-bold text-white/35 px-1"><span>主管</span><span className="text-center">本月</span><span className="text-center">累計</span><span className="text-center">報聘</span></div>
+              {byList.map(b => (
+                <button key={b.by} onClick={() => setByF(byF === b.by ? '' : b.by)} className={`w-full grid grid-cols-[1fr_44px_44px_44px] gap-1 items-center px-1 py-1.5 rounded-lg text-left ${byF === b.by ? 'bg-white/10' : 'active:bg-white/[0.05]'}`}>
+                  <span className="text-[13px] font-bold truncate">{b.by}</span>
+                  <span className="text-center text-[13px] tabular-nums text-blue-300 font-bold">{b.month}</span>
+                  <span className="text-center text-[13px] tabular-nums">{b.all}</span>
+                  <span className="text-center text-[13px] tabular-nums text-pink-300">{b.hired}</span>
+                </button>
+              ))}
+            </div>
+          )}
+        </div>
+      </div>
+      <div className={`${glass} p-4`}>
+        <div className="flex flex-wrap items-center gap-2 mb-3">
+          <p className="text-[14px] font-bold mr-auto">面談紀錄 <span className="text-white/40 font-normal text-[12px]">{shown.length} 筆</span></p>
+          <input value={q} onChange={e => setQ(e.target.value)} placeholder="搜尋姓名或備註" className="h-9 px-3 rounded-xl text-[13px] w-36" />
+          <select value={stageF} onChange={e => setStageF(e.target.value)} className="h-9 px-2 rounded-xl text-[13px]">
+            <option value="">全部階段</option>
+            {INTERVIEW_STAGES.map(s => <option key={s} value={s}>{s}</option>)}
+          </select>
+          {(stageF || byF || q) && <button onClick={() => { setStageF(''); setByF(''); setQ(''); }} className="text-[12px] font-bold text-white/60">清除</button>}
+        </div>
+        {!loaded && <p className="text-center text-[13px] text-white/40 py-8">載入中…</p>}
+        {loaded && rows.length === 0 && <p className="text-center text-[13px] text-white/40 py-8 leading-relaxed">還沒有同步過來的面談紀錄。<br />在尚豐領航面談最後一頁按「存成面談紀錄」，就會出現在這裡。</p>}
+        {loaded && rows.length > 0 && shown.length === 0 && <p className="text-center text-[13px] text-white/40 py-8">沒有符合條件的紀錄</p>}
+        <div className="space-y-2">
+          {shown.map(r => {
+            const open = openId === r.id;
+            const st = r.stage || '面談';
+            return (
+              <div key={r.id} className="rounded-2xl border border-white/10 bg-white/[0.04]">
+                <button onClick={() => setOpenId(open ? null : r.id)} className="w-full text-left px-3.5 py-3 flex items-start gap-3">
+                  <span className="w-1.5 self-stretch rounded-full shrink-0" style={{ background: INTERVIEW_STAGE_COLOR[st] || '#94a3b8' }}></span>
+                  <span className="min-w-0 flex-1">
+                    <span className="flex items-center gap-2 flex-wrap">
+                      <b className="text-[15px]">{r.cand || '未具名'}</b>
+                      <span className="text-[11px] font-bold px-2 py-0.5 rounded-full" style={{ background: `${INTERVIEW_STAGE_COLOR[st] || '#94a3b8'}33`, color: INTERVIEW_STAGE_COLOR[st] || '#94a3b8' }}>{st}</span>
+                    </span>
+                    <span className="block text-[12px] text-white/55 mt-1">{r.persona}{r.ind ? `・${r.ind}` : ''}{r.age ? `・${r.age} 歲` : ''}{r.sal ? `・月薪 ${(r.sal / 10000).toFixed(r.sal % 10000 ? 1 : 0)} 萬` : ''}</span>
+                    <span className="block text-[11px] text-white/40 mt-0.5">{fmtD(r.at)}・面談：{r.by || '—'}</span>
+                    {r.note && <span className="block text-[12px] text-amber-200/80 mt-1.5">追蹤：{r.note}</span>}
+                  </span>
+                  <ChevronRight size={16} className={`text-white/30 shrink-0 mt-1 transition ${open ? 'rotate-90' : ''}`} />
+                </button>
+                {open && (
+                  <div className="px-3.5 pb-3.5 pt-0.5 space-y-2.5 text-[12.5px] text-white/80 border-t border-white/[0.06]">
+                    {Array.isArray(r.wants) && r.wants.length > 0 && <p className="pt-2.5"><span className="text-white/40">最在意：</span>{r.wants.join('、')}</p>}
+                    {Array.isArray(r.dreams) && r.dreams.length > 0 && <p><span className="text-white/40">夢想：</span>{r.dreams.join('、')}</p>}
+                    {r.goal && <p><span className="text-white/40">目標：</span>「{r.goal}」</p>}
+                    {r.gap != null && <p><span className="text-white/40">85 歲缺口：</span>{r.gap > 0 ? `${r.gap} 萬` : '無'}</p>}
+                    {Array.isArray(r.push) && r.push.length > 0 && <p><span className="text-white/40">推力：</span>{r.push.join('、')}</p>}
+                    {Array.isArray(r.pull) && r.pull.length > 0 && <p><span className="text-white/40">拉力：</span>{r.pull.join('、')}</p>}
+                    {r.road && <p><span className="text-white/40">選擇：</span>{r.road}</p>}
+                    {Array.isArray(r.promo) && r.promo.length > 0 && <p><span className="text-white/40">希望晉升：</span>{r.promo.join('　')}</p>}
+                    <div>
+                      <p className="text-white/40 mb-1">我的備註（只有你看得到，不會同步回尚豐領航）</p>
+                      <textarea value={drafts[r.id] !== undefined ? drafts[r.id] : (r.bossNote || '')} onChange={e => setDrafts(d => ({ ...d, [r.id]: e.target.value }))} onBlur={() => saveBossNote(r.id)} rows={2} className="w-full p-2.5 rounded-xl text-[13px] resize-none" placeholder="例如：個性、顧慮、下一步" />
+                    </div>
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      </div>
+    </div>
+  );
+};
+
+// --- 戰情室：本月待收／要收（取代保費金額分佈）---
+// 待收＝已受理、尚未發單的案件（受理中）；要收＝預計本月成交的商機（商機追蹤裡預計成交日在本月）
+const WarCollectPanel = ({ summary, deals, visibleIds, today, money, onSelect, dense }) => {
+  const month = (today || '').slice(0, 7);
+  const rows = useMemo(() => summary.map(s => {
+    const pendN = s.pendingCases.length;
+    const pendAmt = s.pendingCases.reduce((a, r) => a + (Number(r.premium) || 0), 0);
+    const md = (deals || []).filter(d => d.ownerId === s.member.id && visibleIds.has(d.ownerId) && String(d.expectedCloseDate || '').startsWith(month));
+    const dealN = md.length;
+    const dealAmt = md.reduce((a, d) => a + (Number(d.estimatedPremium) || 0), 0);
+    return { member: s.member, pendN, pendAmt, dealN, dealAmt, total: pendAmt + dealAmt };
+  }).filter(x => x.pendN > 0 || x.dealN > 0).sort((a, b) => b.total - a.total), [summary, deals, visibleIds, month]);
+  const tp = rows.reduce((a, x) => ({ n: a.n + x.pendN, m: a.m + x.pendAmt }), { n: 0, m: 0 });
+  const td = rows.reduce((a, x) => ({ n: a.n + x.dealN, m: a.m + x.dealAmt }), { n: 0, m: 0 });
+  const maxTotal = Math.max(1, ...rows.map(x => x.total));
+  return (
+    <div className="rounded-3xl border border-white/10 bg-white/[0.06] p-3.5 min-w-0 text-white">
+      <div className="flex items-baseline justify-between gap-2 mb-2.5">
+        <p className="text-[14px] font-bold">本月待收／要收</p>
+        <p className="text-[10px] text-white/40 shrink-0">{month.replace('-', '年')}月</p>
+      </div>
+      <div className="grid grid-cols-3 gap-2 mb-3">
+        <div className="rounded-2xl bg-blue-500/15 border border-blue-400/20 px-2.5 py-2 min-w-0">
+          <p className="text-[10px] text-blue-200/80">待收・已受理</p>
+          <p className="text-[17px] font-bold tabular-nums leading-tight mt-0.5 truncate">{money(tp.m)}</p>
+          <p className="text-[10px] text-white/50 tabular-nums">{tp.n} 件</p>
+        </div>
+        <div className="rounded-2xl bg-teal-500/15 border border-teal-400/20 px-2.5 py-2 min-w-0">
+          <p className="text-[10px] text-teal-200/80">要收・本月商機</p>
+          <p className="text-[17px] font-bold tabular-nums leading-tight mt-0.5 truncate">{money(td.m)}</p>
+          <p className="text-[10px] text-white/50 tabular-nums">{td.n} 件</p>
+        </div>
+        <div className="rounded-2xl bg-white/[0.07] border border-white/10 px-2.5 py-2 min-w-0">
+          <p className="text-[10px] text-white/55">合計</p>
+          <p className="text-[17px] font-bold tabular-nums leading-tight mt-0.5 truncate">{money(tp.m + td.m)}</p>
+          <p className="text-[10px] text-white/50 tabular-nums">{tp.n + td.n} 件</p>
+        </div>
+      </div>
+      {rows.length === 0 ? (
+        <p className="text-center text-[12px] text-white/40 py-5">本月目前沒有待收或要收的金額</p>
+      ) : (
+        <div className={`space-y-2.5 ${dense ? 'max-h-[260px] overflow-y-auto no-scrollbar' : ''}`}>
+          {rows.map(x => (
+            <button key={x.member.id} onClick={() => onSelect && onSelect(x.member.id)} className="w-full text-left block active:opacity-80">
+              <div className="flex items-center justify-between gap-2">
+                <span className="flex items-center gap-2 min-w-0"><Avatar name={x.member.name} size={22} /><span className="text-[13px] font-bold truncate">{x.member.name}</span></span>
+                <span className="text-[13px] font-bold tabular-nums shrink-0">{money(x.total)}</span>
+              </div>
+              <div className="h-1.5 rounded-full bg-white/10 mt-1.5 overflow-hidden flex" style={{ width: `${Math.max(8, Math.round(x.total / maxTotal * 100))}%` }}>
+                {x.pendAmt > 0 && <div className="h-full bg-blue-400" style={{ width: `${x.pendAmt / x.total * 100}%` }}></div>}
+                {x.dealAmt > 0 && <div className="h-full bg-teal-400" style={{ width: `${x.dealAmt / x.total * 100}%` }}></div>}
+              </div>
+              <p className="text-[10.5px] text-white/50 mt-1 tabular-nums">
+                <span className="text-blue-300">待收 {x.pendN} 件 {money(x.pendAmt)}</span>
+                <span className="mx-1.5 text-white/20">|</span>
+                <span className="text-teal-300">要收 {x.dealN} 件 {money(x.dealAmt)}</span>
+              </p>
+            </button>
+          ))}
+        </div>
+      )}
+      <p className="text-[10px] text-white/35 mt-3 leading-snug">待收＝受理中、尚未發單的案件；要收＝預計成交日在本月的商機。</p>
+    </div>
+  );
+};
+
 const MobileWarRoom = ({ summary, deals, visibleIds, today, onSelect, onSearch }) => {
   const [tab, setTab] = useState('overview');
   const [sortKey, setSortKey] = useState('premium');
@@ -5567,9 +5793,11 @@ const MobileWarRoom = ({ summary, deals, visibleIds, today, onSelect, onSearch }
               </div>
             ); })}
           </div>
-          <div className="grid grid-cols-2 gap-2.5 mb-3.5">
+          <div className="mb-3">
+            <WarCollectPanel summary={summary} deals={deals} visibleIds={visibleIds} today={today} money={money} onSelect={onSelect} />
+          </div>
+          <div className="mb-3.5">
             <WarDonut title="案件卡關天數" centerTop={allCases.length} centerBottom="受理中案件" parts={buckets.map(b => ({ label: b.label, color: b.color, v: b.n, text: `${b.n} 件` }))} />
-            <WarDonut title="保費金額分佈" centerTop={money(totalPremium)} centerBottom="受理中保費" parts={buckets.map(b => ({ label: b.label, color: b.color, v: b.prem, text: money(b.prem) }))} />
           </div>
         </>
       )}
@@ -5714,7 +5942,7 @@ const DesktopWarRoom = ({ summary, deals, visibleIds, today, onSelect }) => {
         <div className="flex flex-col gap-3 min-h-0">
           <div className="grid grid-cols-2 gap-3 shrink-0">
             <WarDonut title="案件卡關天數" centerTop={allCases.length} centerBottom="受理中案件" parts={buckets.map(b => ({ label: b.label, color: b.color, v: b.n, text: `${b.n} 件` }))} />
-            <WarDonut title="保費金額分佈" centerTop={money(totalPremium)} centerBottom="受理中保費" parts={buckets.map(b => ({ label: b.label, color: b.color, v: b.prem, text: money(b.prem) }))} />
+            <WarCollectPanel summary={summary} deals={deals} visibleIds={visibleIds} today={today} money={money} onSelect={onSelect} dense />
           </div>
           <div className={`${glass} p-4 flex-1 min-h-0 flex flex-col`}>
             <div className="flex items-center justify-between mb-2 shrink-0">
@@ -13334,6 +13562,7 @@ const App = () => {
     { id: 'entry', label: '業績回報', icon: Plus },
     { id: 'team', label: '組織架構', icon: Users },
     { id: 'recruitment', label: '增員儀表板', icon: UserPlus },
+    ...(isTeamScheduleViewer ? [{ id: 'interviews', label: '面談追蹤', icon: MessageSquare }] : []),
     { id: 'wiki', label: '知識庫', icon: BookOpen },
     { id: 'training', label: '新人培訓', icon: ClipboardCheck },
     ...(loggedInUser && MANAGER_RANKS.includes(loggedInUser.role) ? [{ id: 'settings', label: '競賽設定', icon: Settings }] : [])
@@ -13420,6 +13649,7 @@ const App = () => {
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} loggedInUser={loggedInUser} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'team' && <OrgChart team={team} recruits={recruits} />}
         {activeTab === 'recruitment' && <RecruitmentDashboard recruits={recruits} team={team} user={user} />}
+        {activeTab === 'interviews' && isTeamScheduleViewer && <InterviewTrackerPage loggedInUser={loggedInUser} />}
         {activeTab === 'wiki' && <KnowledgeBase loggedInUser={loggedInUser} isManagerViewer={isTeamScheduleViewer} />}
         {activeTab === 'training' && <TrainingChecklistPage team={team} />}
         {activeTab === 'settings' && loggedInUser && MANAGER_RANKS.includes(loggedInUser.role) && <SettingsPage rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
