@@ -12032,14 +12032,14 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
       </div>
 
       {/* 新增行程 */}
-      {showForm && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
-            <div className="flex justify-between items-center mb-4">
+      {showForm && createPortal(
+        <div className="fixed inset-0 z-[300] flex items-end md:items-center justify-center bg-black/50 backdrop-blur-sm md:p-4">
+          <div className="bg-white w-full md:max-w-md rounded-t-3xl md:rounded-2xl shadow-2xl animate-scale-up flex flex-col" style={{ maxHeight: '92dvh' }}>
+            <div className="shrink-0 flex justify-between items-center px-5 pt-4 pb-3 border-b border-gray-100">
               <h3 className="text-lg font-bold text-gray-900">新增行程</h3>
               <button onClick={() => setShowForm(false)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
             </div>
-            <div className="space-y-3">
+            <div className="flex-1 min-h-0 overflow-y-auto px-5 py-4 space-y-3">
               <div>
                 <label className="text-xs font-bold text-gray-500 block mb-1">類型</label>
                 <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.type} onChange={e => setForm({ ...form, type: e.target.value })}>
@@ -12111,13 +12111,14 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                   ))}
                 </div>
               </div>
-              <button onClick={handleAddSchedule} disabled={!form.date || (form.participantIds || []).length === 0 || saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
+            </div>
+            <div className="shrink-0 px-5 pt-3 border-t border-gray-100" style={{ paddingBottom: 'max(12px, env(safe-area-inset-bottom))' }}>
+              <button onClick={handleAddSchedule} disabled={!form.date || (form.participantIds || []).length === 0 || saving} className="w-full bg-indigo-600 text-white py-3 rounded-xl font-bold hover:bg-indigo-700 transition disabled:opacity-50 flex items-center justify-center gap-2">
                 {saving ? <Loader2 className="animate-spin" size={16} /> : '新增'}
               </button>
             </div>
           </div>
-        </div>
-      )}
+        </div>, document.body)}
 
       {/* 新增純提醒：手機為底部抽屜（標題/按鈕固定、內容可捲動），電腦為置中視窗 */}
       {showReminderForm && createPortal((() => {
