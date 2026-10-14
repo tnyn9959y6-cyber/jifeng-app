@@ -9222,6 +9222,9 @@ const JfTechStyle = () => (
     .jf-flow-b path { animation-duration: 3.1s; animation-delay: -.8s; } .jf-flow-c path { animation-duration: 2.8s; animation-delay: -1.4s; }
     .jf-live-dot { animation: jfLive 1.6s ease-in-out infinite; }
     @media (min-width: 768px) { .jf-tech.jf-dark-m input:not([type="checkbox"]):not([type="radio"]):not([type="range"]), .jf-tech.jf-dark-m select, .jf-tech.jf-dark-m textarea { font-size: 14px !important; min-height: 0 !important; } }
+    .jf-tech input[type="date"] { -webkit-appearance: none; appearance: none; display: block; width: 100%; min-width: 0 !important; max-width: 100%; min-height: 2.5rem; text-align: left; box-sizing: border-box; }
+    .jf-tech input[type="date"]::-webkit-date-and-time-value { text-align: left; }
+    .jf-tech .grid.grid-cols-2 > * { min-width: 0; }
     .no-scrollbar { scrollbar-width: none; } .no-scrollbar::-webkit-scrollbar { display: none; }
     .jf-grid-bg { background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 28px 28px; }
     @media all {
@@ -12033,7 +12036,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
 
       {/* 新增行程 */}
       {showForm && createPortal(
-        <div className="fixed inset-0 z-[300] flex items-end md:items-center justify-center bg-black/50 backdrop-blur-sm md:p-4">
+        <div className="jf-tech jf-dark-m"><div className="fixed inset-0 z-[300] flex items-end md:items-center justify-center bg-black/50 backdrop-blur-sm md:p-4">
           <div className="bg-white w-full md:max-w-md rounded-t-3xl md:rounded-2xl shadow-2xl animate-scale-up flex flex-col" style={{ maxHeight: '92dvh' }}>
             <div className="shrink-0 flex justify-between items-center px-5 pt-4 pb-3 border-b border-gray-100">
               <h3 className="text-lg font-bold text-gray-900">新增行程</h3>
@@ -12118,7 +12121,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
               </button>
             </div>
           </div>
-        </div>, document.body)}
+        </div></div>, document.body)}
 
       {/* 新增純提醒：手機為底部抽屜（標題/按鈕固定、內容可捲動），電腦為置中視窗 */}
       {showReminderForm && createPortal((() => {
@@ -12128,7 +12131,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
         const allSelected = allIds.length > 0 && allIds.every(id => reminderParticipantIds.includes(id));
         const multiDay = reminderEndDate !== '';
         return (
-          <div className="fixed inset-0 z-[300] flex items-end md:items-center justify-center bg-black/50" onClick={() => setShowReminderForm(false)}>
+          <div className="jf-tech jf-dark-m"><div className="fixed inset-0 z-[300] flex items-end md:items-center justify-center bg-black/50" onClick={() => setShowReminderForm(false)}>
             <div className="bg-white w-full md:max-w-md rounded-t-3xl md:rounded-2xl shadow-2xl flex flex-col animate-scale-up" style={{ maxHeight: '92dvh' }} onClick={e => e.stopPropagation()}>
               <div className="shrink-0 px-5 pt-3 pb-3 border-b border-gray-100">
                 <div className="w-10 h-1 bg-gray-200 rounded-full mx-auto mb-3 md:hidden"></div>
@@ -12215,7 +12218,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                 {(!reminderTitle.trim() || reminderParticipantIds.length === 0) && <p className="text-[11px] text-gray-400 text-center mt-1.5">{!reminderTitle.trim() ? '請先輸入提醒內容' : '請至少選一位參與人員'}</p>}
               </div>
             </div>
-          </div>
+          </div></div>
         );
       })(), document.body)}
 
