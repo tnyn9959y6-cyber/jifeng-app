@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useMemo, useRef } from 'react';
+import React, { useState, useEffect, useMemo, useRef, lazy, Suspense } from 'react';
 import { createPortal } from 'react-dom';
 import { 
   LayoutDashboard, 
@@ -84,7 +84,7 @@ import {
 } from 'recharts';
 
 // --- Firebase Imports ---
-import ProductCatalog from './ProductCatalog.jsx';
+const ProductCatalog = lazy(() => import('./ProductCatalog.jsx'));
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -6099,7 +6099,7 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
           <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900 mr-2">知識庫</h2>
           {kbTabs}
         </div>
-        <ProductCatalog />
+        <Suspense fallback={<div className="p-10 text-center text-sm text-gray-400">載入中…</div>}><ProductCatalog /></Suspense>
       </div>
     );
   }
@@ -9225,6 +9225,13 @@ const JfTechStyle = () => (
     .jf-tech input[type="date"] { -webkit-appearance: none; appearance: none; display: block; width: 100%; min-width: 0 !important; max-width: 100%; min-height: 2.5rem; text-align: left; box-sizing: border-box; }
     .jf-tech input[type="date"]::-webkit-date-and-time-value { text-align: left; }
     .jf-tech .grid.grid-cols-2 > * { min-width: 0; }
+    @media (max-width: 767px) {
+      .jf-tech [class*="backdrop-blur"], .jf-tech.jf-dark-m [class*="backdrop-blur"] { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+      .fixed[class*="backdrop-blur"] { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+      .jf-ring-done, .jf-live-dot { animation: none !important; }
+      .jf-flow-line .recharts-line-curve, .jf-flow-line path { animation: none !important; stroke-dasharray: none !important; }
+      .jf-tech .shadow-2xl { box-shadow: 0 8px 24px rgba(0,0,0,.28); }
+    }
     .no-scrollbar { scrollbar-width: none; } .no-scrollbar::-webkit-scrollbar { display: none; }
     .jf-grid-bg { background-image: linear-gradient(rgba(255,255,255,.04) 1px, transparent 1px), linear-gradient(90deg, rgba(255,255,255,.04) 1px, transparent 1px); background-size: 28px 28px; }
     @media all {
@@ -9655,13 +9662,14 @@ const DailyNudge = ({ loggedInUser, activities, onGo }) => {
   const done = msg.kind === 'done';
   return (
     <div className="fixed left-3 right-3 md:left-auto md:right-6 md:w-96 z-[130]" style={{ top: 'calc(env(safe-area-inset-top, 0px) + 12px)' }}>
-      <div className="jf-nudge-in relative overflow-hidden rounded-3xl bg-black/90 backdrop-blur-2xl border border-white/10 text-white p-5 shadow-2xl">
+      <div role="button" tabIndex={0} onClick={() => { setMsg(null); onGo && onGo('activity'); }} className="jf-nudge-in relative overflow-hidden rounded-3xl bg-black/95 border border-white/10 text-white p-5 shadow-2xl cursor-pointer" style={{ WebkitTapHighlightColor: 'transparent' }}>
         <div className="absolute -top-10 -right-10 w-40 h-40 rounded-full blur-3xl" style={{ background: done ? 'rgba(52,211,153,.35)' : msg.kind === 'low' ? 'rgba(251,191,36,.28)' : 'rgba(99,102,241,.3)' }}></div>
-        <button onClick={() => setMsg(null)} className="absolute top-3 right-3 w-8 h-8 rounded-full hover:bg-white/10 flex items-center justify-center text-white/60"><X size={16} /></button>
+        <button onClick={(e) => { e.stopPropagation(); setMsg(null); }} className="absolute top-3 right-3 w-10 h-10 rounded-full hover:bg-white/10 flex items-center justify-center text-white/60 z-10"><X size={18} /></button>
         <p className="relative text-[11px] tracking-[0.2em] text-white/50 font-semibold">{done ? 'DAILY GOAL' : 'TODAY'}</p>
         <p className="relative text-xl font-bold mt-1 pr-8">{msg.title}</p>
         <p className="relative text-sm text-white/75 mt-2 leading-relaxed">{msg.text}</p>
-        {!done && <button onClick={() => { setMsg(null); onGo && onGo('activity'); }} className="relative mt-4 w-full bg-white text-black font-bold text-sm py-2.5 rounded-xl active:scale-[0.98] transition">去填今天的活動量</button>}
+        {!done && <button onClick={(e) => { e.stopPropagation(); setMsg(null); onGo && onGo('activity'); }} className="relative mt-4 w-full bg-white text-black font-bold text-sm py-3 rounded-xl active:scale-[0.98] transition">去填今天的活動量</button>}
+        {done && <p className="relative mt-3 text-[11px] text-white/40">點一下查看活動量</p>}
       </div>
     </div>
   );
