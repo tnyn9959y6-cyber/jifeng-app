@@ -93,6 +93,9 @@ import {
 } from 'firebase/auth';
 import { 
   getFirestore, 
+  initializeFirestore,
+  persistentLocalCache,
+  persistentMultipleTabManager,
   collection, 
   addDoc, 
   updateDoc, 
@@ -123,7 +126,16 @@ const firebaseConfig = {
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
-const db = getFirestore(app);
+// 開啟瀏覽器本機快取：短時間內重開 APP，沒變動的資料直接從本機讀，可減少 Firestore 讀取次數
+let db;
+try {
+  db = initializeFirestore(app, {
+    localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+  });
+} catch (e) {
+  console.warn('本機快取無法啟用，改用一般模式', e);
+  db = getFirestore(app);
+}
 
 onAuthStateChanged(auth, (user) => {
   console.log("目前使用者:", user);
