@@ -4299,7 +4299,7 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
   return (
     <div className="max-w-4xl md:max-w-none md:h-full mx-auto space-y-8 md:space-y-0 animate-fade-in">
       <MobileSalesEntry team={team} records={records} loggedInUser={loggedInUser || {}} onAdd={openAdd} onEdit={handleEdit} onDelete={(id) => setDeleteId(id)} onMarkIssued={handleMarkIssued} issuingId={issuingId} onSearch={onSearch} onBatch={() => setIsBatchOpen(true)} />
-      {showSheet && (
+      {showSheet && (<ModalPortal>
         <div className="fixed inset-0 z-[90] flex items-end md:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={closeSheet}>
           <form onSubmit={handleSubmit} className="w-full md:max-w-lg max-h-[92vh] overflow-y-auto no-scrollbar rounded-t-[28px] md:rounded-[28px] md:border border-t border-white/10 bg-[#0c1020] text-white p-5 pb-8" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-4">
@@ -4322,7 +4322,7 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
             <button type="submit" disabled={submitting} className="w-full mt-5 py-3.5 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-500 font-bold text-[15px] disabled:opacity-50">{submitting ? '儲存中…' : (editingId ? '更新' : '新增')}</button>
           </form>
         </div>
-      )}
+      </ModalPortal>)}
       {celebration && (
         <div className="fixed top-6 left-1/2 -translate-x-1/2 z-[200] bg-gradient-to-r from-amber-400 to-orange-500 text-white px-6 py-4 rounded-2xl shadow-2xl animate-scale-up flex items-center gap-3">
           <span className="text-2xl">🎉</span>
@@ -7629,9 +7629,9 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
 
       </div>
 
-      {(isAdding || editCustomer) && (
-        <div className="fixed inset-0 z-[100] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-scale-up max-h-[90vh] overflow-y-auto">
+      {(isAdding || editCustomer) && (<ModalPortal>
+        <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-md shadow-2xl animate-scale-up max-h-[88dvh] overflow-y-auto">
             <div className="flex justify-between items-center mb-4">
               <h3 className="text-lg font-bold text-gray-900">{editCustomer ? '編輯客戶' : '新增客戶'}</h3>
               <button onClick={() => { setIsAdding(false); setEditCustomer(null); }} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
@@ -7710,7 +7710,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
             </div>
           </div>
         </div>
-      )}
+      </ModalPortal>)}
 
       {editingVisit && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -9484,6 +9484,12 @@ const NUDGE_DONE = [
 const pickRandom = (arr) => arr[Math.floor(Math.random() * arr.length)];
 const fillNudge = (tpl, vars) => tpl.replace(/\{(\w+)\}/g, (_, k) => (vars[k] !== undefined ? vars[k] : ''));
 
+// 彈窗放到 body，避開頁面內的 transform / z-index 堆疊（底部導覽列會蓋住按鈕）；沿用目前頁面的深色範圍
+const ModalPortal = ({ children }) => {
+  const dark = typeof document !== 'undefined' && !!document.querySelector('.jf-tech.jf-dark-m');
+  return createPortal(<div className={dark ? 'jf-tech jf-dark-m' : ''}>{children}</div>, document.body);
+};
+
 const JfTechStyle = () => (
   <style>{`
     .jf-tech { background: #f5f5f7; font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", "PingFang TC", "Noto Sans TC", "Helvetica Neue", sans-serif; -webkit-font-smoothing: antialiased; letter-spacing: -0.005em; }
@@ -10860,8 +10866,21 @@ const calGroupKey = (e) => {
 };
 
 // --- 電腦版：行事曆（深色、滿版、月/週/日/列表）---
-const DesktopCalendarView = ({ events, today, onEventClick, addItemsFor, getEventLabel, teamToggle, teamMode, filterNode }) => {
+// 行事曆「批次完成」：選取多筆行程後一次完成（手機與電腦共用的底部操作列）
+const BatchCompleteBar = ({ count, total, busy, onAll, onClear, onDone, onCancel }) => createPortal(
+  <div className="jf-tech jf-dark-m">
+    <div className="fixed left-3 right-3 z-[250] rounded-2xl border border-white/15 bg-[#0c1020]/95 backdrop-blur-xl text-white shadow-2xl px-3 py-2.5 flex items-center gap-2 md:max-w-xl md:mx-auto" style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 76px)' }}>
+      <button type="button" onClick={count >= total ? onClear : onAll} className="px-3 h-10 rounded-xl bg-white/10 text-[13px] font-semibold shrink-0">{count >= total && total > 0 ? '取消全選' : '全選'}</button>
+      <span className="flex-1 text-[13px] text-white/70 text-center tabular-nums">已選 {count} 項</span>
+      <button type="button" onClick={onCancel} className="px-3 h-10 rounded-xl bg-white/10 text-[13px] font-semibold shrink-0">取消</button>
+      <button type="button" disabled={!count || busy} onClick={onDone} className="px-4 h-10 rounded-xl bg-emerald-500 text-white text-[13px] font-bold shrink-0 disabled:opacity-40">{busy ? '處理中…' : `完成 ${count} 項`}</button>
+    </div>
+  </div>, document.body);
+const DesktopCalendarView = ({ events, today, onEventClick, addItemsFor, getEventLabel, teamToggle, teamMode, filterNode, onBatchComplete }) => {
   const [mode, setMode] = useState('month');
+  const [selMode, setSelMode] = useState(false);
+  const [selIds, setSelIds] = useState([]);
+  const [selBusy, setSelBusy] = useState(false);
   const [selectedDay, setSelectedDay] = useState(today);
   const [menuOpen, setMenuOpen] = useState(false);
   const dayNames = ['日', '一', '二', '三', '四', '五', '六'];
@@ -10904,12 +10923,24 @@ const DesktopCalendarView = ({ events, today, onEventClick, addItemsFor, getEven
       : <span className="rounded-full shrink-0 flex items-center justify-center text-[9px] font-bold border border-white/50 bg-black/30" style={{ width: s, height: s }} title={`${e._creator} 建檔`}>{String(e._creator).charAt(0)}</span>
   ) : null;
   const titleOf = (e) => e.isReminder ? e.title : getEventLabel(e);
+  const toggleSel = (e) => setSelIds(p => p.includes(e.id) ? p.filter(x => x !== e.id) : [...p, e.id]);
+  const selectable = (mode === 'list'
+    ? Object.keys(eventsByDate).filter(d => d.slice(0, 7) === selectedDay.slice(0, 7)).sort().flatMap(d => eventsByDate[d]).filter((e, i, a) => a.findIndex(x => x.id === e.id) === i)
+    : (eventsByDate[selectedDay] || [])).filter(e => e.status !== 'completed');
+  const exitSel = () => { setSelMode(false); setSelIds([]); };
+  const runBatch = async () => {
+    const picked = selectable.filter(e => selIds.includes(e.id));
+    if (!picked.length) return;
+    setSelBusy(true);
+    try { await onBatchComplete(picked); exitSel(); } finally { setSelBusy(false); }
+  };
   const Chip = ({ e, big }) => {
     const g = CAL_GROUPS[calGroupKey(e)];
     const done = e.status === 'completed';
     return (
-      <button type="button" onClick={(ev) => { ev.stopPropagation(); onEventClick(e); }} title={`${e.time || ''} ${titleOf(e)}${e.customerName ? ' · ' + e.customerName : ''}`}
-        className={`w-full flex items-center gap-1 px-1.5 rounded-md text-left text-white font-semibold truncate ${big ? 'py-1.5 text-[13px]' : 'py-[3px] text-[12px]'} ${done ? 'opacity-55' : ''}`} style={{ background: g.color + "f2" }}>
+      <button type="button" onClick={(ev) => { ev.stopPropagation(); if (selMode) { if (!done) toggleSel(e); } else onEventClick(e); }} title={`${e.time || ''} ${titleOf(e)}${e.customerName ? ' · ' + e.customerName : ''}`}
+        className={`w-full flex items-center gap-1 px-1.5 rounded-md text-left text-white font-semibold truncate ${big ? 'py-1.5 text-[13px]' : 'py-[3px] text-[12px]'} ${done ? 'opacity-55' : ''} ${selMode && selIds.includes(e.id) ? 'ring-2 ring-emerald-300' : ''}`} style={{ background: g.color + "f2" }}>
+        {selMode && !done && <span className={`w-4 h-4 rounded-full border-2 border-white/80 shrink-0 flex items-center justify-center text-[10px] ${selIds.includes(e.id) ? 'bg-emerald-400 text-black' : ''}`}>{selIds.includes(e.id) ? '✓' : ''}</span>}
         {done && <span>✓</span>}
         {big && e.time && <span className="tabular-nums text-white/85 shrink-0">{e.time}</span>}
         <span className="truncate flex-1">{titleOf(e)}{big && e.customerName ? ` · ${e.customerName}` : ''}</span>
@@ -11008,7 +11039,10 @@ const DesktopCalendarView = ({ events, today, onEventClick, addItemsFor, getEven
       <div className={`${card} p-4 shrink-0`} style={{ height: 196 }}>
         <div className="flex items-center justify-between mb-2">
           <p className="text-[17px] font-bold">{selectedDay} 的行程 <span className="text-white/45 text-[13px] font-normal ml-2">共 {dayEvents.length} 項{holiday ? `　${holiday}` : ''}</span></p>
-          <button type="button" onClick={() => addItems[0]?.onClick()} className="flex items-center gap-1.5 px-4 h-9 rounded-xl bg-blue-600 text-white font-bold text-[13px]"><Plus size={15} />新增</button>
+          <div className="flex items-center gap-2">
+            {onBatchComplete && !teamMode && <button type="button" onClick={() => (selMode ? exitSel() : setSelMode(true))} className={`flex items-center gap-1.5 px-4 h-9 rounded-xl border font-bold text-[13px] ${selMode ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300' : 'bg-white/[0.06] border-white/15'}`}><CheckCircle2 size={15} />{selMode ? '結束選取' : '批次完成'}</button>}
+            <button type="button" onClick={() => addItems[0]?.onClick()} className="flex items-center gap-1.5 px-4 h-9 rounded-xl bg-blue-600 text-white font-bold text-[13px]"><Plus size={15} />新增</button>
+          </div>
         </div>
         <div className="space-y-1.5 overflow-y-auto no-scrollbar" style={{ maxHeight: 128 }}>
           {dayEvents.length === 0 && <p className="text-white/40 text-[13px] py-5 text-center">這天沒有安排</p>}
@@ -11017,8 +11051,8 @@ const DesktopCalendarView = ({ events, today, onEventClick, addItemsFor, getEven
             const done = e.status === 'completed';
             const sub = e.isReminder ? (e.note && !/^\d{1,2}:\d{2}/.test(e.note) ? e.note : '') : (e.customerName || '');
             return (
-              <div key={e.id} className={`grid grid-cols-[18px_minmax(120px,1.2fr)_130px_1.4fr_1fr_90px] items-center gap-3 px-3 py-2 rounded-xl border border-white/[0.07] bg-white/[0.04] text-[13.5px] ${done ? 'opacity-55' : ''}`}>
-                <i className="w-3 h-3 rounded-full" style={{ background: g.color, boxShadow: `0 0 8px ${g.color}99` }} />
+              <div key={e.id} onClick={selMode && !done ? () => toggleSel(e) : undefined} className={`grid grid-cols-[18px_minmax(120px,1.2fr)_130px_1.4fr_1fr_90px] items-center gap-3 px-3 py-2 rounded-xl border bg-white/[0.04] text-[13.5px] ${selMode && selIds.includes(e.id) ? 'border-emerald-400/60 bg-emerald-500/10' : 'border-white/[0.07]'} ${selMode && !done ? 'cursor-pointer' : ''} ${done ? 'opacity-55' : ''}`}>
+                {selMode && !done ? <span className={`w-[18px] h-[18px] rounded-md border flex items-center justify-center text-[11px] ${selIds.includes(e.id) ? 'bg-emerald-400 border-emerald-300 text-black' : 'border-white/40'}`}>{selIds.includes(e.id) ? '✓' : ''}</span> : <i className="w-3 h-3 rounded-full" style={{ background: g.color, boxShadow: `0 0 8px ${g.color}99` }} />}
                 <span className={`font-bold truncate ${done ? 'line-through' : ''}`}>{titleOf(e)}<span className="ml-2 text-[11px] font-normal rounded px-1.5 py-0.5 border" style={{ color: g.color, borderColor: g.color + '77' }}>{g.label}</span></span>
                 <span className="text-white/75 tabular-nums flex items-center gap-1.5"><Clock size={14} className="text-white/45" />{e.time ? `${e.time}${e.endTime ? '-' + e.endTime : ''}` : '全天'}</span>
                 <span className="text-white/65 truncate flex items-center gap-1.5">{e.address ? <><MapPin size={14} className="text-white/45 shrink-0" />{e.address}</> : sub ? <><Users size={14} className="text-white/45 shrink-0" />{sub}</> : ''}</span>
@@ -11029,12 +11063,16 @@ const DesktopCalendarView = ({ events, today, onEventClick, addItemsFor, getEven
           })}
         </div>
       </div>
+      {selMode && <BatchCompleteBar count={selIds.length} total={selectable.length} busy={selBusy} onAll={() => setSelIds(selectable.map(e => e.id))} onClear={() => setSelIds([])} onDone={runBatch} onCancel={exitSel} />}
     </div>
   );
 };
 
-const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearch, onFilter, filterActive, addItemsFor, getEventLabel, teamToggle, teamMode }) => {
+const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearch, onFilter, filterActive, addItemsFor, getEventLabel, teamToggle, teamMode, onBatchComplete }) => {
   const [mode, setMode] = useState('month');
+  const [selMode, setSelMode] = useState(false);
+  const [selIds, setSelIds] = useState([]);
+  const [selBusy, setSelBusy] = useState(false);
   const [selectedDay, setSelectedDay] = useState(today);
   const [chip, setChip] = useState('all');
   const [menuOpen, setMenuOpen] = useState(false);
@@ -11080,6 +11118,15 @@ const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearc
   const groupCounts = {};
   dayEvents.forEach(e => { const k = calGroupKey(e); groupCounts[k] = (groupCounts[k] || 0) + 1; });
   const shown = chip === 'all' ? dayEvents : dayEvents.filter(e => calGroupKey(e) === chip);
+  const selectable = shown.filter(e => e.status !== 'completed');
+  const toggleSel = (e) => setSelIds(p => p.includes(e.id) ? p.filter(x => x !== e.id) : [...p, e.id]);
+  const exitSel = () => { setSelMode(false); setSelIds([]); };
+  const runBatch = async () => {
+    const picked = selectable.filter(e => selIds.includes(e.id));
+    if (!picked.length) return;
+    setSelBusy(true);
+    try { await onBatchComplete(picked); exitSel(); } finally { setSelBusy(false); }
+  };
   const [, selM, selD] = selectedDay.split('-').map(Number);
   const holiday = TAIWAN_HOLIDAYS_2026[selectedDay];
   const glass = 'bg-white/[0.06] backdrop-blur-xl border border-white/10';
@@ -11145,7 +11192,10 @@ const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearc
       <div className={`${glass} rounded-[28px] p-4`}>
         <div className="flex items-baseline justify-between gap-2">
           <p><span className="text-[26px] font-bold">{selM}月{selD}日</span><span className="text-white/60 ml-2 text-lg">週{dayNames[dayOfWeek(selectedDay)]}</span></p>
-          {holiday && <span className="text-xs text-rose-300">{holiday}</span>}
+          <div className="flex items-center gap-2">
+            {holiday && <span className="text-xs text-rose-300">{holiday}</span>}
+            {onBatchComplete && !teamMode && shown.some(e => e.status !== 'completed') && <button type="button" onClick={() => (selMode ? exitSel() : setSelMode(true))} className={`px-3 h-8 rounded-full border text-[12.5px] font-semibold ${selMode ? 'bg-emerald-500/20 border-emerald-400/50 text-emerald-300' : 'bg-white/10 border-white/15 text-white/80'}`}>{selMode ? '結束選取' : '批次完成'}</button>}
+          </div>
         </div>
         <div className="flex gap-2 overflow-x-auto mt-3 pb-1" style={{ scrollbarWidth: 'none' }}>
           <button onClick={() => setChip('all')} className={`shrink-0 px-4 py-2 rounded-xl text-sm font-semibold border ${chip === 'all' ? 'bg-blue-600 border-blue-400/50 text-white' : 'bg-white/[0.06] border-white/10 text-white/70'}`}>全部 ({dayEvents.length})</button>
@@ -11162,7 +11212,7 @@ const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearc
             const title = e.isReminder ? e.title : getEventLabel(e);
             const sub = e.isReminder ? (e.note && !/^\d{1,2}:\d{2}/.test(e.note) ? e.note : '') : (e.customerName || '');
             return (
-              <button key={e.id} onClick={() => onEventClick(e)} className={`w-full flex gap-2.5 text-left ${isDone ? 'opacity-55' : ''}`}>
+              <button key={e.id} onClick={() => { if (selMode) { if (!isDone) toggleSel(e); } else onEventClick(e); }} className={`w-full flex gap-2.5 text-left ${isDone ? 'opacity-55' : ''}`}>
                 <div className="w-[48px] shrink-0 pt-4">
                   <p className="font-semibold tabular-nums leading-tight">{e.time || '全天'}</p>
                   {e.endTime && <p className="text-xs text-white/45 tabular-nums">{e.endTime}</p>}
@@ -11171,7 +11221,8 @@ const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearc
                   <span className="absolute left-1/2 -translate-x-1/2 top-[22px] w-3 h-3 rounded-full" style={{ background: g.color, boxShadow: `0 0 10px ${g.color}99` }}></span>
                   {i < shown.length - 1 && <span className="absolute left-1/2 top-[38px] -bottom-3 w-px bg-white/15"></span>}
                 </div>
-                <div className="flex-1 min-w-0 rounded-2xl bg-white/[0.06] border border-white/10 p-3.5 mb-3 flex items-center gap-3">
+                <div className={`flex-1 min-w-0 rounded-2xl border p-3.5 mb-3 flex items-center gap-3 ${selMode && selIds.includes(e.id) ? 'bg-emerald-500/15 border-emerald-400/60' : 'bg-white/[0.06] border-white/10'}`}>
+                  {selMode && (isDone ? <span className="w-6 h-6 shrink-0 text-center text-white/30">✓</span> : <span className={`w-6 h-6 rounded-full border-2 shrink-0 flex items-center justify-center text-[13px] font-bold ${selIds.includes(e.id) ? 'bg-emerald-400 border-emerald-300 text-black' : 'border-white/40'}`}>{selIds.includes(e.id) ? '✓' : ''}</span>)}
                   <div className="min-w-0 flex-1">
                     <div className="flex items-center gap-2">
                       <p className={`text-[17px] font-bold truncate ${isDone ? 'line-through' : ''}`}>{title}</p>
@@ -11207,6 +11258,7 @@ const MobileCalendarView = ({ events, today, onEventClick, onAddForDate, onSearc
           })}
         </div>
       )}
+      {selMode && <BatchCompleteBar count={selIds.length} total={selectable.length} busy={selBusy} onAll={() => setSelIds(selectable.map(e => e.id))} onClear={() => setSelIds([])} onDone={runBatch} onCancel={exitSel} />}
       <button onClick={() => setMenuOpen(v => !v)} aria-label="新增" className="fixed right-4 z-40 w-16 h-16 rounded-full bg-gradient-to-br from-blue-500 to-indigo-600 shadow-[0_8px_30px_rgba(59,130,246,.55)] flex items-center justify-center active:scale-95 transition" style={{ bottom: 'calc(env(safe-area-inset-bottom, 0px) + 86px)' }}>
         <Plus size={30} className={`transition-transform ${menuOpen ? 'rotate-45' : ''}`} />
       </button>
@@ -11748,6 +11800,28 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
     } catch (e) { console.error(e); } finally { setBusyId(null); }
   };
 
+  // 批次完成：一次完成多筆行程（每筆走原本的完成邏輯：計活動量、寫客戶軌跡；週期提醒的虛擬行程會建成已完成的提醒）
+  const handleBatchComplete = async (list) => {
+    if (!loggedInUser || !list.length) return;
+    let fail = 0;
+    for (const ev of list) {
+      if (ev.status === 'completed') continue;
+      try {
+        if (ev.isVirtual) {
+          await addDoc(collection(db, 'schedule_events'), {
+            ownerId: loggedInUser.id, ruleId: ev.ruleId, customerId: '', customerName: '',
+            isReminder: true, type: 'reminder', title: ev.title, category: ev.category, priority: ev.priority, createdById: ev.creatorId || loggedInUser.id,
+            date: ev.date, time: ev.time, note: ev.note,
+            status: 'completed', completedAt: new Date().toISOString(), createdAt: new Date().toISOString()
+          });
+        } else {
+          await completeScheduleEvent(ev, loggedInUser.id);
+        }
+      } catch (e) { console.error(e); fail++; }
+    }
+    if (fail) window.alert(`有 ${fail} 筆沒有完成成功，請再試一次`);
+  };
+
   const handleUndoComplete = async (event) => {
     if (!loggedInUser) return;
     setBusyId(event.id);
@@ -12003,6 +12077,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
             today={today}
             getEventLabel={getEventLabel}
             onEventClick={mobTeam ? (() => {}) : handleEventTap}
+            onBatchComplete={handleBatchComplete}
             onSearch={onSearch}
             onFilter={() => setShowFilterPanel(v => !v)}
             filterActive={!!(filterCategory || filterPriority)}
@@ -12053,6 +12128,7 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
         today={today}
         getEventLabel={getEventLabel}
         onEventClick={mobTeam ? (() => {}) : handleEventTap}
+        onBatchComplete={handleBatchComplete}
         filterNode={(
           <div className="flex items-center gap-2">
             <select className="h-11 rounded-xl text-[13px] font-semibold px-3" value={filterCategory} onChange={e => setFilterCategory(e.target.value)}>
@@ -12352,8 +12428,8 @@ const CalendarPage = ({ loggedInUser, customers, scheduleEvents, team, recurring
                   key={form.customerIds.length}
                   customers={customers.filter(c => !form.customerIds.includes(c.id))}
                   value=""
-                  onChange={(id) => { if (id) setForm(prev => ({ ...prev, customerIds: [...prev.customerIds, id] })); }}
-                  onCreateNew={async (name) => { const id = await handleCreateCustomerInline(name); if (id) setForm(prev => ({ ...prev, customerIds: [...prev.customerIds, id] })); return id; }}
+                  onChange={(id) => { if (id) setForm(prev => prev.customerIds.includes(id) ? prev : ({ ...prev, customerIds: [...prev.customerIds, id] })); }}
+                  onCreateNew={async (name) => handleCreateCustomerInline(name)}
                 />
                 {form.customerIds.length > 0 && (
                   <div className="flex flex-wrap gap-1.5 mt-2">
