@@ -334,6 +334,7 @@ const parseActivityBatchText = (text, defaultYear) => {
   const typeByLabel = {};
   Object.entries(ACTIVITY_WEIGHTS).forEach(([key, v]) => { typeByLabel[v.label] = key; });
   Object.entries(RECRUIT_ACTIVITY_WEIGHTS).forEach(([key, v]) => { typeByLabel[v.label] = key; });
+  typeByLabel['增員面談'] = 'recruitInterview'; // 舊名稱：算深度面談
   return text.split('\n').map(l => l.trim()).filter(Boolean).map((line, i) => {
     const parts = line.split(/\s+/).filter(Boolean);
     const dt = extractDateTime(parts, defaultYear);
@@ -1403,7 +1404,7 @@ const MobileActivityView = ({ team, selectedAgentId, setSelectedAgentId, viewMod
         )}
         {viewMode === 'recruit' && (
           <div className="mt-4 pt-3.5 border-t border-white/10 flex items-center justify-between text-center">
-            {[['增員面談', stats.recruitTotals.recruitInterview], ['面談轉登錄', (stats.recruitConversion * 100).toFixed(1) + '%'], ['登錄人數', stats.recruitTotals.recruitRegistered]].map(([l, v]) => (
+            {[['增員面談', (stats.recruitTotals.recruitFirst || 0) + (stats.recruitTotals.recruitInterview || 0)], ['面談轉登錄', (stats.recruitConversion * 100).toFixed(1) + '%'], ['登錄人數', stats.recruitTotals.recruitRegistered]].map(([l, v]) => (
               <div key={l} className="flex-1"><p className="text-[16px] font-bold tabular-nums">{v}</p><p className="text-[10px] text-white/40 mt-0.5">{l}</p></div>
             ))}
           </div>
@@ -1492,13 +1493,15 @@ const ACTIVITY_WEIGHTS = {
   issue: { label: '核保發單', score: 5, color: 'bg-blue-900' }
 };
 
-// 增員相關活動 (與業務活動並列計分，用於 MEA 總分)。分數曲線比照業務六階段 (1-1-2-3-4-5) 的邏輯設計
+// 增員相關活動 (與業務活動並列計分，用於 MEA 總分)：新增準增員3／增員約訪3／初次面談6／深度面談9／內外考12／登錄15
+// recruitInterview 這個欄位沿用舊資料，現在代表「深度面談」(原本的增員面談全部算深度面談)；初次面談是新欄位 recruitFirst
 const RECRUIT_ACTIVITY_WEIGHTS = {
-  newRecruitProspect: { label: '新增準增員', score: 1, color: 'bg-red-400' },
-  recruitContact: { label: '增員約訪', score: 1, color: 'bg-red-500' },
-  recruitInterview: { label: '增員面談', score: 2, color: 'bg-red-600' },
-  recruitExam: { label: '內/外考', score: 4, color: 'bg-red-700' },
-  recruitRegistered: { label: '登錄', score: 5, color: 'bg-red-800' }
+  newRecruitProspect: { label: '新增準增員', score: 3, color: 'bg-red-300' },
+  recruitContact: { label: '增員約訪', score: 3, color: 'bg-red-400' },
+  recruitFirst: { label: '初次面談', score: 6, color: 'bg-red-500' },
+  recruitInterview: { label: '深度面談', score: 9, color: 'bg-red-600' },
+  recruitExam: { label: '內/外考', score: 12, color: 'bg-red-700' },
+  recruitRegistered: { label: '登錄', score: 15, color: 'bg-red-800' }
 };
 
 const ALL_ACTIVITY_WEIGHTS = { ...ACTIVITY_WEIGHTS, ...RECRUIT_ACTIVITY_WEIGHTS };
@@ -1907,7 +1910,8 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
 
     const totalPoints = salesPoints + recruitPoints;
     // 增員版轉換率：增員面談次數 x 面談轉登錄轉換率 = 登錄人數
-    const recruitConversion = recruitTotals.recruitInterview > 0 ? (recruitTotals.recruitRegistered / recruitTotals.recruitInterview) : 0;
+    const recruitIvTotal = (recruitTotals.recruitFirst || 0) + (recruitTotals.recruitInterview || 0);
+    const recruitConversion = recruitIvTotal > 0 ? (recruitTotals.recruitRegistered / recruitIvTotal) : 0;
 
     // 獨立計算面談分數
     const interviewPoints = totals.interview * ACTIVITY_WEIGHTS.interview.score;
@@ -2041,7 +2045,7 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
           ) : (
             <>
               <div className="flex items-center gap-4 font-mono">
-                {[[stats.recruitTotals.recruitInterview, 'I (增員面談)'], [(stats.recruitConversion * 100).toFixed(1) + '%', 'C (面談轉登錄率)']].map(([v, l], i) => (
+                {[[(stats.recruitTotals.recruitFirst || 0) + (stats.recruitTotals.recruitInterview || 0), 'I (增員面談)'], [(stats.recruitConversion * 100).toFixed(1) + '%', 'C (面談轉登錄率)']].map(([v, l], i) => (
                   <React.Fragment key={l}>{i > 0 && <span className="text-teal-400 font-bold text-xl">x</span>}<div className="text-center"><span className="block text-[26px] font-bold leading-tight">{v}</span><span className="text-[11px] text-white/45">{l}</span></div></React.Fragment>
                 ))}
                 <span className="text-teal-400 font-bold text-xl">=</span>
@@ -2131,7 +2135,7 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
               <div className="rounded-xl border border-rose-400/30 bg-rose-500/10"><p className="text-[11px] text-rose-300">成交率 (C) = 發單/面談</p><p className="text-[20px] font-bold text-rose-300">{(stats.C * 100).toFixed(1)}%</p></div>
             </>) : (<>
               <div><p className="text-[11px] text-white/50">準增員轉換約訪</p><p className="text-[20px] font-bold text-teal-300">{stats.recruitTotals.newRecruitProspect > 0 ? Math.round((stats.recruitTotals.recruitContact / stats.recruitTotals.newRecruitProspect) * 100) : 0}%</p></div>
-              <div className="border-l border-white/10"><p className="text-[11px] text-white/50">約訪轉換面談</p><p className="text-[20px] font-bold text-cyan-300">{stats.recruitTotals.recruitContact > 0 ? Math.round((stats.recruitTotals.recruitInterview / stats.recruitTotals.recruitContact) * 100) : 0}%</p></div>
+              <div className="border-l border-white/10"><p className="text-[11px] text-white/50">約訪轉換面談</p><p className="text-[20px] font-bold text-cyan-300">{stats.recruitTotals.recruitContact > 0 ? Math.round((((stats.recruitTotals.recruitFirst || 0) + (stats.recruitTotals.recruitInterview || 0)) / stats.recruitTotals.recruitContact) * 100) : 0}%</p></div>
               <div className="rounded-xl border border-blue-400/30 bg-blue-500/10"><p className="text-[11px] text-blue-300">面談轉登錄率 (C)</p><p className="text-[20px] font-bold text-blue-300">{(stats.recruitConversion * 100).toFixed(1)}%</p></div>
             </>)}
           </div>
