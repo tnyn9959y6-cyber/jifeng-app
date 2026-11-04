@@ -85,6 +85,7 @@ import {
 
 // --- Firebase Imports ---
 const ProductCatalog = lazy(() => import('./ProductCatalog.jsx'));
+const SalesTools = lazy(() => import('./SalesTools.jsx'));
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -13700,6 +13701,7 @@ const App = () => {
     { id: 'recruitment', label: '增員儀表板', icon: UserPlus },
     ...(isTeamScheduleViewer ? [{ id: 'interviews', label: '面談追蹤', icon: MessageSquare }] : []),
     { id: 'wiki', label: '知識庫', icon: BookOpen },
+    { id: 'salestools', label: '銷售工具', icon: ShieldCheck },
     { id: 'training', label: '新人培訓', icon: ClipboardCheck },
     ...(loggedInUser && MANAGER_RANKS.includes(loggedInUser.role) ? [{ id: 'settings', label: '競賽設定', icon: Settings }] : [])
   ];
@@ -13758,7 +13760,7 @@ const App = () => {
       </nav>
 
       {/* 手機版：極簡頂部列，只有目前頁面標題＋搜尋＋登出，其餘導覽交給底部列 */}
-      <div className={`${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment'].includes(activeTab) ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-[#070914]/90 backdrop-blur-xl border-b border-white/10`}>
+      <div className={`${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment', 'salestools'].includes(activeTab) ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-[#070914]/90 backdrop-blur-xl border-b border-white/10`}>
         <div className="h-14 px-4 flex items-center justify-between">
           <h1 className="text-base font-bold text-white">{currentNavItem?.label || '極豐通訊處'}</h1>
           <div className="flex items-center gap-1">
@@ -13771,7 +13773,7 @@ const App = () => {
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
-      <main className={`relative z-10 max-w-7xl md:max-w-none mx-auto px-4 md:px-5 ${FIT_TABS.includes(activeTab) ? 'md:h-[calc(100vh-64px)] md:overflow-y-auto no-scrollbar md:!pt-3 md:pb-3' : ''} ${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment'].includes(activeTab) ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-6`}>
+      <main className={`relative z-10 max-w-7xl md:max-w-none mx-auto px-4 md:px-5 ${FIT_TABS.includes(activeTab) ? 'md:h-[calc(100vh-64px)] md:overflow-y-auto no-scrollbar md:!pt-3 md:pb-3' : ''} ${activeTab === 'salestools' ? 'pt-0' : ['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment'].includes(activeTab) ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-6`}>
         {activeTab === 'overview' && isTeamScheduleViewer && <OverviewPage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} season={season} rankTargets={rankTargets} />}
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
@@ -13787,6 +13789,7 @@ const App = () => {
         {activeTab === 'recruitment' && <RecruitmentDashboard recruits={recruits} team={team} user={user} />}
         {activeTab === 'interviews' && isTeamScheduleViewer && <InterviewTrackerPage loggedInUser={loggedInUser} />}
         {activeTab === 'wiki' && <KnowledgeBase loggedInUser={loggedInUser} isManagerViewer={isTeamScheduleViewer} />}
+        {activeTab === 'salestools' && <Suspense fallback={<div className="p-10 text-center text-sm text-gray-400">載入中…</div>}><SalesTools /></Suspense>}
         {activeTab === 'training' && <TrainingChecklistPage team={team} />}
         {activeTab === 'settings' && loggedInUser && MANAGER_RANKS.includes(loggedInUser.role) && <SettingsPage rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
       </main>
