@@ -1205,7 +1205,7 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
 
 // --- 手機版：MEA 活動量（深色玻璃風，重點先看、快速記錄） ---
 const MEA_ROW_TARGETS = { prospect: 80, appointment: 100, interview: 60, proposal: 60, application: 60, issue: 40 };
-const MobileActivityView = ({ team, selectedAgentId, setSelectedAgentId, viewMode, setViewMode, periodMode, setPeriodMode, periodRange, selectedMonth, setSelectedMonth, currentMonths, shiftWeek, stats, monthlyTrend, activities, canEdit, formData, setFormData, handleSubmit, isSubmitting, onSearch }) => {
+const MobileActivityView = ({ team, selectedAgentId, setSelectedAgentId, viewMode, setViewMode, periodMode, setPeriodMode, periodRange, selectedMonth, setSelectedMonth, currentMonths, shiftWeek, stats, monthlyTrend, activities, canEdit, formData, setFormData, handleSubmit, isSubmitting, onSearch, onOverview }) => {
   const [goal, setGoal] = useState(() => { try { const v = Number(localStorage.getItem('jf_mea_goal')); return v > 0 ? v : 400; } catch (e) { return 400; } });
   const [editGoal, setEditGoal] = useState(false);
   const [goalInput, setGoalInput] = useState('');
@@ -1275,6 +1275,7 @@ const MobileActivityView = ({ team, selectedAgentId, setSelectedAgentId, viewMod
             {[['sales', '業務活動量'], ['recruit', '增員活動量']].map(([k, l]) => (
               <button key={k} onClick={() => { setViewMode(k); setShowMenu(false); }} className={`w-full text-left px-3 py-2.5 rounded-xl text-[13px] font-bold ${viewMode === k ? 'bg-blue-500/20 text-blue-300' : 'text-white/70'}`}>{l}</button>
             ))}
+            <button onClick={() => { setShowMenu(false); onOverview && onOverview(); }} className="w-full text-left px-3 py-2.5 rounded-xl text-[13px] font-bold text-amber-300">每月總覽</button>
             <button onClick={() => { setGoalInput(String(goal)); setEditGoal(true); setShowMenu(false); }} className="w-full text-left px-3 py-2.5 rounded-xl text-[13px] font-bold text-white/70">編輯目標</button>
           </div>
         )}
@@ -1785,7 +1786,125 @@ const GlowDot = ({ cx, cy, index, color, total }) => {
   );
 };
 
+// --- MEA 每月總覽：近 6／12 個月的總分、各階段轉換率的每月變化（業務／增員、我自己／全隊合計）---
+const MEA_RATIO_DEFS = {
+  sales: [
+    { k: 'r1', label: '約訪→面談', from: 'appointment', to: 'interview', color: '#60a5fa' },
+    { k: 'r2', label: '面談→送建議書', from: 'interview', to: 'proposal', color: '#a78bfa' },
+    { k: 'r3', label: '建議書→受理', from: 'proposal', to: 'application', color: '#fbbf24' },
+    { k: 'r4', label: '受理→發單', from: 'application', to: 'issue', color: '#34d399' }
+  ],
+  recruit: [
+    { k: 'r1', label: '準增員→約訪', from: 'newRecruitProspect', to: 'recruitContact', color: '#60a5fa' },
+    { k: 'r2', label: '約訪→初次面談', from: 'recruitContact', to: 'recruitFirst', color: '#a78bfa' },
+    { k: 'r3', label: '初次→深度面談', from: 'recruitFirst', to: 'recruitInterview', color: '#fbbf24' },
+    { k: 'r4', label: '內/外考→登錄', from: 'recruitExam', to: 'recruitRegistered', color: '#34d399' }
+  ]
+};
+const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack }) => {
+  const [mode, setMode] = useState('sales');
+  const [scope, setScope] = useState('me');
+  const [span, setSpan] = useState(12);
+  const weights = mode === 'sales' ? ACTIVITY_WEIGHTS : RECRUIT_ACTIVITY_WEIGHTS;
+  const defs = MEA_RATIO_DEFS[mode];
+  const ids = useMemo(() => new Set((scope === 'me' ? [loggedInUser?.id] : (team || []).map(m => m.id)).filter(Boolean).map(String)), [scope, team, loggedInUser]);
+  const rows = useMemo(() => {
+    const now = new Date();
+    const list = Array.from({ length: span }, (_, i) => {
+      const d = new Date(now.getFullYear(), now.getMonth() - (span - 1 - i), 1);
+      return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
+    });
+    const byMonth = Object.fromEntries(list.map(m => [m, Object.fromEntries(Object.keys(weights).map(k => [k, 0]))]));
+    (activities || []).forEach(a => {
+      const m = (a.date || '').slice(0, 7);
+      if (!byMonth[m] || !ids.has(String(a.agentId))) return;
+      Object.keys(weights).forEach(k => { byMonth[m][k] += Number(a[k]) || 0; });
+    });
+    return list.map((m, i) => {
+      const c = byMonth[m];
+      const points = Object.keys(weights).reduce((sum, k) => sum + c[k] * weights[k].score, 0);
+      const row = { month: m, label: `${Number(m.slice(5))}月`, counts: c, points };
+      defs.forEach(d => { row[d.k] = c[d.from] > 0 ? Math.round(c[d.to] / c[d.from] * 1000) / 10 : null; });
+      return row;
+    });
+  }, [activities, ids, span, mode]);
+  const cur = rows[rows.length - 1], prev = rows[rows.length - 2];
+  const delta = prev && prev.points > 0 ? Math.round((cur.points - prev.points) / prev.points * 100) : null;
+  const best = rows.reduce((b, r) => (r.points > b.points ? r : b), rows[0]);
+  const avg = Math.round(rows.reduce((s, r) => s + r.points, 0) / rows.length);
+  const glass = 'rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl';
+  const chip = (on, c = 'bg-blue-600') => `px-3.5 h-8 rounded-lg text-[13px] font-bold ${on ? c : 'text-white/60'}`;
+  const tip = { background: '#0c1020', border: '1px solid rgba(255,255,255,.12)', borderRadius: 12, color: '#fff', fontSize: 12 };
+  return (
+    <div className="max-w-5xl mx-auto text-white space-y-3 pb-24 md:pb-6 animate-fade-in">
+      <div className="flex items-center gap-3">
+        <button type="button" onClick={onBack} aria-label="返回" className="w-10 h-10 rounded-full bg-white/[0.07] border border-white/10 flex items-center justify-center active:scale-95"><ChevronLeft size={20} /></button>
+        <div className="min-w-0">
+          <h1 className="text-[24px] md:text-[28px] font-black leading-tight">每月活動量總覽</h1>
+          <p className="text-[12px] text-white/50">總分與各階段轉換率的每月變化</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap gap-2">
+        <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[['sales', '業務', 'bg-blue-600'], ['recruit', '增員', 'bg-teal-600']].map(([k, l, c]) => <button key={k} type="button" onClick={() => setMode(k)} className={chip(mode === k, c)}>{l}</button>)}</div>
+        <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[['me', '我自己'], ['team', '全隊合計']].map(([k, l]) => <button key={k} type="button" onClick={() => setScope(k)} className={chip(scope === k)}>{l}</button>)}</div>
+        <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[[6, '近6個月'], [12, '近12個月']].map(([k, l]) => <button key={k} type="button" onClick={() => setSpan(k)} className={chip(span === k)}>{l}</button>)}</div>
+      </div>
+      <div className="grid grid-cols-3 gap-2.5">
+        {[['本月總分', cur.points, delta === null ? '上月無資料' : `較上月 ${delta >= 0 ? '+' : ''}${delta}%`, delta === null ? 'text-white/40' : delta >= 0 ? 'text-emerald-300' : 'text-rose-300'], ['月平均', avg, `近 ${span} 個月`, 'text-white/40'], ['最高月份', best.points, best.points ? best.label : '—', 'text-amber-300']].map(([l, v, sub, c]) => (
+          <div key={l} className={`${glass} p-3.5`}><p className="text-[11px] text-white/55">{l}</p><p className="text-[26px] font-black tabular-nums leading-tight mt-1">{v}<span className="text-[12px] text-white/45 font-normal ml-1">分</span></p><p className={`text-[11px] mt-0.5 ${c}`}>{sub}</p></div>
+        ))}
+      </div>
+      <div className={`${glass} p-4`}>
+        <p className="font-bold text-[15px] mb-2">每月總分</p>
+        <div style={{ height: 210 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={rows} margin={{ top: 8, right: 6, left: -14, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.07)" vertical={false} />
+              <XAxis dataKey="label" tick={{ fill: 'rgba(255,255,255,.5)', fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: 'rgba(255,255,255,.4)', fontSize: 11 }} axisLine={false} tickLine={false} />
+              <Tooltip contentStyle={tip} formatter={(v) => [`${v} 分`, '總分']} />
+              <Bar dataKey="points" fill={mode === 'sales' ? '#3b82f6' : '#14b8a6'} radius={[6, 6, 0, 0]} />
+              <Line type="monotone" dataKey="points" stroke="#fbbf24" strokeWidth={2} dot={{ r: 3 }} />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      <div className={`${glass} p-4`}>
+        <p className="font-bold text-[15px] mb-2">轉換率每月變化（%）</p>
+        <div style={{ height: 240 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <LineChart data={rows} margin={{ top: 8, right: 8, left: -14, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.07)" vertical={false} />
+              <XAxis dataKey="label" tick={{ fill: 'rgba(255,255,255,.5)', fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: 'rgba(255,255,255,.4)', fontSize: 11 }} axisLine={false} tickLine={false} unit="%" />
+              <Tooltip contentStyle={tip} formatter={(v, n) => [v === null || v === undefined ? '—' : `${v}%`, n]} />
+              <Legend wrapperStyle={{ fontSize: 12 }} iconType="circle" />
+              {defs.map(d => <Line key={d.k} type="monotone" dataKey={d.k} name={d.label} stroke={d.color} strokeWidth={2.5} dot={{ r: 3 }} connectNulls />)}
+            </LineChart>
+          </ResponsiveContainer>
+        </div>
+      </div>
+      <div className={`${glass} p-3 overflow-x-auto`}>
+        <table className="w-full text-[12.5px] min-w-[520px]">
+          <thead className="text-white/45 text-[11px]"><tr className="text-right"><th className="text-left font-normal pb-1.5">月份</th><th className="font-normal pb-1.5">總分</th>{defs.map(d => <th key={d.k} className="font-normal pb-1.5 pl-2" style={{ color: d.color }}>{d.label}</th>)}</tr></thead>
+          <tbody>
+            {[...rows].reverse().map(r => (
+              <tr key={r.month} className="border-t border-white/[0.07] text-right tabular-nums">
+                <td className="py-1.5 text-left font-semibold">{r.month}</td>
+                <td className="font-bold">{r.points}</td>
+                {defs.map(d => <td key={d.k} className="pl-2 text-white/80">{r[d.k] === null ? '—' : `${r[d.k]}%`}<span className="block text-[10px] text-white/35">{r.counts[d.to]}/{r.counts[d.from]}</span></td>)}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+        <p className="text-[10.5px] text-white/35 mt-2">轉換率 = 後一階段次數 ÷ 前一階段次數。表格小字為「後/前」次數；前一階段為 0 時顯示「—」。{mode === 'recruit' ? '增員各階段不會自動往前補次數，所以比率有可能超過 100%。' : ''}</p>
+      </div>
+    </div>
+  );
+};
+
 const ActivityDashboard = ({ team, activities, records, user, season, loggedInUser, onSearch }) => {
+  const [showOverview, setShowOverview] = useState(false);
   const currentMonths = season === 'H1' ? AVAILABLE_MONTHS_H1 : AVAILABLE_MONTHS_H2;
   const [selectedAgentId, setSelectedAgentId] = useState('');
   
@@ -1998,9 +2117,11 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
 
   const canEditMobile = !!loggedInUser && (String(selectedAgentId) === String(loggedInUser.id) || loggedInUser.name === '吳政翰');
 
+  if (showOverview) return <ActivityMonthlyOverview activities={activities} team={team} loggedInUser={loggedInUser} onBack={() => setShowOverview(false)} />;
+
   return (
     <>
-    <MobileActivityView team={team} selectedAgentId={selectedAgentId} setSelectedAgentId={setSelectedAgentId} viewMode={viewMode} setViewMode={setViewMode} periodMode={periodMode} setPeriodMode={setPeriodMode} periodRange={periodRange} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} currentMonths={currentMonths} shiftWeek={shiftWeek} stats={stats} monthlyTrend={monthlyTrend} activities={activities} canEdit={canEditMobile} formData={formData} setFormData={setFormData} handleSubmit={handleSubmit} isSubmitting={isSubmitting} onSearch={onSearch} />
+    <MobileActivityView team={team} selectedAgentId={selectedAgentId} setSelectedAgentId={setSelectedAgentId} viewMode={viewMode} setViewMode={setViewMode} periodMode={periodMode} setPeriodMode={setPeriodMode} periodRange={periodRange} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} currentMonths={currentMonths} shiftWeek={shiftWeek} stats={stats} monthlyTrend={monthlyTrend} activities={activities} canEdit={canEditMobile} formData={formData} setFormData={setFormData} handleSubmit={handleSubmit} isSubmitting={isSubmitting} onSearch={onSearch} onOverview={() => setShowOverview(true)} />
     <div className="hidden md:flex flex-col gap-3 h-full md:min-h-[840px] text-white animate-fade-in">
       {/* 標題＋選擇器＋公式 */}
       <div className="grid grid-cols-[1fr_auto] gap-3 shrink-0">
@@ -2028,6 +2149,7 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
             <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">
               {[['sales', '業務', 'bg-blue-600'], ['recruit', '增員', 'bg-teal-600']].map(([k, l, c]) => <button key={k} type="button" onClick={() => setViewMode(k)} className={`px-4 h-8 rounded-lg text-[13px] font-bold ${viewMode === k ? c : 'text-white/60'}`}>{l}</button>)}
             </div>
+            <button type="button" onClick={() => setShowOverview(true)} className="flex items-center gap-1.5 px-4 h-10 rounded-xl border border-amber-400/40 bg-amber-400/10 text-amber-300 text-[13px] font-bold"><TrendingUp size={15} />每月總覽</button>
           </div>
         </div>
         <div className="rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl px-6 py-3.5 min-w-[470px] flex flex-col justify-center">
