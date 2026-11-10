@@ -85,7 +85,6 @@ import {
 
 // --- Firebase Imports ---
 const ProductCatalog = lazy(() => import('./ProductCatalog.jsx'));
-const SalesTools = lazy(() => import('./SalesTools.jsx'));
 import { initializeApp } from 'firebase/app';
 import { 
   getAuth, 
@@ -8244,6 +8243,67 @@ const BatchScheduleModal = ({ isOpen, onClose, loggedInUser, team }) => {
 const PERSONAL_GOALS_DEFAULT = { salesTarget: 0, salesBasis: 'weighted', recruitTarget: 0, incomeTarget: 0 };
 // 優質人才培訓計劃：每3個月一階段，各階段門檻 (課程時數/活動次數不顯示；FYC為粗估數字，僅供參考)
 const QUALITY_TALENT_THRESHOLDS = { fyc: 35000, insured: 6 };
+// 115年10月起新制：11502期(含)之後的期別，不同被保險人數改為「階段累計」5／9／14／20 人（從優培起始月累計到該階段結束）；
+// 11502 以前的期別維持舊制（每階段各 6 人）。FYC+行銷獎金每階段仍是 35,000
+const QUALITY_NEW_RULE_START = '2026-02';
+const QUALITY_INSURED_CUMULATIVE = [5, 9, 14, 20];
+const isQualityNewRule = (startMonth) => !!startMonth && startMonth >= QUALITY_NEW_RULE_START;
+// 回傳該階段的被保險人數與門檻：新制算「起始月到本階段最後一個月」的累計不同人數，舊制只算本階段
+const getQualityInsured = (records, agentId, startMonth, stageIndex) => {
+  const [sy, sm] = startMonth.split('-').map(Number);
+  const monthOf = (k) => { const d = new Date(sy, sm - 1 + k, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  const isNew = isQualityNewRule(startMonth);
+  const from = isNew ? 0 : stageIndex * 3;
+  const months = Array.from({ length: stageIndex * 3 + 3 - from }, (_, i) => monthOf(from + i));
+  const rs = (records || []).filter(r => r.agentId === agentId && months.includes((r.date || '').slice(0, 7)) && (r.status || '已發單') === '已發單');
+  const count = new Set(rs.map(r => (r.insuredName || '').trim()).filter(Boolean)).size;
+  return { count, target: isNew ? QUALITY_INSURED_CUMULATIVE[stageIndex] : QUALITY_TALENT_THRESHOLDS.insured, cumulative: isNew };
+};
+
+// 優培「委任業務主任專業獎金」：取得四張證照(LIA、FCP、ILP、CIA)並登錄、領證 → 6,000 元；
+// 新制(11502期起)在 FCP 於優培起 6 個月內、CIA 於 9 個月內取得 → 10,000 元。日期由自己勾選/填寫，存在 user.qualityLicenses
+const QUALITY_LICENSES = [{ k: 'LIA', label: 'LIA', within: 0 }, { k: 'FCP', label: 'FCP', within: 6 }, { k: 'ILP', label: 'ILP', within: 0 }, { k: 'CIA', label: 'CIA', within: 9 }];
+const QualityLicenseReward = ({ loggedInUser, startMonth }) => {
+  const [lic, setLic] = useState(loggedInUser?.qualityLicenses || {});
+  useEffect(() => { setLic(loggedInUser?.qualityLicenses || {}); }, [loggedInUser?.qualityLicenses]);
+  const save = async (next) => {
+    setLic(next);
+    try { await updateDoc(doc(db, 'user', loggedInUser.id), { qualityLicenses: next }); } catch (e) { console.error(e); }
+  };
+  const today = getTodayDate();
+  const [sy, sm] = startMonth.split('-').map(Number);
+  const deadlineOf = (within) => { if (!within) return ''; const d = new Date(sy, sm - 1 + within, 0); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const all = QUALITY_LICENSES.every(l => lic[l.k]);
+  const newRule = isQualityNewRule(startMonth);
+  const inTime = (l) => !l.within || (lic[l.k] && lic[l.k] <= deadlineOf(l.within));
+  const high = all && newRule && QUALITY_LICENSES.every(inTime);
+  const reward = high ? 10000 : all ? 6000 : 0;
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100">
+      <div className="flex items-center justify-between mb-2">
+        <p className="text-xs font-bold text-gray-700">證照獎勵（委任業務主任專業獎金）</p>
+        <span className={`text-xs font-bold ${reward ? 'text-emerald-600' : 'text-gray-400'}`}>{reward ? `可領 ${reward.toLocaleString()} 元` : '尚未達成'}</span>
+      </div>
+      <div className="grid grid-cols-2 gap-2">
+        {QUALITY_LICENSES.map(l => {
+          const d = lic[l.k]; const dl = deadlineOf(l.within);
+          const late = newRule && l.within && (d ? d > dl : today > dl);
+          return (
+            <div key={l.k} className={`rounded-xl p-2.5 border ${d ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-100'}`}>
+              <button type="button" onClick={() => save({ ...lic, [l.k]: d ? '' : today })} className="w-full flex items-center justify-between text-left">
+                <span className="text-sm font-bold text-gray-800">{l.label}</span>
+                <span className={`w-5 h-5 rounded-md border flex items-center justify-center text-[12px] ${d ? 'bg-emerald-500 border-emerald-500 text-white' : 'border-gray-300 text-transparent'}`}>✓</span>
+              </button>
+              {d && <input type="date" value={d} onChange={e => save({ ...lic, [l.k]: e.target.value || today })} className="mt-1.5 w-full text-[11px] p-1 border border-gray-200 rounded-md bg-white" />}
+              {newRule && l.within ? <p className={`text-[10px] mt-1 ${late ? 'text-rose-500 font-bold' : 'text-gray-400'}`}>{l.within} 個月內（{dl.slice(5).replace('-', '/')} 前）{late ? '・已逾期' : ''}</p> : null}
+            </div>
+          );
+        })}
+      </div>
+      <p className="text-[10px] text-gray-400 mt-2">四張證照齊全並完成領證：6,000 元；{newRule ? 'FCP 6 個月內、CIA 9 個月內取得：10,000 元。' : '11502 期以前維持 6,000 元。'}期限自優培起始月起算，僅供參考，正式以公文公告為準。</p>
+    </div>
+  );
+};
 
 const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
   const [goals, setGoals] = useState(PERSONAL_GOALS_DEFAULT);
@@ -8287,17 +8347,19 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
     const stageMonths = [0, 1, 2].map(i => shiftMonthStr(qualityStartMonth, stageIndex * 3 + i));
     const stageRecords = records.filter(r => r.agentId === loggedInUser.id && stageMonths.includes(r.date.slice(0, 7)) && (r.status || '已發單') === '已發單');
     const stageFYC = stageRecords.reduce((s, r) => s + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0);
-    const stageInsuredCount = new Set(stageRecords.map(r => (r.insuredName || '').trim()).filter(Boolean)).size;
+    const insInfo = getQualityInsured(records, loggedInUser.id, qualityStartMonth, stageIndex);
+    const stageInsuredCount = insInfo.count;
     return {
       completed: false,
+      insuredCumulative: insInfo.cumulative,
       stageIndex,
       stageMonths,
       stageFYC: Math.round(stageFYC),
       stageInsuredCount,
       fycTarget: QUALITY_TALENT_THRESHOLDS.fyc,
-      insuredTarget: QUALITY_TALENT_THRESHOLDS.insured,
+      insuredTarget: insInfo.target,
       fycMet: stageFYC >= QUALITY_TALENT_THRESHOLDS.fyc,
-      insuredMet: stageInsuredCount >= QUALITY_TALENT_THRESHOLDS.insured
+      insuredMet: stageInsuredCount >= insInfo.target
     };
   }, [qualityStartMonth, currentMonth, records, loggedInUser]);
 
@@ -8392,7 +8454,7 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
                 {qualityProgram.fycMet && <p className="text-[10px] text-emerald-600 font-bold mt-1">✓ 已達標</p>}
               </div>
               <div className={`rounded-xl p-3 border ${qualityProgram.insuredMet ? 'bg-emerald-50 border-emerald-200' : 'bg-gray-50 border-gray-100'}`}>
-                <p className="text-[10px] font-bold uppercase text-gray-500">不同被保險人數</p>
+                <p className="text-[10px] font-bold uppercase text-gray-500">不同被保險人數{qualityProgram.insuredCumulative ? '（階段累計）' : ''}</p>
                 <p className="text-base font-bold text-gray-900 mt-1">{qualityProgram.stageInsuredCount} <span className="text-xs font-normal text-gray-400">/ {qualityProgram.insuredTarget} 人</span></p>
                 <div className="h-1.5 w-full bg-white rounded-full overflow-hidden mt-2">
                   <div className={`h-full rounded-full ${qualityProgram.insuredMet ? 'bg-emerald-500' : 'bg-gray-300'}`} style={{ width: `${Math.min(100, Math.round(qualityProgram.stageInsuredCount / qualityProgram.insuredTarget * 100))}%` }}></div>
@@ -8402,6 +8464,7 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
             </div>
           </div>
         )}
+        {qualityStartMonth && <QualityLicenseReward loggedInUser={loggedInUser} startMonth={qualityStartMonth} />}
         {editingQualityStart && (
           <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
             <div className="bg-white rounded-2xl p-6 w-full max-w-xs shadow-2xl animate-scale-up">
@@ -9439,8 +9502,8 @@ const getQualityInfo = (member, records) => {
     const stageMonths = [0, 1, 2].map(i => { const d = new Date(sy, sm - 1 + stageIndex * 3 + i, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
     const stageRecords = (records || []).filter(r => r.agentId === member.id && stageMonths.includes((r.date || '').slice(0, 7)) && (r.status || '已發單') === '已發單');
     const fyc = Math.round(stageRecords.reduce((s, r) => s + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0));
-    const insured = new Set(stageRecords.map(r => (r.insuredName || '').trim()).filter(Boolean)).size;
-    return { state: 'active', stage: stageIndex + 1, fyc, insured, fycTarget: QUALITY_TALENT_THRESHOLDS.fyc, insuredTarget: QUALITY_TALENT_THRESHOLDS.insured };
+    const insInfo = getQualityInsured(records, member.id, member.qualityTalentStartMonth, stageIndex);
+    return { state: 'active', stage: stageIndex + 1, fyc, insured: insInfo.count, fycTarget: QUALITY_TALENT_THRESHOLDS.fyc, insuredTarget: insInfo.target, insuredCumulative: insInfo.cumulative };
   }
   const reg = member.promotionDates?.registered;
   if (!reg) return null;
@@ -13701,7 +13764,6 @@ const App = () => {
     { id: 'recruitment', label: '增員儀表板', icon: UserPlus },
     ...(isTeamScheduleViewer ? [{ id: 'interviews', label: '面談追蹤', icon: MessageSquare }] : []),
     { id: 'wiki', label: '知識庫', icon: BookOpen },
-    { id: 'salestools', label: '銷售工具', icon: ShieldCheck },
     { id: 'training', label: '新人培訓', icon: ClipboardCheck },
     ...(loggedInUser && MANAGER_RANKS.includes(loggedInUser.role) ? [{ id: 'settings', label: '競賽設定', icon: Settings }] : [])
   ];
@@ -13760,7 +13822,7 @@ const App = () => {
       </nav>
 
       {/* 手機版：極簡頂部列，只有目前頁面標題＋搜尋＋登出，其餘導覽交給底部列 */}
-      <div className={`${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment', 'salestools'].includes(activeTab) ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-[#070914]/90 backdrop-blur-xl border-b border-white/10`}>
+      <div className={`${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment'].includes(activeTab) ? 'hidden' : 'md:hidden'} sticky top-0 z-50 bg-[#070914]/90 backdrop-blur-xl border-b border-white/10`}>
         <div className="h-14 px-4 flex items-center justify-between">
           <h1 className="text-base font-bold text-white">{currentNavItem?.label || '極豐通訊處'}</h1>
           <div className="flex items-center gap-1">
@@ -13773,7 +13835,7 @@ const App = () => {
       <GlobalSearchModal isOpen={showGlobalSearch} onClose={() => setShowGlobalSearch(false)} customers={customers} records={enrichedRecords} scheduleEvents={scheduleEvents} />
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
-      <main className={`relative z-10 max-w-7xl md:max-w-none mx-auto px-4 md:px-5 ${FIT_TABS.includes(activeTab) ? 'md:h-[calc(100vh-64px)] md:overflow-y-auto no-scrollbar md:!pt-3 md:pb-3' : ''} ${activeTab === 'salestools' ? 'pt-0' : ['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment'].includes(activeTab) ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-6`}>
+      <main className={`relative z-10 max-w-7xl md:max-w-none mx-auto px-4 md:px-5 ${FIT_TABS.includes(activeTab) ? 'md:h-[calc(100vh-64px)] md:overflow-y-auto no-scrollbar md:!pt-3 md:pb-3' : ''} ${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment'].includes(activeTab) ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-6`}>
         {activeTab === 'overview' && isTeamScheduleViewer && <OverviewPage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} season={season} rankTargets={rankTargets} />}
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
@@ -13789,7 +13851,6 @@ const App = () => {
         {activeTab === 'recruitment' && <RecruitmentDashboard recruits={recruits} team={team} user={user} />}
         {activeTab === 'interviews' && isTeamScheduleViewer && <InterviewTrackerPage loggedInUser={loggedInUser} />}
         {activeTab === 'wiki' && <KnowledgeBase loggedInUser={loggedInUser} isManagerViewer={isTeamScheduleViewer} />}
-        {activeTab === 'salestools' && <Suspense fallback={<div className="p-10 text-center text-sm text-gray-400">載入中…</div>}><SalesTools /></Suspense>}
         {activeTab === 'training' && <TrainingChecklistPage team={team} />}
         {activeTab === 'settings' && loggedInUser && MANAGER_RANKS.includes(loggedInUser.role) && <SettingsPage rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
       </main>
