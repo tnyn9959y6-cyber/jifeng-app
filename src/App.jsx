@@ -1797,7 +1797,7 @@ const MEA_RATIO_DEFS = {
     { k: 'r1', label: '約訪→面談', from: 'appointment', to: 'interview', color: '#60a5fa' },
     { k: 'r2', label: '面談→送建議書', from: 'interview', to: 'proposal', color: '#a78bfa' },
     { k: 'r3', label: '建議書→受理', from: 'proposal', to: 'application', color: '#fbbf24' },
-    { k: 'r4', label: '受理→發單', from: 'application', to: 'issue', color: '#34d399' }
+    { k: 'r4', label: '成交率(發單÷面談)', from: 'interview', to: 'issue', color: '#34d399' }
   ],
   recruit: [
     { k: 'r1', label: '準增員→約訪', from: 'newRecruitProspect', to: 'recruitContact', color: '#60a5fa' },
@@ -1902,7 +1902,7 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
             ))}
           </tbody>
         </table>
-        <p className="text-[10.5px] text-white/35 mt-2">轉換率 = 後一階段次數 ÷ 前一階段次數。表格小字為「後/前」次數；前一階段為 0 時顯示「—」。{mode === 'recruit' ? '增員從這次調整起才會往前補次數，更早的紀錄沒有補，所以舊月份的比率可能偏高或偏低。' : ''}</p>
+        <p className="text-[10.5px] text-white/35 mt-2">轉換率 = 後一階段次數 ÷ 前一階段次數（業務的第四項為成交率 = 發單 ÷ 面談）。表格小字為「後/前」次數；前一階段為 0 時顯示「—」。{mode === 'recruit' ? '增員從這次調整起才會往前補次數，更早的紀錄沒有補，所以舊月份的比率可能偏高或偏低。' : ''}</p>
       </div>
     </div>
   );
@@ -2255,11 +2255,12 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div className="grid grid-cols-3 gap-3 shrink-0 mt-1.5 pt-2 border-t border-white/10 text-center">
+          <div className={`grid ${viewMode === 'sales' ? 'grid-cols-4' : 'grid-cols-3'} gap-3 shrink-0 mt-1.5 pt-2 border-t border-white/10 text-center`}>
             {viewMode === 'sales' ? (<>
-              <div><p className="text-[11px] text-white/50">準客戶轉換約訪</p><p className="text-[20px] font-bold text-blue-300">{stats.totals.prospect > 0 ? Math.round((stats.totals.appointment / stats.totals.prospect) * 100) : 0}%</p></div>
-              <div className="border-l border-white/10"><p className="text-[11px] text-white/50">約訪轉換面談</p><p className="text-[20px] font-bold text-violet-300">{stats.totals.appointment > 0 ? Math.round((stats.totals.interview / stats.totals.appointment) * 100) : 0}%</p></div>
-              <div className="rounded-xl border border-rose-400/30 bg-rose-500/10"><p className="text-[11px] text-rose-300">成交率 (C) = 發單/面談</p><p className="text-[20px] font-bold text-rose-300">{(stats.C * 100).toFixed(1)}%</p></div>
+              <div><p className="text-[11px] text-white/50">約訪轉換面談</p><p className="text-[18px] font-bold text-blue-300">{stats.totals.appointment > 0 ? Math.round((stats.totals.interview / stats.totals.appointment) * 100) : 0}%</p></div>
+              <div className="border-l border-white/10"><p className="text-[11px] text-white/50">面談轉換建議書</p><p className="text-[18px] font-bold text-violet-300">{stats.totals.interview > 0 ? Math.round((stats.totals.proposal / stats.totals.interview) * 100) : 0}%</p></div>
+              <div className="border-l border-white/10"><p className="text-[11px] text-white/50">建議書轉換受理</p><p className="text-[18px] font-bold text-amber-300">{stats.totals.proposal > 0 ? Math.round((stats.totals.application / stats.totals.proposal) * 100) : 0}%</p></div>
+              <div className="rounded-xl border border-rose-400/30 bg-rose-500/10"><p className="text-[11px] text-rose-300">成交率 (C) = 發單/面談</p><p className="text-[18px] font-bold text-rose-300">{(stats.C * 100).toFixed(1)}%</p></div>
             </>) : (<>
               <div><p className="text-[11px] text-white/50">準增員轉換約訪</p><p className="text-[20px] font-bold text-teal-300">{stats.recruitTotals.newRecruitProspect > 0 ? Math.round((stats.recruitTotals.recruitContact / stats.recruitTotals.newRecruitProspect) * 100) : 0}%</p></div>
               <div className="border-l border-white/10"><p className="text-[11px] text-white/50">約訪轉換面談</p><p className="text-[20px] font-bold text-cyan-300">{stats.recruitTotals.recruitContact > 0 ? Math.round((((stats.recruitTotals.recruitFirst || 0) + (stats.recruitTotals.recruitInterview || 0)) / stats.recruitTotals.recruitContact) * 100) : 0}%</p></div>
@@ -5817,7 +5818,7 @@ const AnnouncementsPage = ({ loggedInUser, announcements, canPost, onSeen }) => 
   );
 };
 
-const KB_CATEGORIES = ['新人入門', '商品知識', '銷售技巧', '增員知識', '競賽與獎勵', '行政與工具', '法規合規', '主管專區'];
+const KB_CATEGORIES = ['新人訓練', '新人入門', '商品知識', '銷售技巧', '增員知識', '競賽與獎勵', '行政與工具', '法規合規', '主管專區'];
 
 // --- 業務戰情室：權限分層 (吳政翰看全部，主管看自己+全部下線，一般業務只看自己) ---
 const getVisibleTeamIds = (loggedInUser, team) => {
@@ -6694,6 +6695,8 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
   const emptyForm = { title: '', category: KB_CATEGORIES[0], content: '', managerOnly: false };
   const [form, setForm] = useState(emptyForm);
   const [kbMode, setKbMode] = useState('articles');
+  const [importing, setImporting] = useState(false);
+  const [importMsg, setImportMsg] = useState('');
 
   useEffect(() => {
     const unsub = onSnapshot(collection(db, 'knowledge_articles'), (snap) => {
@@ -6732,6 +6735,27 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
     } catch (e) { console.error(e); } finally { setSaving(false); }
   };
 
+  // 匯入公司基礎訓練教材（固定 id，重複匯入只會覆蓋同一批文章，不會變重複）
+  const handleImportTraining = async () => {
+    if (!loggedInUser || importing) return;
+    setImporting(true); setImportMsg('');
+    try {
+      const { TRAINING_ARTICLES } = await import('./trainingKB.js');
+      const now = new Date().toISOString();
+      const batch = writeBatch(db);
+      TRAINING_ARTICLES.forEach((t, i) => {
+        const existing = articles.find(x => x.id === t.id);
+        batch.set(doc(db, 'knowledge_articles', t.id), {
+          title: t.title, category: t.category, content: t.content, managerOnly: false,
+          authorId: loggedInUser.id, authorName: loggedInUser.name,
+          createdAt: existing?.createdAt || now, updatedAt: new Date(Date.now() - i * 1000).toISOString()
+        });
+      });
+      await batch.commit();
+      setImportMsg(`已匯入 ${TRAINING_ARTICLES.length} 篇新人訓練文章`);
+    } catch (e) { console.error(e); setImportMsg('匯入失敗，請稍後再試'); } finally { setImporting(false); }
+  };
+
   const handleDeleteConfirm = async () => {
     if (!deleteTarget) return;
     try { await deleteDoc(doc(db, 'knowledge_articles', deleteTarget)); setDeleteTarget(null); setViewingArticle(null); } catch (e) { console.error(e); }
@@ -6767,8 +6791,16 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
           <p className="text-xs sm:text-sm text-gray-400 md:mt-1">共 {articles.length} 篇文章</p>
           <div className="mt-3">{kbTabs}</div>
         </div>
-        <button onClick={openAdd} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 新增文章</button>
+        <div className="flex flex-wrap items-center gap-2">
+          {isManager && (
+            <button onClick={handleImportTraining} disabled={importing} className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition disabled:opacity-50">
+              {importing ? <Loader2 className="animate-spin" size={14} /> : <BookOpen size={14} />} 匯入新人訓練教材
+            </button>
+          )}
+          <button onClick={openAdd} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 新增文章</button>
+        </div>
       </div>
+      {importMsg && <p className="text-xs font-bold text-amber-600">{importMsg}</p>}
 
       <Card className="p-4">
         <div className="flex flex-col sm:flex-row gap-3">
