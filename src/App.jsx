@@ -1242,7 +1242,7 @@ const MobileActivityView = ({ team, selectedAgentId, setSelectedAgentId, viewMod
     try { await setDoc(doc(db, 'activity_record', `${selectedAgentId}_${today}`), payload, { merge: true }); } catch (e) { console.error(e); }
   };
   const quickAdd = async (key) => {
-    const keys = viewMode === 'sales' ? getCascadeKeys(key) : [key];
+    const keys = getCascadeKeys(key);
     await writeToday(keys, 1);
     setLastKeys(keys);
     const pts = keys.reduce((s, k) => s + (ALL_ACTIVITY_WEIGHTS[k]?.score || 0), 0);
@@ -1267,6 +1267,7 @@ const MobileActivityView = ({ team, selectedAgentId, setSelectedAgentId, viewMod
           <p className="text-[12px] text-white/45 mt-1.5">P × C × I　{viewMode === 'sales' ? '業務' : '增員'}視角</p>
         </div>
         <div className="flex items-center gap-2">
+          {onOverview && <button onClick={onOverview} className="h-10 px-3.5 rounded-full bg-amber-400/15 border border-amber-400/40 text-amber-300 text-[12.5px] font-bold flex items-center gap-1.5 active:scale-95 transition"><TrendingUp size={15} />每月總覽</button>}
           <button onClick={onSearch} aria-label="搜尋" className="w-10 h-10 rounded-full bg-white/[0.07] border border-white/10 flex items-center justify-center active:scale-95 transition"><Search size={18} /></button>
           <button onClick={() => setShowMenu(v => !v)} aria-label="更多" className="w-10 h-10 rounded-full bg-white/[0.07] border border-white/10 flex items-center justify-center active:scale-95 transition"><MoreVertical size={18} className="rotate-90" /></button>
         </div>
@@ -1532,10 +1533,14 @@ const BINGO_LINES = [
 
 // 業務漏斗階段順序 (不含準客戶)：完成後面的階段時，前面的階段視同也一併完成一次
 const SALES_FUNNEL_CHAIN = ['appointment', 'interview', 'proposal', 'application', 'issue'];
+// 增員漏斗同樣往前補次數 (不含新增準增員)：完成後面的階段時，前面的階段視同也各完成一次
+const RECRUIT_FUNNEL_CHAIN = ['recruitContact', 'recruitFirst', 'recruitInterview', 'recruitExam', 'recruitRegistered'];
 const getCascadeKeys = (type) => {
   const idx = SALES_FUNNEL_CHAIN.indexOf(type);
-  if (idx === -1) return [type];
-  return SALES_FUNNEL_CHAIN.slice(0, idx + 1);
+  if (idx !== -1) return SALES_FUNNEL_CHAIN.slice(0, idx + 1);
+  const ridx = RECRUIT_FUNNEL_CHAIN.indexOf(type);
+  if (ridx !== -1) return RECRUIT_FUNNEL_CHAIN.slice(0, ridx + 1);
+  return [type];
 };
 
 // 頂級業務的經營節奏：新名單要快速跟進、既有客戶要定期維繫、準客戶要持續推進漏斗、
@@ -1801,9 +1806,9 @@ const MEA_RATIO_DEFS = {
     { k: 'r4', label: '內/外考→登錄', from: 'recruitExam', to: 'recruitRegistered', color: '#34d399' }
   ]
 };
-const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack }) => {
+const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embedded = false }) => {
   const [mode, setMode] = useState('sales');
-  const [scope, setScope] = useState('me');
+  const [scope, setScope] = useState(embedded ? 'team' : 'me');
   const [span, setSpan] = useState(12);
   const weights = mode === 'sales' ? ACTIVITY_WEIGHTS : RECRUIT_ACTIVITY_WEIGHTS;
   const defs = MEA_RATIO_DEFS[mode];
@@ -1836,14 +1841,14 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack }) => 
   const chip = (on, c = 'bg-blue-600') => `px-3.5 h-8 rounded-lg text-[13px] font-bold ${on ? c : 'text-white/60'}`;
   const tip = { background: '#0c1020', border: '1px solid rgba(255,255,255,.12)', borderRadius: 12, color: '#fff', fontSize: 12 };
   return (
-    <div className="max-w-5xl mx-auto text-white space-y-3 pb-24 md:pb-6 animate-fade-in">
-      <div className="flex items-center gap-3">
+    <div className={embedded ? 'text-white space-y-3' : 'max-w-5xl mx-auto text-white space-y-3 pb-24 md:pb-6 animate-fade-in'}>
+      {embedded ? <p className="font-bold text-[15px] pt-1">每月總覽（近 {span} 個月總分與轉換率）</p> : <div className="flex items-center gap-3">
         <button type="button" onClick={onBack} aria-label="返回" className="w-10 h-10 rounded-full bg-white/[0.07] border border-white/10 flex items-center justify-center active:scale-95"><ChevronLeft size={20} /></button>
         <div className="min-w-0">
           <h1 className="text-[24px] md:text-[28px] font-black leading-tight">每月活動量總覽</h1>
           <p className="text-[12px] text-white/50">總分與各階段轉換率的每月變化</p>
         </div>
-      </div>
+      </div>}
       <div className="flex flex-wrap gap-2">
         <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[['sales', '業務', 'bg-blue-600'], ['recruit', '增員', 'bg-teal-600']].map(([k, l, c]) => <button key={k} type="button" onClick={() => setMode(k)} className={chip(mode === k, c)}>{l}</button>)}</div>
         <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[['me', '我自己'], ['team', '全隊合計']].map(([k, l]) => <button key={k} type="button" onClick={() => setScope(k)} className={chip(scope === k)}>{l}</button>)}</div>
@@ -1897,7 +1902,7 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack }) => 
             ))}
           </tbody>
         </table>
-        <p className="text-[10.5px] text-white/35 mt-2">轉換率 = 後一階段次數 ÷ 前一階段次數。表格小字為「後/前」次數；前一階段為 0 時顯示「—」。{mode === 'recruit' ? '增員各階段不會自動往前補次數，所以比率有可能超過 100%。' : ''}</p>
+        <p className="text-[10.5px] text-white/35 mt-2">轉換率 = 後一階段次數 ÷ 前一階段次數。表格小字為「後/前」次數；前一階段為 0 時顯示「—」。{mode === 'recruit' ? '增員從這次調整起才會往前補次數，更早的紀錄沒有補，所以舊月份的比率可能偏高或偏低。' : ''}</p>
       </div>
     </div>
   );
@@ -3274,6 +3279,31 @@ const getRecruitStatus = (r) => {
   return '新名單';
 };
 
+// 優培細項：四個階段各自的 FYC、被保險人數(新制為階段累計)與達標狀況，以及證照獎勵
+const getQualityStages = (member, records) => {
+  const start = member?.qualityTalentStartMonth;
+  if (!start) return null;
+  const [sy, sm] = start.split('-').map(Number);
+  const monthOf = (k) => { const d = new Date(sy, sm - 1 + k, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+  const [cy, cm] = getCurrentMonth().split('-').map(Number);
+  const since = (cy - sy) * 12 + (cm - sm);
+  const curStage = since < 0 ? -1 : Math.min(3, Math.floor(since / 3));
+  const stages = [0, 1, 2, 3].map(i => {
+    const months = [0, 1, 2].map(j => monthOf(i * 3 + j));
+    const rs = (records || []).filter(r => r.agentId === member.id && months.includes((r.date || '').slice(0, 7)) && (r.status || '已發單') === '已發單');
+    const fyc = Math.round(rs.reduce((sum, r) => sum + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0));
+    const ins = getQualityInsured(records, member.id, start, i);
+    return { i, months, fyc, fycTarget: QUALITY_TALENT_THRESHOLDS.fyc, insured: ins.count, insTarget: ins.target, cumulative: ins.cumulative, state: i < curStage ? 'past' : i === curStage ? 'current' : 'future' };
+  });
+  const lic = member.qualityLicenses || {};
+  const deadlineOf = (w) => { if (!w) return ''; const d = new Date(sy, sm - 1 + w, 0); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`; };
+  const newRule = isQualityNewRule(start);
+  const licenses = QUALITY_LICENSES.map(l => ({ ...l, date: lic[l.k] || '', deadline: newRule ? deadlineOf(l.within) : '', late: !!(newRule && l.within && lic[l.k] && lic[l.k] > deadlineOf(l.within)) }));
+  const all = licenses.every(l => l.date);
+  const high = all && newRule && licenses.every(l => !l.within || (l.date && l.date <= l.deadline));
+  return { start, stages, curStage, licenses, reward: high ? 10000 : all ? 6000 : 0, registered: member.promotionDates?.registered || '' };
+};
+
 const OvDonut = ({ parts, size = 150, centerTop, centerBottom, thickness = 18 }) => {
   const total = parts.reduce((s, p) => s + p.v, 0);
   const R = (size - thickness) / 2, C = 2 * Math.PI * R;
@@ -3300,7 +3330,13 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const month = today.slice(0, 7);
   const [section, setSection] = useState('overview');
   const [actWeek, setActWeek] = useState(() => weekStartOf(getTodayDate()));
+  const [actPeriod, setActPeriod] = useState('week');
+  const [actDay, setActDay] = useState(() => getTodayDate());
+  const [actMonth, setActMonth] = useState(() => getTodayDate().slice(0, 7));
+  const [qualOpen, setQualOpen] = useState({});
   const [goals, setGoals] = useState(PERSONAL_GOALS_DEFAULT);
+  const [goalsAll, setGoalsAll] = useState(null);
+  const [deals, setDeals] = useState([]);
 
   useEffect(() => {
     if (!loggedInUser) return;
@@ -3311,6 +3347,21 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   }, [loggedInUser?.id, month]);
 
   const members = useMemo(() => getDistrictMembers(team, '吳政翰'), [team]);
+
+  // 商機：只在打開「案件狀況」時才訂閱，避免多讀
+  useEffect(() => {
+    if (section !== 'cases') return;
+    const unsub = onSnapshot(collection(db, 'pipeline_deals'), (snap) => setDeals(snap.docs.map(d => ({ id: d.id, ...d.data() }))));
+    return () => unsub();
+  }, [section]);
+  // 每個人本月在首頁設定的目標：只在打開「個人目標」時讀（每人一筆）
+  useEffect(() => {
+    if (section !== 'goals') return;
+    let off = false;
+    Promise.all(members.map(m => getDoc(doc(db, 'personal_goals', `${m.id}_${month}`)).then(s => [String(m.id), s.exists() ? { ...PERSONAL_GOALS_DEFAULT, ...s.data() } : null]).catch(() => [String(m.id), null])))
+      .then(list => { if (!off) setGoalsAll(Object.fromEntries(list)); });
+    return () => { off = true; };
+  }, [section, members, month]);
   const ids = useMemo(() => new Set(members.map(m => String(m.id))), [members]);
   const nameOf = (id) => team.find(m => String(m.id) === String(id))?.name || '—';
   const money = (n) => n >= 1000000 ? '$' + (n / 1000000).toFixed(2) + 'M' : n >= 10000 ? '$' + (n / 10000).toFixed(1) + '萬' : '$' + Math.round(n || 0).toLocaleString();
@@ -3419,6 +3470,57 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const mySales = myRecs.reduce((s, r) => s + (goals.salesBasis === 'premium' ? (r.premium || 0) : (r.weighted || 0)), 0);
   const myIncome = myRecs.filter(r => (r.status || '已發單') === '已發單').reduce((s, r) => s + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0);
   const myRecruit = (activities || []).filter(a => a.agentId === loggedInUser.id && a.month === month).reduce((s, a) => s + (a.recruitRegistered || 0), 0);
+
+  // ---- 活動量：日／月視角 ----
+  const isWeekend = (d) => { const w = dayOfWeek(d); return w === 0 || w === 6; };
+  const dayRows = useMemo(() => members.map(m => ({ m, p: pointsOnDate(activities, m.id, actDay) })).sort((a, b) => b.p - a.p), [members, activities, actDay]);
+  const dayReached = dayRows.filter(r => r.p >= DAILY_TARGET).length;
+  const dayZero = dayRows.filter(r => r.p === 0);
+  const dayTotal = dayRows.reduce((s, r) => s + r.p, 0);
+  const monthDays = useMemo(() => { const [y, mo] = actMonth.split('-').map(Number); return Array.from({ length: new Date(y, mo, 0).getDate() }, (_, i) => `${actMonth}-${String(i + 1).padStart(2, '0')}`); }, [actMonth]);
+  const monthRowsAct = useMemo(() => members.map(m => {
+    const days = monthDays.map(d => ({ d, p: pointsOnDate(activities, m.id, d), future: d > today }));
+    const total = days.reduce((s, x) => s + x.p, 0);
+    const missed = days.filter(x => !x.future && x.p === 0 && !isWeekend(x.d)).length;
+    return { m, days, total, active: days.filter(x => x.p > 0).length, missed };
+  }).sort((a, b) => b.total - a.total), [members, activities, monthDays, today]);
+  const monthActTotal = monthRowsAct.reduce((s, r) => s + r.total, 0);
+  const monthOptions = useMemo(() => Array.from({ length: 12 }, (_, i) => { const d = new Date(Number(month.slice(0, 4)), Number(month.slice(5)) - 1 - i, 1); const v = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; return { v, label: `${d.getFullYear()} 年 ${d.getMonth() + 1} 月` }; }), [month]);
+
+  // ---- 商機 ----
+  const distDeals = useMemo(() => (deals || []).filter(d => ids.has(String(d.ownerId))), [deals, ids]);
+  const nextMonth = (() => { const d = new Date(Number(month.slice(0, 4)), Number(month.slice(5)), 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; })();
+  const dealSum = (list) => list.reduce((s, d) => s + (Number(d.estimatedPremium) || 0), 0);
+  const dealBuckets = useMemo(() => {
+    const sorted = [...distDeals].sort((a, b) => (a.expectedCloseDate || '9999').localeCompare(b.expectedCloseDate || '9999'));
+    const overdue = sorted.filter(d => d.expectedCloseDate && d.expectedCloseDate < today);
+    const thisM = sorted.filter(d => d.expectedCloseDate && d.expectedCloseDate >= today && d.expectedCloseDate.startsWith(month));
+    const nextM = sorted.filter(d => (d.expectedCloseDate || '').startsWith(nextMonth));
+    const later = sorted.filter(d => d.expectedCloseDate && d.expectedCloseDate > nextMonth + '-31');
+    const none = sorted.filter(d => !d.expectedCloseDate);
+    return { sorted, overdue, thisM, nextM, later, none };
+  }, [distDeals, today, month, nextMonth]);
+  const dealByOwner = useMemo(() => members.map(m => { const l = distDeals.filter(d => String(d.ownerId) === String(m.id)); return { m, n: l.length, prem: dealSum(l) }; }).filter(x => x.n > 0).sort((a, b) => b.prem - a.prem), [members, distDeals]);
+
+  // ---- 個人目標（每個人在首頁設定的本月目標 vs 實際）----
+  const goalRowsAll = useMemo(() => {
+    if (!goalsAll) return null;
+    return members.map(m => {
+      const g = goalsAll[String(m.id)];
+      const myR = distRecords.filter(r => String(r.agentId) === String(m.id) && (r.date || '').startsWith(month));
+      const sales = myR.reduce((sum, r) => sum + ((g?.salesBasis === 'premium') ? (r.premium || 0) : (r.weighted || 0)), 0);
+      const income = myR.filter(r => (r.status || '已發單') === '已發單').reduce((sum, r) => sum + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0);
+      const rec = (activities || []).filter(a => String(a.agentId) === String(m.id) && a.month === month).reduce((sum, a) => sum + (a.recruitRegistered || 0), 0);
+      const items = g ? [
+        { l: g.salesBasis === 'premium' ? '業績（實收）' : '業績（加權）', a: sales, t: g.salesTarget, money: true, c: '#60a5fa' },
+        { l: '增員人數', a: rec, t: g.recruitTarget, unit: '人', c: '#2dd4bf' },
+        { l: '預估收入', a: Math.round(income), t: g.incomeTarget, money: true, c: '#fbbf24' },
+      ] : [];
+      const set = items.filter(x => x.t > 0);
+      const avg = set.length ? Math.round(set.reduce((sum, x) => sum + Math.min(1, x.a / x.t), 0) / set.length * 100) : null;
+      return { m, g, items, avg };
+    }).sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
+  }, [goalsAll, members, distRecords, activities, month]);
 
   const card = 'rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl';
   const Panel = ({ title, icon: Ic, tone = 'text-blue-300', right, children, className = '' }) => (
@@ -3575,7 +3677,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
             <div><div className="flex justify-between text-[12px] mb-1"><span className="font-semibold truncate">{r.m.name}</span><span className="tabular-nums text-white/70">{r.selWeek}/{WEEKLY_TARGET}</span></div><Bar v={r.selWeek / WEEKLY_TARGET * 100} color={ok ? '#34d399' : '#818cf8'} /></div>
             <div className="grid grid-cols-7 gap-1">
               {r.days.map((d, i) => (
-                <div key={d.d} title={`${d.d} ${d.p} 分`} className={`rounded-md text-center py-0.5 ${d.future ? 'bg-white/[0.03] text-white/20' : d.p >= DAILY_TARGET ? 'bg-emerald-500/25 text-emerald-200' : d.p > 0 ? 'bg-amber-400/20 text-amber-200' : 'bg-white/[0.06] text-white/35'}`}>
+                <div key={d.d} title={`${d.d} ${d.p} 分`} className={`rounded-md text-center py-0.5 ${d.future ? 'bg-white/[0.03] text-white/20' : d.p >= DAILY_TARGET ? 'bg-emerald-500/25 text-emerald-200' : d.p > 0 ? 'bg-amber-400/20 text-amber-200' : isWeekend(d.d) ? 'bg-white/[0.04] text-white/30' : 'bg-rose-500/25 text-rose-200'}`}>
                   <span className={`block text-[9px] leading-none ${d.d === today ? 'text-sky-300 font-bold' : 'text-white/35'}`}>{dayNames[i]}</span>
                   <span className="block text-[12px] font-bold tabular-nums leading-tight">{d.future ? '·' : d.p}</span>
                 </div>
@@ -3585,21 +3687,52 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
         </div>); })}
     </div>
   );
-  const qualityList = (limit) => (
+  const qualityList = (limit, expandable = false) => (
     qualRows.length === 0 ? <p className="text-white/40 text-sm text-center py-6">目前沒有進行中的優培</p> :
     <div className="space-y-3">
-      {qualRows.slice(0, limit).map(({ m, q }) => (
-        <div key={m.id} className="flex items-center gap-3">
-          <Avatar name={m.name} size={32} />
-          <div className="flex-1 min-w-0">
-            {q.state === 'active' ? (<>
-              <div className="flex justify-between text-[12px] mb-1"><span className="font-semibold">{m.name}<span className="text-amber-300 font-normal ml-1.5">第 {q.stage} 階段</span></span><span className="text-white/60 tabular-nums">FYC {pct(q.fyc, q.fycTarget)}% · 被保人 {q.insured}/{q.insuredTarget}</span></div>
-              <Bar v={pct(q.fyc, q.fycTarget)} color="#fbbf24" />
-              <div className="mt-1"><Bar v={pct(q.insured, q.insuredTarget)} color="#fb923c" h={4} /></div>
-            </>) : <div className="flex justify-between text-[12.5px]"><span className="font-semibold">{m.name}</span><span className={q.state === 'upcoming' ? 'text-white/50' : 'text-rose-300'}>{q.state === 'upcoming' ? `優培 ${q.start} 開始` : '期別尚未填寫'}</span></div>}
+      {qualRows.slice(0, limit).map(({ m, q }) => {
+        const canOpen = expandable && q.state !== 'unset';
+        const open = !!qualOpen[m.id];
+        const det = open ? getQualityStages(m, records) : null;
+        return (
+        <div key={m.id}>
+          <div className={`flex items-center gap-3 ${canOpen ? 'cursor-pointer' : ''}`} onClick={canOpen ? () => setQualOpen(p => ({ ...p, [m.id]: !p[m.id] })) : undefined}>
+            <Avatar name={m.name} size={32} />
+            <div className="flex-1 min-w-0">
+              {q.state === 'active' ? (<>
+                <div className="flex justify-between text-[12px] mb-1"><span className="font-semibold">{m.name}<span className="text-amber-300 font-normal ml-1.5">第 {q.stage} 階段</span></span><span className="text-white/60 tabular-nums">FYC {pct(q.fyc, q.fycTarget)}% · 被保人 {q.insured}/{q.insuredTarget}</span></div>
+                <Bar v={pct(q.fyc, q.fycTarget)} color="#fbbf24" />
+                <div className="mt-1"><Bar v={pct(q.insured, q.insuredTarget)} color="#fb923c" h={4} /></div>
+              </>) : <div className="flex justify-between text-[12.5px]"><span className="font-semibold">{m.name}</span><span className={q.state === 'upcoming' ? 'text-white/50' : 'text-rose-300'}>{q.state === 'upcoming' ? `優培 ${q.start} 開始` : '期別尚未填寫'}</span></div>}
+            </div>
+            {canOpen && <ChevronRight size={16} className={`text-white/40 shrink-0 transition-transform ${open ? 'rotate-90' : ''}`} />}
           </div>
-        </div>
-      ))}
+          {open && det && (
+            <div className="ml-[44px] mt-2 rounded-xl border border-white/10 bg-white/[0.04] p-3 space-y-3">
+              <p className="text-[11.5px] text-white/50">優培起始 {det.start}{det.registered ? `・登錄日 ${det.registered}` : ''}{isQualityNewRule(det.start) ? '・新制（被保險人數階段累計）' : '・舊制（每階段各算）'}</p>
+              <div className="grid grid-cols-4 gap-2">
+                {det.stages.map(st => {
+                  const fm = st.fyc >= st.fycTarget, im = st.insured >= st.insTarget;
+                  return (
+                    <div key={st.i} className={`rounded-lg border p-2 ${st.state === 'current' ? 'border-amber-300/60 bg-amber-400/10' : st.state === 'future' ? 'border-white/[0.06] opacity-50' : 'border-white/10'}`}>
+                      <p className="text-[11.5px] font-bold">第 {st.i + 1} 階段{st.state === 'current' && <span className="text-amber-300 font-normal ml-1">進行中</span>}</p>
+                      <p className="text-[10px] text-white/40 mb-1.5">{st.months[0].slice(2).replace('-', '/')}–{st.months[2].slice(2).replace('-', '/')}</p>
+                      <p className={`text-[11.5px] tabular-nums ${fm ? 'text-emerald-300' : 'text-white/75'}`}>FYC {gapFmt(st.fyc)}<span className="text-white/35"> / {gapFmt(st.fycTarget)}</span>{fm && ' ✓'}</p>
+                      <p className={`text-[11.5px] tabular-nums mt-0.5 ${im ? 'text-emerald-300' : 'text-white/75'}`}>被保人 {st.insured}<span className="text-white/35"> / {st.insTarget}{st.cumulative ? '（累計）' : ''}</span>{im && ' ✓'}</p>
+                    </div>
+                  );
+                })}
+              </div>
+              <div>
+                <p className="text-[11.5px] text-white/50 mb-1.5 flex justify-between"><span>證照</span><span className={det.reward ? 'text-emerald-300 font-bold' : ''}>{det.reward ? `專業獎金可領 ${det.reward.toLocaleString()} 元` : '專業獎金尚未達成'}</span></p>
+                <div className="flex flex-wrap gap-1.5">
+                  {det.licenses.map(l => <span key={l.k} className={`px-2 py-1 rounded-md text-[11px] border tabular-nums ${l.date ? (l.late ? 'border-rose-400/50 text-rose-300 bg-rose-500/10' : 'border-emerald-400/50 text-emerald-300 bg-emerald-500/10') : 'border-white/15 text-white/45'}`}>{l.label} {l.date ? l.date.slice(2).replace(/-/g, '/') : '未取得'}{l.deadline ? `・限 ${l.deadline.slice(2).replace(/-/g, '/')}` : ''}{l.late ? '・逾期' : ''}</span>)}
+                </div>
+              </div>
+            </div>
+          )}
+        </div>);
+      })}
     </div>
   );
   const recruitFunnel = (
@@ -3645,7 +3778,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const hour = new Date().getHours();
   const greet = hour < 5 ? '夜深了' : hour < 12 ? '早安' : hour < 18 ? '午安' : '晚安';
   const sections = [
-    ['overview', '總覽', LayoutGrid], ['activity', '全體活動量', Activity], ['contest', '競賽狀況', Trophy],
+    ['overview', '總覽', LayoutGrid], ['activity', '全體活動量', Activity], ['goals', '個人目標', Target], ['contest', '競賽狀況', Trophy],
     ['quality', '優培狀況', Award], ['cases', '案件狀況', ClipboardList], ['recruit', '增員狀況', UserPlus],
   ];
   const sectionTitle = sections.find(s => s[0] === section)?.[1];
@@ -3694,17 +3827,103 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
 
         {section === 'activity' && (
           <div className="grid grid-cols-[1fr_280px] gap-3 flex-1 min-h-0">
-            <Panel title={isCurWeek ? '全體活動量（今日 / 本週）' : '全體活動量（單週明細）'} icon={Activity} tone="text-violet-300" right={weekSelect}>{isCurWeek ? activityList(30) : weekList}</Panel>
+            <Panel title="全體活動量" icon={Activity} tone="text-violet-300" right={
+              <span className="flex items-center gap-2">
+                <span className="flex rounded-lg border border-white/15 bg-white/[0.06] p-0.5">{[['day', '日'], ['week', '週'], ['month', '月']].map(([k, l]) => <button key={k} type="button" onClick={() => setActPeriod(k)} className={`px-3 h-7 rounded-md text-[12.5px] font-bold ${actPeriod === k ? 'bg-violet-600' : 'text-white/60'}`}>{l}</button>)}</span>
+                {actPeriod === 'day' && <span className="flex items-center gap-1"><button type="button" onClick={() => setActDay(dateAdd(actDay, -1))} className="w-7 h-7 rounded-md bg-white/10 flex items-center justify-center"><ChevronLeft size={15} /></button><input type="date" value={actDay} max={today} onChange={e => e.target.value && setActDay(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg px-2 py-1 text-[12px] text-white outline-none" /><button type="button" onClick={() => setActDay(dateAdd(actDay, 1))} disabled={actDay >= today} className="w-7 h-7 rounded-md bg-white/10 flex items-center justify-center disabled:opacity-30"><ChevronRight size={15} /></button></span>}
+                {actPeriod === 'week' && weekSelect}
+                {actPeriod === 'month' && <select value={actMonth} onChange={e => setActMonth(e.target.value)} className="bg-white/10 border border-white/20 rounded-lg pl-2 pr-1 py-1 text-[12px] text-white outline-none cursor-pointer">{monthOptions.map(o => <option key={o.v} value={o.v} style={{ color: '#111' }}>{o.label}</option>)}</select>}
+              </span>}>
+              {actPeriod === 'day' && (
+                <div>
+                  <div className={`rounded-xl border px-3 py-2.5 mb-3 text-[13px] ${dayZero.length ? 'border-rose-400/40 bg-rose-500/10' : 'border-emerald-400/40 bg-emerald-500/10'}`}>
+                    <p className="font-bold">{actDay}（週{dayNames[dayOfWeek(actDay)]}）{dayZero.length ? `${dayZero.length} 人未建檔` : '全員都有建檔'}</p>
+                    {dayZero.length > 0 && <p className="text-white/75 mt-1 leading-relaxed">{dayZero.map(r => r.m.name).join('、')}</p>}
+                  </div>
+                  <div className="space-y-2.5">
+                    {dayRows.map(r => { const tone = r.p >= DAILY_TARGET ? '#34d399' : r.p > 0 ? '#fbbf24' : '#fb7185'; return (
+                      <div key={r.m.id} className="flex items-center gap-3">
+                        <Avatar name={r.m.name} size={30} style={{ border: `2px solid ${tone}88` }} />
+                        <div className="flex-1 min-w-0"><div className="flex justify-between text-[12px] mb-1"><span className="font-semibold truncate">{r.m.name}</span><span className="tabular-nums" style={{ color: tone }}>{r.p === 0 ? '未建檔' : `${r.p}/${DAILY_TARGET}`}</span></div><Bar v={r.p / DAILY_TARGET * 100} color={tone} /></div>
+                      </div>); })}
+                  </div>
+                </div>
+              )}
+              {actPeriod === 'week' && (isCurWeek ? (
+                <div className="space-y-4">{activityList(30)}<div><p className="text-[12px] text-white/50 mb-2">本週每天明細（紅色＝平日沒做）</p>{weekList}</div></div>
+              ) : weekList)}
+              {actPeriod === 'month' && (
+                <div className="space-y-4">
+                  <div>
+                    <div className="grid grid-cols-[88px_44px_1fr] gap-2 text-[10px] text-white/35 mb-1 px-0.5"><span /><span className="text-right">總分</span><span className="flex">{monthDays.map(d => <span key={d} className={`flex-1 text-center ${d === today ? 'text-sky-300 font-bold' : ''}`}>{Number(d.slice(8))}</span>)}</span></div>
+                    <div className="space-y-1.5">
+                      {monthRowsAct.map(r => (
+                        <div key={r.m.id} className="grid grid-cols-[88px_44px_1fr] gap-2 items-center">
+                          <span className="text-[12px] font-semibold truncate">{r.m.name}{r.missed > 0 && <span className="text-rose-300 font-normal text-[10px] ml-1">漏{r.missed}天</span>}</span>
+                          <span className="text-right text-[12px] tabular-nums font-bold">{r.total}</span>
+                          <span className="flex gap-px">{r.days.map(x => <i key={x.d} title={`${x.d} ${x.p} 分`} className={`flex-1 h-5 rounded-[3px] ${x.future ? 'bg-white/[0.03]' : x.p >= DAILY_TARGET ? 'bg-emerald-500/70' : x.p > 0 ? 'bg-amber-400/60' : isWeekend(x.d) ? 'bg-white/[0.05]' : 'bg-rose-500/55'}`} />)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p className="text-[10.5px] text-white/35 mt-2">綠＝達標 20 分、黃＝有做未達標、紅＝平日沒做、灰＝週末或未到的日子。把滑鼠移到格子上可看當天分數。</p>
+                  </div>
+                  <div className="border-t border-white/10 pt-3"><ActivityMonthlyOverview activities={activities} team={members} loggedInUser={loggedInUser} embedded /></div>
+                </div>
+              )}
+            </Panel>
             <div className="flex flex-col gap-3 min-h-0">
-              {isCurWeek ? (<>
-                <KPI icon={CheckCircle2} label="今日達標" value={`${reached}/${actRows.length}`} unit="人" sub="目標 20 分" color="#34d399" />
-                <KPI icon={AlertTriangle} label="今日未建檔" value={emptyToday} unit="人" sub="需要關心" color="#fb7185" />
-              </>) : (<>
-                <KPI icon={CheckCircle2} label="當週達標" value={`${selWeekReached}/${actRows.length}`} unit="人" sub={`目標 ${WEEKLY_TARGET} 分`} color="#34d399" />
-                <KPI icon={AlertTriangle} label="當週零活動" value={selWeekZero} unit="人" sub="整週沒有建檔" color="#fb7185" />
+              {actPeriod === 'day' && (<>
+                <KPI icon={CheckCircle2} label="當日達標" value={`${dayReached}/${dayRows.length}`} unit="人" sub={`目標 ${DAILY_TARGET} 分`} color="#34d399" />
+                <KPI icon={AlertTriangle} label="當日未建檔" value={dayZero.length} unit="人" sub={dayZero.length ? '需要關心' : '全員有做'} color="#fb7185" />
+                <KPI icon={TrendingUp} label="當日全隊總分" value={dayTotal} unit="分" sub={`${members.length} 人`} color="#fbbf24" />
               </>)}
-              <KPI icon={Target} label={isCurWeek ? '本週平均達成' : '當週平均達成'} value={isCurWeek ? weekAvg : selWeekAvg} unit="%" sub={`目標 ${WEEKLY_TARGET} 分`} color="#818cf8" />
-              <KPI icon={TrendingUp} label={isCurWeek ? '本月全隊總分' : '當週全隊總分'} value={isCurWeek ? monthTotal : selWeekTotal} unit="分" sub={`${members.length} 人`} color="#fbbf24" />
+              {actPeriod === 'week' && (<>
+                {isCurWeek ? (<>
+                  <KPI icon={CheckCircle2} label="今日達標" value={`${reached}/${actRows.length}`} unit="人" sub="目標 20 分" color="#34d399" />
+                  <KPI icon={AlertTriangle} label="今日未建檔" value={emptyToday} unit="人" sub="需要關心" color="#fb7185" />
+                </>) : (<>
+                  <KPI icon={CheckCircle2} label="當週達標" value={`${selWeekReached}/${actRows.length}`} unit="人" sub={`目標 ${WEEKLY_TARGET} 分`} color="#34d399" />
+                  <KPI icon={AlertTriangle} label="當週零活動" value={selWeekZero} unit="人" sub="整週沒有建檔" color="#fb7185" />
+                </>)}
+                <KPI icon={Target} label={isCurWeek ? '本週平均達成' : '當週平均達成'} value={isCurWeek ? weekAvg : selWeekAvg} unit="%" sub={`目標 ${WEEKLY_TARGET} 分`} color="#818cf8" />
+                <KPI icon={TrendingUp} label={isCurWeek ? '本月全隊總分' : '當週全隊總分'} value={isCurWeek ? monthTotal : selWeekTotal} unit="分" sub={`${members.length} 人`} color="#fbbf24" />
+              </>)}
+              {actPeriod === 'month' && (<>
+                <KPI icon={TrendingUp} label="當月全隊總分" value={monthActTotal} unit="分" sub={`${members.length} 人`} color="#fbbf24" />
+                <KPI icon={Target} label="平均每人" value={members.length ? Math.round(monthActTotal / members.length) : 0} unit="分" sub={actMonth} color="#818cf8" />
+                <KPI icon={AlertTriangle} label="平日漏建檔最多" value={monthRowsAct.slice().sort((a, b) => b.missed - a.missed)[0]?.missed ? monthRowsAct.slice().sort((a, b) => b.missed - a.missed)[0].m.name : '—'} sub={monthRowsAct.slice().sort((a, b) => b.missed - a.missed)[0]?.missed ? `${monthRowsAct.slice().sort((a, b) => b.missed - a.missed)[0].missed} 個平日沒做` : '沒有漏的'} color="#fb7185" />
+              </>)}
+            </div>
+          </div>
+        )}
+        {section === 'goals' && (
+          <div className="grid grid-cols-[1fr_280px] gap-3 flex-1 min-h-0">
+            <Panel title={`個人目標完成進度（${month}，首頁設定的目標）`} icon={Target} tone="text-sky-300">
+              {!goalRowsAll ? <p className="text-white/40 text-sm text-center py-6">讀取中…</p> : (
+                <div className="space-y-3">
+                  {goalRowsAll.map(({ m, g, items, avg }) => (
+                    <div key={m.id} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <Avatar name={m.name} size={28} /><span className="font-semibold text-[13.5px]">{m.name}</span>
+                        <span className="ml-auto text-[12px] tabular-nums">{avg === null ? <span className="text-rose-300">{g ? '目標都是 0' : '本月未設定目標'}</span> : <b className={avg >= 100 ? 'text-emerald-300' : 'text-white'}>平均 {avg}%</b>}</span>
+                      </div>
+                      {items.length > 0 && <div className="grid grid-cols-3 gap-4">
+                        {items.map(x => (
+                          <div key={x.l}>
+                            <div className="flex justify-between text-[11.5px] mb-1"><span className="text-white/55">{x.l}</span><span className="tabular-nums text-white/80">{x.money ? money(x.a) : x.a}<span className="text-white/35"> / {x.t > 0 ? (x.money ? money(x.t) : x.t) : '未設'}</span></span></div>
+                            <Bar v={pct(x.a, x.t)} color={x.t > 0 && x.a >= x.t ? '#34d399' : x.c} />
+                          </div>
+                        ))}
+                      </div>}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </Panel>
+            <div className="flex flex-col gap-3 min-h-0">
+              <KPI icon={Users} label="已設定目標" value={goalRowsAll ? goalRowsAll.filter(r => r.avg !== null).length : '—'} unit={`/ ${members.length} 人`} sub="首頁「設定本月目標」" color="#60a5fa" />
+              <KPI icon={AlertTriangle} label="尚未設定" value={goalRowsAll ? goalRowsAll.filter(r => r.avg === null).length : '—'} unit="人" sub="提醒他們到首頁設定" color="#fb7185" />
+              <KPI icon={Target} label="平均完成率" value={goalRowsAll && goalRowsAll.some(r => r.avg !== null) ? Math.round(goalRowsAll.filter(r => r.avg !== null).reduce((sum, r) => sum + r.avg, 0) / goalRowsAll.filter(r => r.avg !== null).length) : '—'} unit="%" sub="有設定目標者" color="#34d399" />
             </div>
           </div>
         )}
@@ -3721,7 +3940,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
         )}
         {section === 'quality' && (
           <div className="grid grid-cols-[1fr_280px] gap-3 flex-1 min-h-0">
-            <Panel title="優培狀況" icon={Award} tone="text-orange-300">{qualityList(30)}</Panel>
+            <Panel title="優培狀況（點成員展開細項）" icon={Award} tone="text-orange-300">{qualityList(30, true)}</Panel>
             <div className="flex flex-col gap-3 min-h-0">
               <KPI icon={Award} label="進行中" value={qualActive} unit="人" sub="每階段 3 個月" color="#fb923c" />
               <KPI icon={AlertTriangle} label="未填期別" value={qualUnset} unit="人" sub="請到個人設定補上" color="#fb7185" />
@@ -3737,7 +3956,31 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
                   <div className="flex-1 space-y-2">{buckets.map(b => <div key={b.key} className="flex items-center gap-2 text-[13px]"><i className="w-2.5 h-2.5 rounded-sm" style={{ background: b.color }} /><span className="text-white/80">{b.label}</span><span className="ml-auto tabular-nums">{money(b.prem)}</span></div>)}</div></div>
               </Panel>
             </div>
-            <Panel title="團隊案件列表" icon={Users}>{caseTable(40)}</Panel>
+            <div className="flex flex-col gap-3 min-h-0 min-w-0">
+              <Panel title="團隊案件列表" icon={Users} className="flex-1">{caseTable(40)}</Panel>
+              <Panel title="預計要談的商機（評估後續業績）" icon={DollarSign} tone="text-emerald-300" className="flex-1">
+                <div className="grid grid-cols-4 gap-2 mb-3">
+                  {[['已逾期', dealBuckets.overdue, '#fb7185'], ['本月預計', dealBuckets.thisM, '#34d399'], ['下月預計', dealBuckets.nextM, '#60a5fa'], ['更晚／未填', [...dealBuckets.later, ...dealBuckets.none], '#a78bfa']].map(([l, list, c]) => (
+                    <div key={l} className="rounded-xl border border-white/10 bg-white/[0.04] px-2.5 py-2"><p className="text-[11px]" style={{ color: c }}>{l}</p><p className="text-[17px] font-black tabular-nums leading-tight">{money(dealSum(list))}</p><p className="text-[10.5px] text-white/40">{list.length} 件</p></div>
+                  ))}
+                </div>
+                {dealByOwner.length > 0 && <div className="flex flex-wrap gap-1.5 mb-3">{dealByOwner.map(x => <span key={x.m.id} className="px-2 py-1 rounded-md text-[11px] border border-white/15 bg-white/[0.04] tabular-nums">{x.m.name} {x.n} 件・{money(x.prem)}</span>)}</div>}
+                <table className="w-full text-[12.5px]">
+                  <thead className="text-white/40 text-[11px]"><tr className="text-left"><th className="font-normal pb-1.5">業務</th><th className="font-normal pb-1.5">客戶／商品</th><th className="font-normal pb-1.5 text-right">預估保費</th><th className="font-normal pb-1.5 pl-3">階段</th><th className="font-normal pb-1.5 pl-3">預計日</th></tr></thead>
+                  <tbody>
+                    {dealBuckets.sorted.map(d => { const late = d.expectedCloseDate && d.expectedCloseDate < today; return (
+                      <tr key={d.id} className="border-t border-white/[0.07]">
+                        <td className="py-1.5 whitespace-nowrap font-semibold">{nameOf(d.ownerId)}</td>
+                        <td className="max-w-[170px] truncate">{d.customerName || '—'}<span className="text-white/40"> {d.product ? `・${d.product}` : ''}</span></td>
+                        <td className="text-right tabular-nums whitespace-nowrap">{money(Number(d.estimatedPremium) || 0)}</td>
+                        <td className="pl-3 whitespace-nowrap text-white/70">{d.stage || '—'}</td>
+                        <td className={`pl-3 whitespace-nowrap tabular-nums ${late ? 'text-rose-300 font-bold' : 'text-white/65'}`}>{d.expectedCloseDate ? d.expectedCloseDate.slice(5).replace('-', '/') : '未填'}{late ? '（逾期）' : ''}</td>
+                      </tr>); })}
+                  </tbody>
+                </table>
+                {dealBuckets.sorted.length === 0 && <p className="text-white/40 text-sm text-center py-6">目前沒有進行中的商機</p>}
+              </Panel>
+            </div>
           </div>
         )}
         {section === 'recruit' && (
