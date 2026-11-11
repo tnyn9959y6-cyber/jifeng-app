@@ -1205,7 +1205,7 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
 
 // --- 手機版：MEA 活動量（深色玻璃風，重點先看、快速記錄） ---
 const MEA_ROW_TARGETS = { prospect: 80, appointment: 100, interview: 60, proposal: 60, application: 60, issue: 40 };
-const MobileActivityView = ({ team, selectedAgentId, setSelectedAgentId, viewMode, setViewMode, periodMode, setPeriodMode, periodRange, selectedMonth, setSelectedMonth, currentMonths, shiftWeek, stats, monthlyTrend, activities, canEdit, formData, setFormData, handleSubmit, isSubmitting, onSearch, onOverview, plan, planFrom }) => {
+const MobileActivityView = ({ team, selectedAgentId, setSelectedAgentId, viewMode, setViewMode, periodMode, setPeriodMode, periodRange, selectedMonth, setSelectedMonth, currentMonths, shiftWeek, stats, monthlyTrend, activities, canEdit, formData, setFormData, handleSubmit, isSubmitting, onSearch, onOverview, plan, planFrom, convAlerts }) => {
   const [goal, setGoal] = useState(() => { try { const v = Number(localStorage.getItem('jf_mea_goal')); return v > 0 ? v : 400; } catch (e) { return 400; } });
   const [editGoal, setEditGoal] = useState(false);
   const [goalInput, setGoalInput] = useState('');
@@ -1341,6 +1341,8 @@ const MobileActivityView = ({ team, selectedAgentId, setSelectedAgentId, viewMod
         ))}
       </div>
 
+      {convAlerts && convAlerts.length > 0 && <div className="mb-3"><ConversionAlerts alerts={convAlerts} /></div>}
+
       {/* 預警 */}
       {warn && (
         <div className="rounded-3xl border border-red-400/25 bg-red-500/10 px-4 py-3.5 mb-3 flex items-start gap-3">
@@ -1358,7 +1360,7 @@ const MobileActivityView = ({ team, selectedAgentId, setSelectedAgentId, viewMod
       {/* 快速記錄 */}
       <div className={`${glass} p-4 mb-3`}>
         <div className="flex items-center justify-between mb-3">
-          <div><p className="text-[15px] font-bold">快速記錄今日活動</p><p className="text-[10.5px] text-white/40 mt-0.5">{plan ? `斜線後面是今天要完成的次數（由本月目標換算${planFrom ? `，沿用自 ${planFrom}` : ''}）` : '到首頁「設定本月目標」後，這裡會出現每天的行動目標'}</p></div>
+          <div><p className="text-[15px] font-bold">快速記錄今日活動</p><p className="text-[10.5px] text-white/40 mt-0.5">{plan ? `斜線後面是今天要完成的次數（由本月目標換算${planFrom ? `，沿用自 ${planFrom}` : ''}）` : '每日行動目標只顯示本人的'}</p></div>
           {canEdit && lastKeys ? <button onClick={undo} className="text-[12px] font-bold text-white/55 active:text-white">↶ 撤銷</button> : <span className="text-[11px] text-white/35">{canEdit ? '點一下 +1' : '僅限本人'}</span>}
         </div>
         <div className="grid grid-cols-3 gap-2.5">
@@ -1802,19 +1804,27 @@ const MEA_RATIO_DEFS = {
     { k: 'r4', label: '成交率(發單÷面談)', from: 'interview', to: 'issue', color: '#34d399' }
   ],
   recruit: [
-    { k: 'r1', label: '準增員→約訪', from: 'newRecruitProspect', to: 'recruitContact', color: '#60a5fa' },
-    { k: 'r2', label: '約訪→初次面談', from: 'recruitContact', to: 'recruitFirst', color: '#a78bfa' },
-    { k: 'r3', label: '初次→深度面談', from: 'recruitFirst', to: 'recruitInterview', color: '#fbbf24' },
+    { k: 'r1', label: '約訪→初次面談', from: 'recruitContact', to: 'recruitFirst', color: '#60a5fa' },
+    { k: 'r2', label: '初次→深度面談', from: 'recruitFirst', to: 'recruitInterview', color: '#a78bfa' },
+    { k: 'r3', label: '深度面談→內/外考', from: 'recruitInterview', to: 'recruitExam', color: '#fbbf24' },
     { k: 'r4', label: '內/外考→登錄', from: 'recruitExam', to: 'recruitRegistered', color: '#34d399' }
-  ]
+  ],
+  all: []
 };
 const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embedded = false }) => {
-  const [mode, setMode] = useState('sales');
-  const [scope, setScope] = useState(embedded ? 'team' : 'me');
+  const [mode, setMode] = useState('all');
+  const [scope, setScope] = useState(embedded ? 'team' : String(loggedInUser?.id || 'team'));
   const [span, setSpan] = useState(12);
-  const weights = mode === 'sales' ? ACTIVITY_WEIGHTS : RECRUIT_ACTIVITY_WEIGHTS;
+  const weights = mode === 'sales' ? ACTIVITY_WEIGHTS : mode === 'recruit' ? RECRUIT_ACTIVITY_WEIGHTS : ALL_ACTIVITY_WEIGHTS;
   const defs = MEA_RATIO_DEFS[mode];
-  const ids = useMemo(() => new Set((scope === 'me' ? [loggedInUser?.id] : (team || []).map(m => m.id)).filter(Boolean).map(String)), [scope, team, loggedInUser]);
+  // 可選人員：單位內任何人（嵌入時用傳入的成員，否則用登入者底下整條線）
+  const unit = useMemo(() => {
+    const all = team || [];
+    if (embedded) return all;
+    const root = all.find(m => String(m.id) === String(loggedInUser?.id));
+    return root ? getDistrictMembers(all, root.name) : (loggedInUser ? [loggedInUser] : []);
+  }, [team, embedded, loggedInUser]);
+  const ids = useMemo(() => new Set((scope === 'team' ? unit.map(m => m.id) : [scope]).filter(Boolean).map(String)), [scope, unit]);
   const rows = useMemo(() => {
     const now = new Date();
     const list = Array.from({ length: span }, (_, i) => {
@@ -1834,7 +1844,7 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
       defs.forEach(d => { row[d.k] = c[d.from] > 0 ? Math.round(c[d.to] / c[d.from] * 1000) / 10 : null; });
       return row;
     });
-  }, [activities, ids, span, mode]);
+  }, [activities, ids, span, mode, weights, defs]);
   const cur = rows[rows.length - 1], prev = rows[rows.length - 2];
   const delta = prev && prev.points > 0 ? Math.round((cur.points - prev.points) / prev.points * 100) : null;
   const best = rows.reduce((b, r) => (r.points > b.points ? r : b), rows[0]);
@@ -1852,8 +1862,11 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
         </div>
       </div>}
       <div className="flex flex-wrap gap-2">
-        <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[['sales', '業務', 'bg-blue-600'], ['recruit', '增員', 'bg-teal-600']].map(([k, l, c]) => <button key={k} type="button" onClick={() => setMode(k)} className={chip(mode === k, c)}>{l}</button>)}</div>
-        <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[['me', '我自己'], ['team', '全隊合計']].map(([k, l]) => <button key={k} type="button" onClick={() => setScope(k)} className={chip(scope === k)}>{l}</button>)}</div>
+        <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[['all', '合計', 'bg-indigo-600'], ['sales', '業務', 'bg-blue-600'], ['recruit', '增員', 'bg-teal-600']].map(([k, l, c]) => <button key={k} type="button" onClick={() => setMode(k)} className={chip(mode === k, c)}>{l}</button>)}</div>
+        <select value={scope} onChange={e => setScope(e.target.value)} className="h-10 rounded-xl border border-white/15 bg-[#0c1020] text-white text-[13px] font-bold px-3 max-w-[220px]">
+          <option value="team">全單位合計（{unit.length} 人）</option>
+          {unit.map(m => <option key={m.id} value={String(m.id)}>{m.name}{String(m.id) === String(loggedInUser?.id) ? '（我）' : ''}</option>)}
+        </select>
         <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[[6, '近6個月'], [12, '近12個月']].map(([k, l]) => <button key={k} type="button" onClick={() => setSpan(k)} className={chip(span === k)}>{l}</button>)}</div>
       </div>
       <div className="grid grid-cols-3 gap-2.5">
@@ -1870,13 +1883,13 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
               <XAxis dataKey="label" tick={{ fill: 'rgba(255,255,255,.5)', fontSize: 11 }} axisLine={false} tickLine={false} />
               <YAxis tick={{ fill: 'rgba(255,255,255,.4)', fontSize: 11 }} axisLine={false} tickLine={false} />
               <Tooltip contentStyle={tip} formatter={(v) => [`${v} 分`, '總分']} />
-              <Bar dataKey="points" fill={mode === 'sales' ? '#3b82f6' : '#14b8a6'} radius={[6, 6, 0, 0]} />
+              <Bar dataKey="points" fill={mode === 'sales' ? '#3b82f6' : mode === 'recruit' ? '#14b8a6' : '#6366f1'} radius={[6, 6, 0, 0]} />
               <Line type="monotone" dataKey="points" stroke="#fbbf24" strokeWidth={2} dot={{ r: 3 }} />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
       </div>
-      <div className={`${glass} p-4`}>
+      {defs.length > 0 ? <div className={`${glass} p-4`}>
         <p className="font-bold text-[15px] mb-2">轉換率每月變化（%）</p>
         <div style={{ height: 240 }}>
           <ResponsiveContainer width="100%" height="100%">
@@ -1890,7 +1903,7 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
             </LineChart>
           </ResponsiveContainer>
         </div>
-      </div>
+      </div> : <p className="text-[12px] text-white/45 px-1">「合計」＝業務＋增員總分，與活動量主畫面的總分一致；要看轉換率請切換到「業務」或「增員」。</p>}
       <div className={`${glass} p-3 overflow-x-auto`}>
         <table className="w-full text-[12.5px] min-w-[520px]">
           <thead className="text-white/45 text-[11px]"><tr className="text-right"><th className="text-left font-normal pb-1.5">月份</th><th className="font-normal pb-1.5">總分</th>{defs.map(d => <th key={d.k} className="font-normal pb-1.5 pl-2" style={{ color: d.color }}>{d.label}</th>)}</tr></thead>
@@ -1918,8 +1931,10 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
   const currentMonths = season === 'H1' ? AVAILABLE_MONTHS_H1 : AVAILABLE_MONTHS_H2;
   const [selectedAgentId, setSelectedAgentId] = useState('');
   const plan = useMemo(() => (loggedInUser && selectedAgentId && String(selectedAgentId) === String(loggedInUser.id))
-    ? computeActivityPlan({ goals: effGoals.goals, agentId: loggedInUser.id, records, activities, month: planMonth }) : null,
-    [effGoals.goals, loggedInUser, selectedAgentId, records, activities, planMonth]);
+    ? computeActivityPlan({ goals: effGoals.goals, month: planMonth }) : null,
+    [effGoals.goals, loggedInUser, selectedAgentId, planMonth]);
+  // 轉換率低於公版的提醒（看誰的活動量就算誰的，主管看團隊成員時也看得到）
+  const convAlerts = useMemo(() => computeConversionAlerts({ agentId: selectedAgentId, activities, month: planMonth }), [selectedAgentId, activities, planMonth]);
   
   const [selectedMonth, setSelectedMonth] = useState(() => {
      const current = getCurrentMonth();
@@ -2134,7 +2149,7 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
 
   return (
     <>
-    <MobileActivityView team={team} selectedAgentId={selectedAgentId} setSelectedAgentId={setSelectedAgentId} viewMode={viewMode} setViewMode={setViewMode} periodMode={periodMode} setPeriodMode={setPeriodMode} periodRange={periodRange} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} currentMonths={currentMonths} shiftWeek={shiftWeek} stats={stats} monthlyTrend={monthlyTrend} activities={activities} canEdit={canEditMobile} formData={formData} setFormData={setFormData} handleSubmit={handleSubmit} isSubmitting={isSubmitting} onSearch={onSearch} onOverview={() => setShowOverview(true)} plan={plan} planFrom={effGoals.own ? '' : effGoals.from} />
+    <MobileActivityView team={team} selectedAgentId={selectedAgentId} setSelectedAgentId={setSelectedAgentId} viewMode={viewMode} setViewMode={setViewMode} periodMode={periodMode} setPeriodMode={setPeriodMode} periodRange={periodRange} selectedMonth={selectedMonth} setSelectedMonth={setSelectedMonth} currentMonths={currentMonths} shiftWeek={shiftWeek} stats={stats} monthlyTrend={monthlyTrend} activities={activities} canEdit={canEditMobile} formData={formData} setFormData={setFormData} handleSubmit={handleSubmit} isSubmitting={isSubmitting} onSearch={onSearch} onOverview={() => setShowOverview(true)} plan={plan} planFrom={effGoals.own ? '' : effGoals.from} convAlerts={convAlerts} />
     <div className="hidden md:flex flex-col gap-3 h-full md:min-h-[840px] text-white animate-fade-in">
       {/* 標題＋選擇器＋公式 */}
       <div className="grid grid-cols-[1fr_auto] gap-3 shrink-0">
@@ -2197,6 +2212,8 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
           <p className="text-[13px] font-semibold text-rose-200">活動量未達標預警　{stats.totalPoints < 400 && <span className="mr-5">活動量總分 {stats.totalPoints} 分（目標 400）</span>}{stats.interviewPoints < 60 && <span>面談總分 {stats.interviewPoints} 分（目標 60）</span>}</p>
         </div>
       )}
+
+      {convAlerts && convAlerts.length > 0 && <div className="shrink-0"><ConversionAlerts alerts={convAlerts} /></div>}
 
       {/* KPI */}
       <div className="grid grid-cols-5 gap-3 shrink-0">
@@ -2262,15 +2279,17 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
               </BarChart>
             </ResponsiveContainer>
           </div>
-          <div className={`grid ${viewMode === 'sales' ? 'grid-cols-4' : 'grid-cols-3'} gap-3 shrink-0 mt-1.5 pt-2 border-t border-white/10 text-center`}>
+          <div className={`grid ${viewMode === 'sales' ? 'grid-cols-4' : 'grid-cols-5'} gap-3 shrink-0 mt-1.5 pt-2 border-t border-white/10 text-center`}>
             {viewMode === 'sales' ? (<>
               <div><p className="text-[11px] text-white/50">約訪轉換面談</p><p className="text-[18px] font-bold text-blue-300">{stats.totals.appointment > 0 ? Math.round((stats.totals.interview / stats.totals.appointment) * 100) : 0}%</p></div>
               <div className="border-l border-white/10"><p className="text-[11px] text-white/50">面談轉換建議書</p><p className="text-[18px] font-bold text-violet-300">{stats.totals.interview > 0 ? Math.round((stats.totals.proposal / stats.totals.interview) * 100) : 0}%</p></div>
               <div className="border-l border-white/10"><p className="text-[11px] text-white/50">建議書轉換受理</p><p className="text-[18px] font-bold text-amber-300">{stats.totals.proposal > 0 ? Math.round((stats.totals.application / stats.totals.proposal) * 100) : 0}%</p></div>
               <div className="rounded-xl border border-rose-400/30 bg-rose-500/10"><p className="text-[11px] text-rose-300">成交率 (C) = 發單/面談</p><p className="text-[18px] font-bold text-rose-300">{(stats.C * 100).toFixed(1)}%</p></div>
             </>) : (<>
-              <div><p className="text-[11px] text-white/50">準增員轉換約訪</p><p className="text-[20px] font-bold text-teal-300">{stats.recruitTotals.newRecruitProspect > 0 ? Math.round((stats.recruitTotals.recruitContact / stats.recruitTotals.newRecruitProspect) * 100) : 0}%</p></div>
-              <div className="border-l border-white/10"><p className="text-[11px] text-white/50">約訪轉換面談</p><p className="text-[20px] font-bold text-cyan-300">{stats.recruitTotals.recruitContact > 0 ? Math.round((((stats.recruitTotals.recruitFirst || 0) + (stats.recruitTotals.recruitInterview || 0)) / stats.recruitTotals.recruitContact) * 100) : 0}%</p></div>
+              <div><p className="text-[11px] text-white/50">約訪轉換初次面談</p><p className="text-[18px] font-bold text-blue-300">{stats.recruitTotals.recruitContact > 0 ? Math.round((stats.recruitTotals.recruitFirst / stats.recruitTotals.recruitContact) * 100) : 0}%</p></div>
+              <div className="border-l border-white/10"><p className="text-[11px] text-white/50">初次轉換深度面談</p><p className="text-[18px] font-bold text-violet-300">{stats.recruitTotals.recruitFirst > 0 ? Math.round((stats.recruitTotals.recruitInterview / stats.recruitTotals.recruitFirst) * 100) : 0}%</p></div>
+              <div className="border-l border-white/10"><p className="text-[11px] text-white/50">深度面談轉內/外考</p><p className="text-[18px] font-bold text-amber-300">{stats.recruitTotals.recruitInterview > 0 ? Math.round((stats.recruitTotals.recruitExam / stats.recruitTotals.recruitInterview) * 100) : 0}%</p></div>
+              <div className="border-l border-white/10"><p className="text-[11px] text-white/50">內/外考轉登錄</p><p className="text-[18px] font-bold text-emerald-300">{stats.recruitTotals.recruitExam > 0 ? Math.round((stats.recruitTotals.recruitRegistered / stats.recruitTotals.recruitExam) * 100) : 0}%</p></div>
               <div className="rounded-xl border border-blue-400/30 bg-blue-500/10"><p className="text-[11px] text-blue-300">面談轉登錄率 (C)</p><p className="text-[20px] font-bold text-blue-300">{(stats.recruitConversion * 100).toFixed(1)}%</p></div>
             </>)}
           </div>
@@ -3344,12 +3363,13 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const [qualOpen, setQualOpen] = useState({});
   const [goals, setGoals] = useState(PERSONAL_GOALS_DEFAULT);
   const [goalsAll, setGoalsAll] = useState(null);
+  const [goalOpen, setGoalOpen] = useState({});
   const [deals, setDeals] = useState([]);
 
   useEffect(() => {
     if (!loggedInUser) return;
     const unsub = onSnapshot(doc(db, 'personal_goals', `${loggedInUser.id}_${month}`), (snap) => {
-      setGoals(snap.exists() ? { ...PERSONAL_GOALS_DEFAULT, ...snap.data() } : PERSONAL_GOALS_DEFAULT);
+      setGoals(normalizeGoals(snap.exists() ? snap.data() : {}));
     });
     return () => unsub();
   }, [loggedInUser?.id, month]);
@@ -3478,6 +3498,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const mySales = myRecs.reduce((s, r) => s + (goals.salesBasis === 'premium' ? (r.premium || 0) : (r.weighted || 0)), 0);
   const myIncome = myRecs.filter(r => (r.status || '已發單') === '已發單').reduce((s, r) => s + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0);
   const myRecruit = (activities || []).filter(a => a.agentId === loggedInUser.id && a.month === month).reduce((s, a) => s + (a.recruitRegistered || 0), 0);
+  const myExam = (activities || []).filter(a => a.agentId === loggedInUser.id && a.month === month).reduce((s, a) => s + (a.recruitExam || 0), 0);
 
   // ---- 活動量：日／月視角 ----
   const isWeekend = (d) => { const w = dayOfWeek(d); return w === 0 || w === 6; };
@@ -3514,21 +3535,29 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const goalRowsAll = useMemo(() => {
     if (!goalsAll) return null;
     return members.map(m => {
-      const g = goalsAll[String(m.id)];
+      const raw = goalsAll[String(m.id)];
+      const g = normalizeGoals(raw || {});
+      const isDefault = !raw;
       const myR = distRecords.filter(r => String(r.agentId) === String(m.id) && (r.date || '').startsWith(month));
-      const sales = myR.reduce((sum, r) => sum + ((g?.salesBasis === 'premium') ? (r.premium || 0) : (r.weighted || 0)), 0);
+      const sales = myR.reduce((sum, r) => sum + (r.premium || 0), 0);
       const income = myR.filter(r => (r.status || '已發單') === '已發單').reduce((sum, r) => sum + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0);
-      const rec = (activities || []).filter(a => String(a.agentId) === String(m.id) && a.month === month).reduce((sum, a) => sum + (a.recruitRegistered || 0), 0);
-      const items = g ? [
-        { l: g.salesBasis === 'premium' ? '業績（實收）' : '業績（加權）', a: sales, t: g.salesTarget, money: true, c: '#60a5fa' },
-        { l: '增員人數', a: rec, t: g.recruitTarget, unit: '人', c: '#2dd4bf' },
+      const myActs = (activities || []).filter(a => String(a.agentId) === String(m.id) && a.month === month);
+      const rec = myActs.reduce((sum, a) => sum + (a.recruitRegistered || 0), 0);
+      const examDone = myActs.reduce((sum, a) => sum + (a.recruitExam || 0), 0);
+      const done = {}, todayDone = {};
+      myActs.forEach(a => { Object.keys(ALL_ACTIVITY_WEIGHTS).forEach(k => { done[k] = (done[k] || 0) + (Number(a[k]) || 0); if (a.date === today) todayDone[k] = (todayDone[k] || 0) + (Number(a[k]) || 0); }); });
+      const items = [
+        { l: '業績（實收）', a: sales, t: g.salesTarget, money: true, c: '#60a5fa' },
+        { l: '進入考試', a: examDone, t: g.examTarget, unit: '人', c: '#22d3ee' },
+        { l: '增員登錄', a: rec, t: g.recruitTarget, unit: '人', c: '#2dd4bf' },
         { l: '預估收入', a: Math.round(income), t: g.incomeTarget, money: true, c: '#fbbf24' },
-      ] : [];
-      const set = items.filter(x => x.t > 0);
-      const avg = set.length ? Math.round(set.reduce((sum, x) => sum + Math.min(1, x.a / x.t), 0) / set.length * 100) : null;
-      return { m, g, items, avg };
+      ];
+      const avg = Math.round(items.reduce((sum, x) => sum + Math.min(1, x.a / x.t), 0) / items.length * 100);
+      const plan = computeActivityPlan({ goals: g, month });
+      const alerts = computeConversionAlerts({ agentId: m.id, activities, month });
+      return { m, g, items, avg, isDefault, plan, alerts, done, todayDone };
     }).sort((a, b) => (b.avg ?? -1) - (a.avg ?? -1));
-  }, [goalsAll, members, distRecords, activities, month]);
+  }, [goalsAll, members, distRecords, activities, month, today]);
 
   const card = 'rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl';
   const Panel = ({ title, icon: Ic, tone = 'text-blue-300', right, children, className = '' }) => (
@@ -3769,7 +3798,8 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   );
   const goalRows = [
     { l: '業績（' + (goals.salesBasis === 'premium' ? '實收' : '加權') + '）', a: mySales, t: goals.salesTarget, money: true, c: '#60a5fa', icon: TrendingUp },
-    { l: '增員人數', a: myRecruit, t: goals.recruitTarget, unit: '人', c: '#2dd4bf', icon: Users },
+    { l: '增員（進入考試）', a: myExam, t: goals.examTarget, unit: '人', c: '#22d3ee', icon: Users },
+    { l: '增員（登錄）', a: myRecruit, t: goals.recruitTarget, unit: '人', c: '#2dd4bf', icon: Users },
     { l: '預估收入', a: Math.round(myIncome), t: goals.incomeTarget, money: true, c: '#fbbf24', icon: Award },
   ];
   const goalPanel = (
@@ -3905,34 +3935,62 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
           </div>
         )}
         {section === 'goals' && (
-          <div className="grid grid-cols-[1fr_280px] gap-3 flex-1 min-h-0">
-            <Panel title={`個人目標完成進度（${month}，首頁設定的目標）`} icon={Target} tone="text-sky-300">
-              {!goalRowsAll ? <p className="text-white/40 text-sm text-center py-6">讀取中…</p> : (
-                <div className="space-y-3">
-                  {goalRowsAll.map(({ m, g, items, avg }) => (
-                    <div key={m.id} className="rounded-xl border border-white/[0.08] bg-white/[0.03] p-3">
-                      <div className="flex items-center gap-2.5 mb-2">
-                        <Avatar name={m.name} size={28} /><span className="font-semibold text-[13.5px]">{m.name}</span>
-                        <span className="ml-auto text-[12px] tabular-nums">{avg === null ? <span className="text-rose-300">{g ? '目標都是 0' : '本月未設定目標'}</span> : <b className={avg >= 100 ? 'text-emerald-300' : 'text-white'}>平均 {avg}%</b>}</span>
-                      </div>
-                      {items.length > 0 && <div className="grid grid-cols-3 gap-4">
-                        {items.map(x => (
-                          <div key={x.l}>
-                            <div className="flex justify-between text-[11.5px] mb-1"><span className="text-white/55">{x.l}</span><span className="tabular-nums text-white/80">{x.money ? money(x.a) : x.a}<span className="text-white/35"> / {x.t > 0 ? (x.money ? money(x.t) : x.t) : '未設'}</span></span></div>
-                            <Bar v={pct(x.a, x.t)} color={x.t > 0 && x.a >= x.t ? '#34d399' : x.c} />
-                          </div>
-                        ))}
-                      </div>}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </Panel>
-            <div className="flex flex-col gap-3 min-h-0">
-              <KPI icon={Users} label="已設定目標" value={goalRowsAll ? goalRowsAll.filter(r => r.avg !== null).length : '—'} unit={`/ ${members.length} 人`} sub="首頁「設定本月目標」" color="#60a5fa" />
-              <KPI icon={AlertTriangle} label="尚未設定" value={goalRowsAll ? goalRowsAll.filter(r => r.avg === null).length : '—'} unit="人" sub="提醒他們到首頁設定" color="#fb7185" />
-              <KPI icon={Target} label="平均完成率" value={goalRowsAll && goalRowsAll.some(r => r.avg !== null) ? Math.round(goalRowsAll.filter(r => r.avg !== null).reduce((sum, r) => sum + r.avg, 0) / goalRowsAll.filter(r => r.avg !== null).length) : '—'} unit="%" sub="有設定目標者" color="#34d399" />
+          <div className="flex flex-col gap-3 flex-1 min-h-0 overflow-y-auto no-scrollbar">
+            <div className="grid grid-cols-3 gap-3 shrink-0">
+              <KPI icon={Users} label="自訂目標" value={goalRowsAll ? goalRowsAll.filter(r => !r.isDefault).length : '—'} unit={`/ ${members.length} 人`} sub="其餘使用預設（收入 50,000、考試 1、登錄 1）" color="#60a5fa" />
+              <KPI icon={AlertTriangle} label="轉換率待協助" value={goalRowsAll ? goalRowsAll.filter(r => r.alerts.length > 0).length : '—'} unit="人" sub={goalRowsAll ? goalRowsAll.filter(r => r.alerts.length > 0).map(r => r.m.name).slice(0, 4).join('、') || '都在公版以上' : ''} color="#fbbf24" />
+              <KPI icon={Target} label="平均完成率" value={goalRowsAll && goalRowsAll.length ? Math.round(goalRowsAll.reduce((sum, r) => sum + r.avg, 0) / goalRowsAll.length) : '—'} unit="%" sub="業績、考試、登錄、收入平均" color="#34d399" />
             </div>
+            <Panel title={`目標總表：個人目標與先行指標（${month}）`} icon={Target} tone="text-sky-300" right={<span className="text-[11px] text-white/45">格內「完成 / 目標」，下方小字為每日目標與今日完成</span>}>
+              {!goalRowsAll ? <p className="text-white/40 text-sm text-center py-6">讀取中…</p> : (() => {
+                const GOAL_COLS = [['業績(實收)', 'sales'], ['預估收入', 'income'], ['進入考試', 'exam'], ['增員登錄', 'reg']];
+                const IND = [...Object.keys(ACTIVITY_WEIGHTS), ...Object.keys(RECRUIT_ACTIVITY_WEIGHTS)].filter(k => k !== 'recruitRegistered');
+                const goalCell = (r, key) => {
+                  const it = r.items.find(x => x.l === ({ sales: '業績（實收）', income: '預估收入', exam: '進入考試', reg: '增員登錄' })[key]);
+                  const ok = it.a >= it.t;
+                  return <td key={key} className="px-2 py-2 text-right tabular-nums border-l border-white/[0.06]"><span className={ok ? 'text-emerald-300 font-bold' : 'text-white font-bold'}>{it.money ? money(it.a) : it.a}</span><span className="text-white/40"> / {it.money ? money(it.t) : it.t}</span><span className="block text-[10px] text-white/35">{pct(it.a, it.t)}%</span></td>;
+                };
+                return (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-[12px] min-w-[1500px]">
+                      <thead className="text-[11px] text-white/45">
+                        <tr><th className="text-left font-normal px-2 pb-1 sticky left-0 bg-[#0c1020] z-10" rowSpan={2}>成員</th><th colSpan={4} className="font-normal pb-1 text-center border-l border-white/[0.06] text-sky-300">月目標（完成 / 目標）</th><th colSpan={IND.length} className="font-normal pb-1 text-center border-l border-white/[0.06] text-amber-300">先行指標（本月完成 / 本月目標）</th></tr>
+                        <tr>{GOAL_COLS.map(([l]) => <th key={l} className="font-normal px-2 pb-1.5 text-right border-l border-white/[0.06]">{l}</th>)}{IND.map(k => <th key={k} className={`font-normal px-2 pb-1.5 text-right ${k === IND[0] ? 'border-l border-white/[0.06]' : ''} ${RECRUIT_ACTIVITY_WEIGHTS[k] ? 'text-teal-300/80' : ''}`}>{ALL_ACTIVITY_WEIGHTS[k].label}</th>)}</tr>
+                      </thead>
+                      <tbody>
+                        {goalRowsAll.map(r => (
+                          <tr key={r.m.id} className="border-t border-white/[0.07] align-top">
+                            <td className="px-2 py-2 sticky left-0 bg-[#0c1020] z-10 min-w-[130px]">
+                              <span className="flex items-center gap-2"><Avatar name={r.m.name} size={24} /><span className="font-semibold">{r.m.name}</span></span>
+                              <span className="flex flex-wrap gap-1 mt-1">
+                                {r.isDefault && <span className="text-[9.5px] px-1.5 rounded bg-white/10 text-white/50">預設目標</span>}
+                                {r.alerts.length > 0 && <span className="text-[9.5px] px-1.5 rounded bg-amber-500/20 text-amber-300 font-bold" title={r.alerts.map(x => x.label + ' ' + alertText(x)).join('\n')}>轉換率待協助 {r.alerts.length}</span>}
+                              </span>
+                            </td>
+                            {goalCell(r, 'sales')}{goalCell(r, 'income')}{goalCell(r, 'exam')}{goalCell(r, 'reg')}
+                            {IND.map(k => {
+                              const t = r.plan.monthly[k], d = r.done[k] || 0, pd = r.plan.perDay[k], td = r.todayDone[k] || 0;
+                              return <td key={k} className={`px-2 py-2 text-right tabular-nums ${k === IND[0] ? 'border-l border-white/[0.06]' : ''}`}>
+                                <span className={d >= t ? 'text-emerald-300 font-bold' : 'text-white font-bold'}>{d}</span><span className="text-white/40"> / {t}</span>
+                                <span className={`block text-[10px] ${pd && td >= pd ? 'text-emerald-300/80' : 'text-white/35'}`}>{pd ? `日${pd}・今${td}` : `週${Math.max(1, Math.ceil(t * 5 / r.plan.workdays))}・今${td}`}</span>
+                              </td>;
+                            })}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                );
+              })()}
+              <p className="text-[10.5px] text-white/35 mt-2">換算方式：收入 ÷ 首獎率 30% = 實收保費，÷ 件均 60,000 = 發單件數，再依公版轉換率（約訪→面談 33%、面談→建議書 33%、建議書→受理 40%、受理→發單 50%）往前推；增員由「進入考試」往前推（各階段預設 50%）。每日 = 月目標 ÷ 本月工作日（週一到週五），月次數少於工作日的項目改看每週。</p>
+            </Panel>
+            {goalRowsAll && goalRowsAll.some(r => r.alerts.length > 0) && (
+              <Panel title="轉換率低於公版：需要主管協助的人" icon={AlertTriangle} tone="text-amber-300">
+                <div className="grid grid-cols-2 gap-3">
+                  {goalRowsAll.filter(r => r.alerts.length > 0).map(r => <ConversionAlerts key={r.m.id} alerts={r.alerts} name={r.m.name} compact={false} />)}
+                </div>
+              </Panel>
+            )}
           </div>
         )}
         {section === 'contest' && (
@@ -8644,11 +8702,22 @@ const BatchScheduleModal = ({ isOpen, onClose, loggedInUser, team }) => {
 };
 
 // --- 個人業績目標 (業績/增員/收入 三合一，放在今日待辦最上方) ---
-const PERSONAL_GOALS_DEFAULT = { salesTarget: 0, salesBasis: 'weighted', recruitTarget: 0, incomeTarget: 0 };
+// 個人目標：每人預設「每月收入(首獎) 50,000」與「每月進入考試 1 人」，可自由調整；業績(實收保費)目標由收入自動換算
+const PLAN_DEFAULT_INCOME = 50000;
+const PLAN_DEFAULT_RECRUIT = 1; // 每月增員（登錄）目標
+const PLAN_DEFAULT_EXAM = 1; // 每月進入考試目標
+const PLAN_FIRST_YEAR_RATE = 0.30; // 首獎率：手冊範例 首獎36,000 ÷ 實收保費120,000
+const PERSONAL_GOALS_DEFAULT = { salesTarget: Math.round(PLAN_DEFAULT_INCOME / PLAN_FIRST_YEAR_RATE), salesBasis: 'premium', recruitTarget: PLAN_DEFAULT_RECRUIT, examTarget: PLAN_DEFAULT_EXAM, incomeTarget: PLAN_DEFAULT_INCOME };
+const normalizeGoals = (g) => {
+  const inc = Number(g?.incomeTarget) > 0 ? Number(g.incomeTarget) : PLAN_DEFAULT_INCOME;
+  const rec = Number(g?.recruitTarget) > 0 ? Number(g.recruitTarget) : PLAN_DEFAULT_RECRUIT;
+  const exam = Number(g?.examTarget) > 0 ? Number(g.examTarget) : PLAN_DEFAULT_EXAM;
+  return { ...(g || {}), incomeTarget: inc, recruitTarget: rec, examTarget: exam, salesTarget: Math.round(inc / PLAN_FIRST_YEAR_RATE), salesBasis: 'premium' };
+};
 
-// --- 目標 → 每月／每日活動量目標 自動倒推 ---
-// 業績目標 ÷ 件均 = 發單件數，再依各階段轉換率往前推到約訪、新增準客戶；增員人數目標同理往前推到新增準增員。
-// 轉換率與件均優先用「個人近3個月實績」(樣本不夠就用公司手冊標準／預設值)，每日目標 = 月目標 ÷ 本月工作日 (週一到週五)。
+// --- 目標 → 每月／每日活動量目標 自動倒推（全部用公司手冊公版轉換率）---
+// 收入 ÷ 首獎率 = 實收保費目標 ÷ 件均 = 發單件數，再依公版轉換率往前推到約訪、新增準客戶。
+// 增員：從決定考試到登錄約需 1.5 個月，所以每月的增員目標看「進入考試」人數，往前推到約訪、新增準增員；登錄會在 1~2 個月後出現。
 const PLAN_SALES_STEPS = [
   { from: 'appointment', to: 'interview', def: 0.33, label: '約訪→面談' },
   { from: 'interview', to: 'proposal', def: 0.33, label: '面談→建議書' },
@@ -8658,10 +8727,9 @@ const PLAN_SALES_STEPS = [
 const PLAN_RECRUIT_STEPS = [
   { from: 'recruitContact', to: 'recruitFirst', def: 0.5, label: '約訪→初次面談' },
   { from: 'recruitFirst', to: 'recruitInterview', def: 0.5, label: '初次→深度面談' },
-  { from: 'recruitInterview', to: 'recruitExam', def: 0.5, label: '深度面談→內/外考' },
-  { from: 'recruitExam', to: 'recruitRegistered', def: 0.7, label: '內/外考→登錄' }
+  { from: 'recruitInterview', to: 'recruitExam', def: 0.5, label: '深度面談→內/外考' }
 ];
-const PLAN_DEFAULT_AVG_PER_CASE = 30000; // 手冊範例：實收120,000 ÷ 4件
+const PLAN_DEFAULT_AVG_PER_CASE = 60000; // 件均保費（公版）
 const planShiftMonth = (month, delta) => {
   const [y, m] = month.split('-').map(Number);
   const d = new Date(y, m - 1 + delta, 1);
@@ -8674,93 +8742,105 @@ const getWorkdaysOfMonth = (month) => {
   for (let d = 1; d <= n; d++) { const w = new Date(y, m - 1, d).getDay(); if (w !== 0 && w !== 6) c++; }
   return c || 1;
 };
-const computeActivityPlan = ({ goals, agentId, records, activities, month }) => {
-  const salesTarget = Number(goals?.salesTarget) || 0;
-  const recruitTarget = Number(goals?.recruitTarget) || 0;
-  if (!agentId || (salesTarget <= 0 && recruitTarget <= 0)) return null;
-  const hist = [1, 2, 3].map(i => planShiftMonth(month, -i));
-  const sum = {};
-  (activities || []).forEach(x => {
-    if (String(x.agentId) !== String(agentId) || !hist.includes((x.date || '').slice(0, 7))) return;
-    Object.keys(ALL_ACTIVITY_WEIGHTS).forEach(k => { sum[k] = (sum[k] || 0) + (Number(x[k]) || 0); });
-  });
-  const rates = (steps, minSample) => steps.map(s => {
-    const f = sum[s.from] || 0, t = sum[s.to] || 0;
-    const real = f >= minSample && t > 0;
-    return { ...s, rate: real ? Math.min(1, Math.max(0.05, t / f)) : s.def, real };
-  });
+const computeActivityPlan = ({ goals, month }) => {
+  if (!goals) return null;
+  const g = normalizeGoals(goals);
   const workdays = getWorkdaysOfMonth(month);
   const monthly = {};
-  const assumptions = [];
-  let avg = 0, avgReal = false;
-  if (salesTarget > 0) {
-    const rs = rates(PLAN_SALES_STEPS, 10);
-    const basisOf = (r) => goals.salesBasis === 'premium' ? (r.premium || 0) : (r.weighted || 0);
-    const rec = (records || []).filter(r => String(r.agentId) === String(agentId) && hist.includes((r.date || '').slice(0, 7)) && (r.status || '已發單') === '已發單');
-    const realAvg = rec.length >= 2 ? rec.reduce((s, r) => s + basisOf(r), 0) / rec.length : 0;
-    avgReal = realAvg > 0; avg = avgReal ? realAvg : PLAN_DEFAULT_AVG_PER_CASE;
-    monthly.issue = Math.max(1, Math.ceil(salesTarget / avg));
-    monthly.application = Math.ceil(monthly.issue / rs[3].rate);
-    monthly.proposal = Math.ceil(monthly.application / rs[2].rate);
-    monthly.interview = Math.ceil(monthly.proposal / rs[1].rate);
-    monthly.appointment = Math.ceil(monthly.interview / rs[0].rate);
-    const ppa = (sum.appointment || 0) >= 10 && (sum.prospect || 0) > 0 ? Math.min(1.5, Math.max(0.1, sum.prospect / sum.appointment)) : 1 / 3;
-    monthly.prospect = Math.ceil(monthly.appointment * ppa);
-    rs.forEach(r => assumptions.push({ label: r.label, rate: r.rate, real: r.real }));
-  }
-  if (recruitTarget > 0) {
-    const rs = rates(PLAN_RECRUIT_STEPS, 5);
-    monthly.recruitRegistered = Math.ceil(recruitTarget);
-    monthly.recruitExam = Math.ceil(monthly.recruitRegistered / rs[3].rate);
-    monthly.recruitInterview = Math.ceil(monthly.recruitExam / rs[2].rate);
-    monthly.recruitFirst = Math.ceil(monthly.recruitInterview / rs[1].rate);
-    monthly.recruitContact = Math.ceil(monthly.recruitFirst / rs[0].rate);
-    const ppc = (sum.recruitContact || 0) >= 5 && (sum.newRecruitProspect || 0) > 0 ? Math.min(3, Math.max(0.2, sum.newRecruitProspect / sum.recruitContact)) : 1;
-    monthly.newRecruitProspect = Math.ceil(monthly.recruitContact * ppc);
-    rs.forEach(r => assumptions.push({ label: r.label, rate: r.rate, real: r.real }));
-  }
+  const f = {};
+  f.issue = g.salesTarget / PLAN_DEFAULT_AVG_PER_CASE;
+  f.application = f.issue / PLAN_SALES_STEPS[3].def;
+  f.proposal = f.application / PLAN_SALES_STEPS[2].def;
+  f.interview = f.proposal / PLAN_SALES_STEPS[1].def;
+  f.appointment = f.interview / PLAN_SALES_STEPS[0].def;
+  f.prospect = f.appointment / 3; // 手冊：新增準客戶60 對 約訪180
+  f.recruitExam = g.examTarget;
+  f.recruitInterview = f.recruitExam / PLAN_RECRUIT_STEPS[2].def;
+  f.recruitFirst = f.recruitInterview / PLAN_RECRUIT_STEPS[1].def;
+  f.recruitContact = f.recruitFirst / PLAN_RECRUIT_STEPS[0].def;
+  f.newRecruitProspect = f.recruitContact;
+  Object.keys(f).forEach(k => { monthly[k] = Math.max(1, Math.ceil(f[k] - 1e-9)); });
   const perDay = {};
   let salesPoints = 0, recruitPoints = 0;
   Object.keys(monthly).forEach(k => {
-    perDay[k] = monthly[k] >= workdays ? Math.ceil(monthly[k] / workdays) : 0; // 月次數比工作日還少的項目(如登錄)不排每日目標，改看每週
+    perDay[k] = monthly[k] >= workdays ? Math.ceil(monthly[k] / workdays) : 0; // 月次數比工作日還少的項目不排每日目標，改看每週
     const pts = monthly[k] * (ALL_ACTIVITY_WEIGHTS[k]?.score || 0);
     if (ACTIVITY_WEIGHTS[k]) salesPoints += pts; else recruitPoints += pts;
   });
-  return { month, workdays, monthly, perDay, salesPoints, recruitPoints, points: salesPoints + recruitPoints, assumptions, avg, avgReal, hasSales: salesTarget > 0, hasRecruit: recruitTarget > 0 };
+  return { month, workdays, monthly, perDay, salesPoints, recruitPoints, points: salesPoints + recruitPoints, income: g.incomeTarget, premium: g.salesTarget, recruitTarget: g.recruitTarget, examTarget: g.examTarget };
 };
 
-// 目標沿用：本月有設定就用本月的；沒有就沿用「上次設定」(每次儲存同時更新 {uid}_default)，再沒有就找上個月。
+// 轉換率提醒：本月（樣本 ≥5 次）或近3個月平均（樣本 ≥10 次）的個人轉換率低於公版，就列出來，讓主管知道要協助哪一段
+const computeConversionAlerts = ({ agentId, activities, month }) => {
+  if (!agentId) return [];
+  const m3 = [0, 1, 2].map(i => planShiftMonth(month, -i));
+  const cur = {}, avg = {};
+  (activities || []).forEach(x => {
+    if (String(x.agentId) !== String(agentId)) return;
+    const mm = (x.date || '').slice(0, 7);
+    if (!m3.includes(mm)) return;
+    ['appointment', 'interview', 'proposal', 'application', 'issue'].forEach(k => {
+      avg[k] = (avg[k] || 0) + (Number(x[k]) || 0);
+      if (mm === month) cur[k] = (cur[k] || 0) + (Number(x[k]) || 0);
+    });
+  });
+  const out = [];
+  PLAN_SALES_STEPS.forEach(s => {
+    const one = (src, min) => { const fr = src[s.from] || 0, to = src[s.to] || 0; return fr >= min ? { rate: to / fr, from: fr, to } : null; };
+    const c = one(cur, 5), v = one(avg, 10);
+    const cLow = c && c.rate < s.def, vLow = v && v.rate < s.def;
+    if (cLow || vLow) out.push({ label: s.label, def: s.def, cur: cLow ? c : null, avg: vLow ? v : null, curAny: c, avgAny: v });
+  });
+  return out;
+};
+const alertText = (x) => [x.cur ? `本月 ${Math.round(x.cur.rate * 100)}%（${x.cur.to}/${x.cur.from}）` : '', x.avg ? `近3月 ${Math.round(x.avg.rate * 100)}%（${x.avg.to}/${x.avg.from}）` : ''].filter(Boolean).join('、');
+const ConversionAlerts = ({ alerts, dark = true, name = '', compact = false }) => {
+  if (!alerts || alerts.length === 0) return null;
+  const t = dark ? { box: 'border-amber-400/40 bg-amber-500/10', head: 'text-amber-200', body: 'text-white/75', sub: 'text-white/45' } : { box: 'border-amber-200 bg-amber-50', head: 'text-amber-700', body: 'text-gray-700', sub: 'text-gray-400' };
+  return (
+    <div className={`rounded-2xl border px-4 py-3 ${t.box}`}>
+      <p className={`text-[13px] font-bold ${t.head}`}>{compact ? `轉換率低於公版（${alerts.length} 項）` : `${name ? name + '：' : ''}轉換率低於公版，需要補強技能，請找主管協助`}</p>
+      <div className="mt-1.5 space-y-0.5">
+        {alerts.map(x => <p key={x.label} className={`text-[12px] ${t.body}`}><b>{x.label}</b>　{alertText(x)}　<span className={t.sub}>公版 {Math.round(x.def * 100)}%</span></p>)}
+      </div>
+    </div>
+  );
+};
+
+// 目標沿用：本月有設定就用本月的；沒有就沿用「上次設定」(每次儲存同時更新 {uid}_default)，再沒有就找上個月，都沒有就用預設值（收入 50,000）。
 const useEffectiveGoals = (userId, month) => {
-  const [state, setState] = useState({ goals: PERSONAL_GOALS_DEFAULT, own: false, from: '', loaded: false });
+  const [state, setState] = useState({ goals: normalizeGoals({}), own: false, from: '', loaded: false });
   useEffect(() => {
     if (!userId) return;
     let off = false, seq = 0;
     const unsub = onSnapshot(doc(db, 'personal_goals', `${userId}_${month}`), async (snap) => {
       const my = ++seq;
-      if (snap.exists()) { if (!off) setState({ goals: { ...PERSONAL_GOALS_DEFAULT, ...snap.data() }, own: true, from: '', loaded: true }); return; }
+      if (snap.exists()) { if (!off) setState({ goals: normalizeGoals(snap.data()), own: true, from: '', loaded: true }); return; }
       let src = null, from = '';
       try { const d = await getDoc(doc(db, 'personal_goals', `${userId}_default`)); if (d.exists()) { src = d.data(); from = d.data().sourceMonth || '上次設定'; } } catch (e) {}
       if (!src) { try { const pm = planShiftMonth(month, -1); const d = await getDoc(doc(db, 'personal_goals', `${userId}_${pm}`)); if (d.exists()) { src = d.data(); from = pm; } } catch (e) {} }
       if (off || my !== seq) return;
-      setState({ goals: src ? { ...PERSONAL_GOALS_DEFAULT, ...src } : PERSONAL_GOALS_DEFAULT, own: false, from: src ? from : '', loaded: true });
+      setState({ goals: normalizeGoals(src || {}), own: false, from: src ? from : '預設（收入 50,000）', loaded: true });
     });
     return () => { off = true; unsub(); };
   }, [userId, month]);
   return state;
 };
 const saveGoalsDoc = async (userId, month, data) => {
-  await setDoc(doc(db, 'personal_goals', `${userId}_${month}`), data);
-  try { await setDoc(doc(db, 'personal_goals', `${userId}_default`), { ...data, sourceMonth: month }); } catch (e) { console.error(e); }
+  const d = normalizeGoals(data);
+  await setDoc(doc(db, 'personal_goals', `${userId}_${month}`), d);
+  try { await setDoc(doc(db, 'personal_goals', `${userId}_default`), { ...d, sourceMonth: month }); } catch (e) { console.error(e); }
 };
 
 // 目標設定視窗裡的預覽：這個目標換算成多少活動量、每天要做幾次
 const PlanPreview = ({ plan, dark = false }) => {
-  if (!plan) return <p className={`text-[11px] mt-2 ${dark ? 'text-white/40' : 'text-gray-400'}`}>填入業績目標或增員人數後，這裡會顯示每天要做的活動量。</p>;
+  if (!plan) return null;
   const keys = [...Object.keys(ACTIVITY_WEIGHTS), ...Object.keys(RECRUIT_ACTIVITY_WEIGHTS)].filter(k => plan.monthly[k] != null);
   const t = dark ? { box: 'bg-white/[0.05] border-white/10', head: 'text-white/50', cell: 'text-white/85', sub: 'text-white/40', num: 'text-amber-300' } : { box: 'bg-indigo-50/60 border-indigo-100', head: 'text-gray-500', cell: 'text-gray-700', sub: 'text-gray-400', num: 'text-indigo-600' };
   return (
     <div className={`rounded-xl border p-3 mt-3 ${t.box}`}>
       <p className={`text-[11px] font-bold mb-1.5 ${t.head}`}>換算活動量（本月 {plan.workdays} 個工作日）</p>
+      <p className={`text-[11px] mb-1.5 ${t.sub}`}>收入 {formatMoney(plan.income)} ÷ 首獎率 30% ≈ 實收保費 {formatMoney(plan.premium)}，約 {plan.monthly.issue} 件發單</p>
       <div className="space-y-1">
         {keys.map(k => (
           <div key={k} className={`flex items-center justify-between text-[12px] ${t.cell}`}>
@@ -8769,13 +8849,11 @@ const PlanPreview = ({ plan, dark = false }) => {
           </div>
         ))}
       </div>
-      <p className={`text-[10.5px] mt-2 ${t.sub}`}>
-        約 {plan.points} 分{plan.points < 400 ? '（低於標準 400 分）' : ''}。{plan.hasSales ? `件均 ${formatMoney(plan.avg)}（${plan.avgReal ? '近3個月實績' : '手冊預設'}）；` : ''}
-        {plan.assumptions.map(x => `${x.label} ${Math.round(x.rate * 100)}%${x.real ? '' : '*'}`).join('、')}　* 為預設值，累積實績後自動改用你的數字。
-      </p>
+      <p className={`text-[10.5px] mt-2 ${t.sub}`}>約 {plan.points} 分。銷售轉換率為公司手冊公版（約訪→面談 33%、面談→建議書 33%、建議書→受理 40%、受理→發單 50%）。增員從決定考試到登錄約需 1.5 個月，所以每月看「進入考試」人數，登錄會在 1~2 個月後出現；增員各階段轉換率為預設估計（50%）。</p>
     </div>
   );
 };
+
 // 優質人才培訓計劃：每3個月一階段，各階段門檻 (課程時數/活動次數不顯示；FYC為粗估數字，僅供參考)
 const QUALITY_TALENT_THRESHOLDS = { fyc: 35000, insured: 6 };
 // 115年10月起新制：11502期(含)之後的期別，不同被保險人數改為「階段累計」5／9／14／20 人（從優培起始月累計到該階段結束）；
@@ -8852,7 +8930,7 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
 
   const eff = useEffectiveGoals(loggedInUser?.id, currentMonth);
   useEffect(() => { setGoals(eff.goals); setForm(eff.goals); }, [eff.goals]);
-  const formPlan = useMemo(() => computeActivityPlan({ goals: form, agentId: loggedInUser?.id, records, activities, month: currentMonth }), [form, loggedInUser?.id, records, activities, currentMonth]);
+  const formPlan = useMemo(() => computeActivityPlan({ goals: form, month: currentMonth }), [form, currentMonth]);
 
   useEffect(() => {
     setQualityStartMonth(loggedInUser?.qualityTalentStartMonth || '');
@@ -8908,6 +8986,10 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
     if (!loggedInUser) return 0;
     return (activities || []).filter(a => a.agentId === loggedInUser.id && a.month === currentMonth).reduce((sum, a) => sum + (a.recruitRegistered || 0), 0);
   }, [activities, loggedInUser, currentMonth]);
+  const examActual = useMemo(() => {
+    if (!loggedInUser) return 0;
+    return (activities || []).filter(a => a.agentId === loggedInUser.id && a.month === currentMonth).reduce((sum, a) => sum + (a.recruitExam || 0), 0);
+  }, [activities, loggedInUser, currentMonth]);
 
   const pct = (actual, target) => target > 0 ? Math.min(100, Math.round((actual / target) * 100)) : 0;
 
@@ -8915,7 +8997,7 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
     if (!loggedInUser) return;
     setSaving(true);
     try {
-      await saveGoalsDoc(loggedInUser.id, currentMonth, { ...form, salesTarget: Number(form.salesTarget) || 0, recruitTarget: Number(form.recruitTarget) || 0, incomeTarget: Number(form.incomeTarget) || 0 });
+      await saveGoalsDoc(loggedInUser.id, currentMonth, form);
       setEditing(false);
     } catch (e) { console.error(e); } finally { setSaving(false); }
   };
@@ -8926,7 +9008,7 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
         <h3 className="font-bold text-gray-800 text-sm">本月個人目標{!eff.own && eff.from && <span className="ml-2 text-[10px] font-normal text-gray-400">沿用自 {eff.from}</span>}</h3>
         <button onClick={() => { setForm(goals); setEditing(true); }} className="text-xs font-bold text-indigo-600 hover:text-indigo-700">設定目標</button>
       </div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+      <div className="grid grid-cols-1 sm:grid-cols-4 gap-4">
         <div className="bg-gradient-to-br from-indigo-50 to-purple-50 rounded-2xl p-4 border border-indigo-100">
           <p className="text-[10px] text-indigo-500 font-bold uppercase">業績（{goals.salesBasis === 'premium' ? '實收' : '加權'}）</p>
           <p className="text-lg font-bold text-gray-900 mt-1">{formatMoney(salesActual)}</p>
@@ -8934,6 +9016,14 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
             <div className="h-full rounded-full bg-gradient-to-r from-indigo-500 to-purple-500 transition-all duration-500" style={{ width: `${pct(salesActual, goals.salesTarget)}%` }}></div>
           </div>
           <p className="text-[10px] text-gray-400 mt-1">目標 {formatMoney(goals.salesTarget)} · {pct(salesActual, goals.salesTarget)}%</p>
+        </div>
+        <div className="bg-gradient-to-br from-cyan-50 to-sky-50 rounded-2xl p-4 border border-cyan-100">
+          <p className="text-[10px] text-cyan-600 font-bold uppercase">進入考試</p>
+          <p className="text-lg font-bold text-gray-900 mt-1">{examActual} 人</p>
+          <div className="h-2 w-full bg-white rounded-full overflow-hidden mt-2 shadow-inner">
+            <div className="h-full rounded-full bg-gradient-to-r from-cyan-500 to-sky-500 transition-all duration-500" style={{ width: `${pct(examActual, goals.examTarget)}%` }}></div>
+          </div>
+          <p className="text-[10px] text-gray-400 mt-1">目標 {goals.examTarget} 人 · {pct(examActual, goals.examTarget)}%</p>
         </div>
         <div className="bg-gradient-to-br from-teal-50 to-emerald-50 rounded-2xl p-4 border border-teal-100">
           <p className="text-[10px] text-teal-600 font-bold uppercase">增員登錄</p>
@@ -9015,16 +9105,9 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
               <button onClick={() => setEditing(false)} className="p-1 hover:bg-gray-100 rounded-full"><X size={20} /></button>
             </div>
             <div className="space-y-3">
-              <div>
-                <label className="text-xs font-bold text-gray-500 block mb-1">業績計算基礎</label>
-                <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.salesBasis} onChange={e => setForm({ ...form, salesBasis: e.target.value })}>
-                  <option value="weighted">加權保費</option>
-                  <option value="premium">實收保費</option>
-                </select>
-              </div>
-              <div><label className="text-xs font-bold text-gray-500 block mb-1">業績目標</label><input type="number" className="w-full p-2 border border-gray-200 rounded-lg" value={form.salesTarget} onChange={e => setForm({ ...form, salesTarget: Number(e.target.value) || 0 })} /></div>
-              <div><label className="text-xs font-bold text-gray-500 block mb-1">增員登錄目標（人）</label><input type="number" className="w-full p-2 border border-gray-200 rounded-lg" value={form.recruitTarget} onChange={e => setForm({ ...form, recruitTarget: Number(e.target.value) || 0 })} /></div>
-              <div><label className="text-xs font-bold text-gray-500 block mb-1">收入目標（預估收入）</label><input type="number" className="w-full p-2 border border-gray-200 rounded-lg" value={form.incomeTarget} onChange={e => setForm({ ...form, incomeTarget: Number(e.target.value) || 0 })} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">每月收入目標（首獎，預設 50,000）</label><input type="number" className="w-full p-2 border border-gray-200 rounded-lg" value={form.incomeTarget || ''} onChange={e => setForm({ ...form, incomeTarget: e.target.value })} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">每月進入考試人數（預設 1 人）</label><input type="number" className="w-full p-2 border border-gray-200 rounded-lg" value={form.examTarget || ''} onChange={e => setForm({ ...form, examTarget: e.target.value })} /></div>
+              <div><label className="text-xs font-bold text-gray-500 block mb-1">每月增員登錄人數（預設 1 人，從決定考試到登錄約需 1.5 個月）</label><input type="number" className="w-full p-2 border border-gray-200 rounded-lg" value={form.recruitTarget || ''} onChange={e => setForm({ ...form, recruitTarget: e.target.value })} /></div>
               <PlanPreview plan={formPlan} />
               <button onClick={handleSave} disabled={saving} className="w-full bg-indigo-600 text-white py-3 rounded-lg font-bold hover:bg-indigo-700 transition mt-2 disabled:opacity-50 flex items-center justify-center gap-2">
                 {saving ? <Loader2 className="animate-spin" size={16} /> : '儲存'}
@@ -10759,17 +10842,19 @@ const HomeGoalsQuality = ({ loggedInUser, records, activities }) => {
 
   const eff = useEffectiveGoals(loggedInUser?.id, month);
   useEffect(() => { setGoals(eff.goals); setForm(eff.goals); }, [eff.goals]);
-  const formPlan = useMemo(() => computeActivityPlan({ goals: form, agentId: loggedInUser?.id, records, activities, month }), [form, loggedInUser?.id, records, activities, month]);
+  const formPlan = useMemo(() => computeActivityPlan({ goals: form, month }), [form, month]);
 
   const myRecords = useMemo(() => (records || []).filter(r => r.agentId === loggedInUser.id && (r.date || '').startsWith(month)), [records, loggedInUser.id, month]);
   const sales = myRecords.reduce((s, r) => s + (goals.salesBasis === 'premium' ? (r.premium || 0) : (r.weighted || 0)), 0);
   const income = myRecords.filter(r => (r.status || '已發單') === '已發單').reduce((s, r) => s + (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0), 0);
   const recruit = (activities || []).filter(a => a.agentId === loggedInUser.id && a.month === month).reduce((s, a) => s + (a.recruitRegistered || 0), 0);
+  const examN = (activities || []).filter(a => a.agentId === loggedInUser.id && a.month === month).reduce((s, a) => s + (a.recruitExam || 0), 0);
   const pct = (a, t) => t > 0 ? Math.min(100, Math.round(a / t * 100)) : 0;
 
   const rows = [
     { key: 'sales', label: `業績（${goals.salesBasis === 'premium' ? '實收' : '加權'}）`, a: sales, t: goals.salesTarget, money: true, bar: 'from-sky-400 to-indigo-500', tone: 'text-sky-300', icon: TrendingUp },
-    { key: 'recruit', label: '增員人數', a: recruit, t: goals.recruitTarget, unit: '人', bar: 'from-teal-400 to-emerald-400', tone: 'text-teal-300', icon: Users },
+    { key: 'exam', label: '增員（進入考試）', a: examN, t: goals.examTarget, unit: '人', bar: 'from-cyan-400 to-sky-400', tone: 'text-cyan-300', icon: Users },
+    { key: 'recruit', label: '增員（登錄）', a: recruit, t: goals.recruitTarget, unit: '人', bar: 'from-teal-400 to-emerald-400', tone: 'text-teal-300', icon: Users },
     { key: 'income', label: '預估收入', a: Math.round(income), t: goals.incomeTarget, money: true, bar: 'from-amber-400 to-orange-400', tone: 'text-amber-300', icon: Award },
   ];
 
@@ -10783,7 +10868,7 @@ const HomeGoalsQuality = ({ loggedInUser, records, activities }) => {
 
   const save = async () => {
     setSaving(true);
-    try { await saveGoalsDoc(loggedInUser.id, month, { ...form, salesTarget: Number(form.salesTarget) || 0, recruitTarget: Number(form.recruitTarget) || 0, incomeTarget: Number(form.incomeTarget) || 0 }); setEditing(false); } catch (e) { console.error(e); } finally { setSaving(false); }
+    try { await saveGoalsDoc(loggedInUser.id, month, form); setEditing(false); } catch (e) { console.error(e); } finally { setSaving(false); }
   };
   const saveQuality = async () => {
     if (!qInput) return;
@@ -10868,12 +10953,7 @@ const HomeGoalsQuality = ({ loggedInUser, records, activities }) => {
           <div className="w-full max-w-md rounded-t-[28px] border-t border-white/10 bg-[#0c1020] text-white p-5 pb-8" onClick={e => e.stopPropagation()}>
             <p className="text-[16px] font-bold mb-1">設定本月目標</p>
             <p className="text-[11px] text-white/40 mb-3">設定一次就會沿用到之後每個月，要調整再改；系統會自動換算成每天的活動量目標。</p>
-            <div className="flex rounded-2xl bg-white/[0.07] p-0.5 mb-3">
-              {[['weighted', '業績算加權'], ['premium', '業績算實收']].map(([k, l]) => (
-                <button key={k} onClick={() => setForm({ ...form, salesBasis: k })} className={`flex-1 py-2 text-[12px] font-bold rounded-[14px] ${form.salesBasis === k ? 'bg-white text-gray-900' : 'text-white/55'}`}>{l}</button>
-              ))}
-            </div>
-            {[['salesTarget', '業績目標 ($)'], ['recruitTarget', '增員人數目標 (人)'], ['incomeTarget', '預估收入目標 ($)']].map(([k, l]) => (
+            {[['incomeTarget', '每月收入目標（首獎，預設 50,000）'], ['examTarget', '每月進入考試人數（預設 1 人）'], ['recruitTarget', '每月增員登錄人數（預設 1 人，從決定考試到登錄約需 1.5 個月）']].map(([k, l]) => (
               <div key={k} className="mb-3">
                 <label className="text-[11px] text-white/50 block mb-1">{l}</label>
                 <input type="number" inputMode="numeric" value={form[k] || ''} onChange={e => setForm({ ...form, [k]: e.target.value })} className="w-full rounded-2xl border border-white/10 bg-white/[0.07] px-4 py-3 text-[16px] font-bold text-white outline-none" />
