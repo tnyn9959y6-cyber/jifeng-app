@@ -1811,9 +1811,9 @@ const MEA_RATIO_DEFS = {
   ],
   all: []
 };
-const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embedded = false }) => {
+const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embedded = false, focusMonth, initialScope }) => {
   const [mode, setMode] = useState('all');
-  const [scope, setScope] = useState(embedded ? 'team' : String(loggedInUser?.id || 'team'));
+  const [scope, setScope] = useState(embedded ? 'team' : String(initialScope || loggedInUser?.id || 'team'));
   const [span, setSpan] = useState(12);
   const weights = mode === 'sales' ? ACTIVITY_WEIGHTS : mode === 'recruit' ? RECRUIT_ACTIVITY_WEIGHTS : ALL_ACTIVITY_WEIGHTS;
   const defs = MEA_RATIO_DEFS[mode];
@@ -1845,7 +1845,8 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
       return row;
     });
   }, [activities, ids, span, mode, weights, defs]);
-  const cur = rows[rows.length - 1], prev = rows[rows.length - 2];
+  const curIdx = Math.max(0, rows.findIndex(r => r.month === focusMonth) >= 0 ? rows.findIndex(r => r.month === focusMonth) : rows.length - 1);
+  const cur = rows[curIdx], prev = rows[curIdx - 1];
   const delta = prev && prev.points > 0 ? Math.round((cur.points - prev.points) / prev.points * 100) : null;
   const best = rows.reduce((b, r) => (r.points > b.points ? r : b), rows[0]);
   const avg = Math.round(rows.reduce((s, r) => s + r.points, 0) / rows.length);
@@ -1862,7 +1863,7 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
         </div>
       </div>}
       <div className="flex flex-wrap gap-2">
-        <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[['all', '合計', 'bg-indigo-600'], ['sales', '業務', 'bg-blue-600'], ['recruit', '增員', 'bg-teal-600']].map(([k, l, c]) => <button key={k} type="button" onClick={() => setMode(k)} className={chip(mode === k, c)}>{l}</button>)}</div>
+        <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[['sales', '銷售活動量', 'bg-blue-600'], ['all', '合計活動量', 'bg-indigo-600'], ['recruit', '增員活動量', 'bg-teal-600']].map(([k, l, c]) => <button key={k} type="button" onClick={() => setMode(k)} className={chip(mode === k, c)}>{l}</button>)}</div>
         <select value={scope} onChange={e => setScope(e.target.value)} className="h-10 rounded-xl border border-white/15 bg-[#0c1020] text-white text-[13px] font-bold px-3 max-w-[220px]">
           <option value="team">全單位合計（{unit.length} 人）</option>
           {unit.map(m => <option key={m.id} value={String(m.id)}>{m.name}{String(m.id) === String(loggedInUser?.id) ? '（我）' : ''}</option>)}
@@ -1870,7 +1871,7 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
         <div className="flex rounded-xl border border-white/15 bg-white/[0.06] p-1">{[[6, '近6個月'], [12, '近12個月']].map(([k, l]) => <button key={k} type="button" onClick={() => setSpan(k)} className={chip(span === k)}>{l}</button>)}</div>
       </div>
       <div className="grid grid-cols-3 gap-2.5">
-        {[['本月總分', cur.points, delta === null ? '上月無資料' : `較上月 ${delta >= 0 ? '+' : ''}${delta}%`, delta === null ? 'text-white/40' : delta >= 0 ? 'text-emerald-300' : 'text-rose-300'], ['月平均', avg, `近 ${span} 個月`, 'text-white/40'], ['最高月份', best.points, best.points ? best.label : '—', 'text-amber-300']].map(([l, v, sub, c]) => (
+        {[[`${Number(cur.month.slice(5))}月總分`, cur.points, delta === null ? '上月無資料' : `較上月 ${delta >= 0 ? '+' : ''}${delta}%`, delta === null ? 'text-white/40' : delta >= 0 ? 'text-emerald-300' : 'text-rose-300'], ['月平均', avg, `近 ${span} 個月`, 'text-white/40'], ['最高月份', best.points, best.points ? best.label : '—', 'text-amber-300']].map(([l, v, sub, c]) => (
           <div key={l} className={`${glass} p-3.5`}><p className="text-[11px] text-white/55">{l}</p><p className="text-[26px] font-black tabular-nums leading-tight mt-1">{v}<span className="text-[12px] text-white/45 font-normal ml-1">分</span></p><p className={`text-[11px] mt-0.5 ${c}`}>{sub}</p></div>
         ))}
       </div>
@@ -1884,7 +1885,7 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
               <YAxis tick={{ fill: 'rgba(255,255,255,.4)', fontSize: 11 }} axisLine={false} tickLine={false} />
               <Tooltip contentStyle={tip} formatter={(v) => [`${v} 分`, '總分']} />
               <Bar dataKey="points" fill={mode === 'sales' ? '#3b82f6' : mode === 'recruit' ? '#14b8a6' : '#6366f1'} radius={[6, 6, 0, 0]} />
-              <Line type="monotone" dataKey="points" stroke="#fbbf24" strokeWidth={2} dot={{ r: 3 }} />
+              <Line type="monotone" dataKey="points" stroke="#fbbf24" strokeWidth={2} dot={{ r: 3 }} tooltipType="none" />
             </ComposedChart>
           </ResponsiveContainer>
         </div>
@@ -1903,7 +1904,7 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
             </LineChart>
           </ResponsiveContainer>
         </div>
-      </div> : <p className="text-[12px] text-white/45 px-1">「合計」＝業務＋增員總分，與活動量主畫面的總分一致；要看轉換率請切換到「業務」或「增員」。</p>}
+      </div> : <p className="text-[12px] text-white/45 px-1">「合計活動量」＝銷售＋增員總分，與活動量主畫面的總分一致；要看轉換率請切換到「銷售活動量」或「增員活動量」。</p>}
       <div className={`${glass} p-3 overflow-x-auto`}>
         <table className="w-full text-[12.5px] min-w-[520px]">
           <thead className="text-white/45 text-[11px]"><tr className="text-right"><th className="text-left font-normal pb-1.5">月份</th><th className="font-normal pb-1.5">總分</th>{defs.map(d => <th key={d.k} className="font-normal pb-1.5 pl-2" style={{ color: d.color }}>{d.label}</th>)}</tr></thead>
@@ -1934,13 +1935,14 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
     ? computeActivityPlan({ goals: effGoals.goals, month: planMonth }) : null,
     [effGoals.goals, loggedInUser, selectedAgentId, planMonth]);
   // 轉換率低於公版的提醒（看誰的活動量就算誰的，主管看團隊成員時也看得到）
-  const convAlerts = useMemo(() => computeConversionAlerts({ agentId: selectedAgentId, activities, month: planMonth }), [selectedAgentId, activities, planMonth]);
   
   const [selectedMonth, setSelectedMonth] = useState(() => {
      const current = getCurrentMonth();
      const isCurrentInSeason = currentMonths.some(m => m.value === current);
      return isCurrentInSeason ? current : currentMonths[0].value;
   });
+
+  const convAlerts = useMemo(() => computeConversionAlerts({ agentId: selectedAgentId, activities, month: selectedMonth }), [selectedAgentId, activities, selectedMonth]);
 
   const [isSubmitting, setIsSubmitting] = useState(false);
   const emptyActivityForm = () => ({
@@ -2145,7 +2147,7 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
 
   const canEditMobile = !!loggedInUser && (String(selectedAgentId) === String(loggedInUser.id) || loggedInUser.name === '吳政翰');
 
-  if (showOverview) return <ActivityMonthlyOverview activities={activities} team={team} loggedInUser={loggedInUser} onBack={() => setShowOverview(false)} />;
+  if (showOverview) return <ActivityMonthlyOverview activities={activities} team={team} loggedInUser={loggedInUser} focusMonth={selectedMonth} initialScope={selectedAgentId} onBack={() => setShowOverview(false)} />;
 
   return (
     <>
@@ -2218,11 +2220,11 @@ const ActivityDashboard = ({ team, activities, records, user, season, loggedInUs
       {/* KPI */}
       <div className="grid grid-cols-5 gap-3 shrink-0">
         {[
-          { l: '本月活動量總分', v: stats.totalPoints, u: '/ 400', pct: Math.min(100, stats.totalPoints / 400 * 100), c: '#60a5fa', icon: ListPlus, red: stats.totalPoints < 400 },
+          { l: '銷售活動量', v: stats.salesPoints, sub: `增員活動量 ${stats.recruitPoints}　合計 ${stats.totalPoints}`, c: '#38bdf8', icon: Activity },
           { l: '面談總分', v: stats.interviewPoints, u: '/ 60', pct: Math.min(100, stats.interviewPoints / 60 * 100), c: '#a78bfa', icon: MessageCircle, red: stats.interviewPoints < 60 },
           { l: '本月每分實收', v: formatMoney(stats.premiumPerPoint), sub: `總實收 ${formatMoney(stats.totalPremium)}`, c: '#34d399', icon: DollarSign },
           { l: '本月每分價值 (FYC)', v: formatMoney(stats.valuePerPoint), sub: `總FYC ${formatMoney(stats.totalFYC)}`, c: '#fbbf24', icon: Layers },
-          { l: '業務活動分', v: stats.salesPoints, sub: `增員活動分 ${stats.recruitPoints}　總分 ${stats.totalPoints}`, c: '#38bdf8', icon: Activity },
+          { l: '合計活動量', v: stats.totalPoints, u: '/ 400', pct: Math.min(100, stats.totalPoints / 400 * 100), c: '#60a5fa', icon: ListPlus, red: stats.totalPoints < 400 },
         ].map(k => (
           <div key={k.l} className="rounded-2xl border border-white/10 bg-white/[0.045] backdrop-blur-xl p-3 flex items-center gap-3 min-w-0">
             <span className="w-11 h-11 rounded-xl flex items-center justify-center shrink-0" style={{ background: k.c + '26', color: k.c }}><k.icon size={22} /></span>
@@ -10838,7 +10840,8 @@ const HomeGoalsQuality = ({ loggedInUser, records, activities }) => {
   const [editing, setEditing] = useState(false);
   const [saving, setSaving] = useState(false);
   const [qInput, setQInput] = useState('');
-  const [localStart, setLocalStart] = useState('');
+  const [localStart, setLocalStart] = useState(null);
+  const [editingQ, setEditingQ] = useState(false);
 
   const eff = useEffectiveGoals(loggedInUser?.id, month);
   useEffect(() => { setGoals(eff.goals); setForm(eff.goals); }, [eff.goals]);
@@ -10858,8 +10861,8 @@ const HomeGoalsQuality = ({ loggedInUser, records, activities }) => {
     { key: 'income', label: '預估收入', a: Math.round(income), t: goals.incomeTarget, money: true, bar: 'from-amber-400 to-orange-400', tone: 'text-amber-300', icon: Award },
   ];
 
-  const q0 = getQualityInfo({ ...loggedInUser, qualityTalentStartMonth: localStart || loggedInUser.qualityTalentStartMonth }, records);
-  const startMonth = localStart || loggedInUser.qualityTalentStartMonth || '';
+  const q0 = getQualityInfo({ ...loggedInUser, qualityTalentStartMonth: localStart !== null ? localStart : loggedInUser.qualityTalentStartMonth }, records);
+  const startMonth = localStart !== null ? localStart : (loggedInUser.qualityTalentStartMonth || '');
   const stageRange = (q0 && q0.state === 'active' && startMonth) ? (() => {
     const [sy, sm] = startMonth.split('-').map(Number);
     const f = (i) => { const d = new Date(sy, sm - 1 + (q0.stage - 1) * 3 + i, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
@@ -10870,9 +10873,10 @@ const HomeGoalsQuality = ({ loggedInUser, records, activities }) => {
     setSaving(true);
     try { await saveGoalsDoc(loggedInUser.id, month, form); setEditing(false); } catch (e) { console.error(e); } finally { setSaving(false); }
   };
-  const saveQuality = async () => {
-    if (!qInput) return;
-    try { await updateDoc(doc(db, 'user', loggedInUser.id), { qualityTalentStartMonth: qInput }); setLocalStart(qInput); } catch (e) { console.error(e); }
+  const saveQuality = async (clear = false) => {
+    const v = clear === true ? '' : qInput;
+    if (!v && clear !== true) return;
+    try { await updateDoc(doc(db, 'user', loggedInUser.id), { qualityTalentStartMonth: v }); setLocalStart(v); setEditingQ(false); } catch (e) { console.error(e); }
   };
 
   const glass = 'bg-white/[0.06] backdrop-blur-xl border border-white/10';
@@ -10909,6 +10913,9 @@ const HomeGoalsQuality = ({ loggedInUser, records, activities }) => {
               );
             })}
           </div>
+          <div className="flex justify-end mt-1.5">
+            <button type="button" onClick={() => { setQInput(startMonth || ''); setEditingQ(true); }} title="優培設定" aria-label="優培設定" className="flex items-center gap-1 text-[10.5px] text-white/25 hover:text-white/70 active:text-white px-1.5 py-0.5 rounded-md"><Settings size={11} />優培設定</button>
+          </div>
         </div>
 
         {q0 && (
@@ -10941,12 +10948,27 @@ const HomeGoalsQuality = ({ loggedInUser, records, activities }) => {
                 <p className="text-[12px] text-rose-300">優培期別尚未填寫</p>
                 <p className="text-[11px] text-white/40 mt-1 mb-2">填寫起始月後才會顯示進度</p>
                 <input type="month" value={qInput} onChange={e => setQInput(e.target.value)} className="w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2 text-[13px] text-white outline-none" style={{ colorScheme: 'dark' }} />
-                <button onClick={saveQuality} disabled={!qInput} className="w-full mt-2 py-2 rounded-xl bg-violet-500 text-[13px] font-bold disabled:opacity-40">設定</button>
+                <button onClick={() => saveQuality()} disabled={!qInput} className="w-full mt-2 py-2 rounded-xl bg-violet-500 text-[13px] font-bold disabled:opacity-40">設定</button>
               </div>
             )}
           </div>
         )}
       </div>
+
+      {editingQ && (
+        <div className="fixed inset-0 z-[90] flex items-end sm:items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditingQ(false)}>
+          <div className="w-full max-w-sm rounded-t-[28px] sm:rounded-[28px] border border-white/10 bg-[#0c1020] text-white p-5 pb-8" onClick={e => e.stopPropagation()}>
+            <p className="text-[16px] font-bold mb-1">優培設定</p>
+            <p className="text-[11px] text-white/40 mb-3">填入優培起始月，首頁會顯示每 3 個月一階段的進度（共 12 個月）。</p>
+            <input type="month" value={qInput} onChange={e => setQInput(e.target.value)} className="w-full rounded-xl border border-white/10 bg-white/[0.07] px-3 py-2.5 text-[14px] text-white outline-none" style={{ colorScheme: 'dark' }} />
+            <div className="flex gap-2 mt-4">
+              <button onClick={() => setEditingQ(false)} className="flex-1 py-2.5 rounded-xl bg-white/10 font-bold text-[13px]">取消</button>
+              {startMonth && <button onClick={() => saveQuality(true)} className="px-3 py-2.5 rounded-xl bg-white/10 text-rose-300 font-bold text-[13px]">清除</button>}
+              <button onClick={() => saveQuality()} disabled={!qInput} className="flex-1 py-2.5 rounded-xl bg-violet-500 font-bold text-[13px] disabled:opacity-40">儲存</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {editing && (
         <div className="fixed inset-0 z-[90] flex items-end justify-center bg-black/60 backdrop-blur-sm" onClick={() => setEditing(false)}>
