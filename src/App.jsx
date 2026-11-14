@@ -5885,7 +5885,7 @@ const AnnouncementsPage = ({ loggedInUser, announcements, canPost, onSeen }) => 
   );
 };
 
-const KB_CATEGORIES = ['新人訓練', '新人入門', '商品知識', '銷售技巧', '增員知識', '競賽與獎勵', '行政與工具', '法規合規', '主管專區'];
+const KB_CATEGORIES = ['新人訓練', '獎金與制度', '新人入門', '商品知識', '銷售技巧', '增員知識', '競賽與獎勵', '行政與工具', '法規合規', '主管專區'];
 
 // --- 業務戰情室：權限分層 (吳政翰看全部，主管看自己+全部下線，一般業務只看自己) ---
 const getVisibleTeamIds = (loggedInUser, team) => {
@@ -6803,6 +6803,26 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
   };
 
   // 匯入公司基礎訓練教材（固定 id，重複匯入只會覆蓋同一批文章，不會變重複）
+  const handleImportBonus = async () => {
+    if (!loggedInUser || importing) return;
+    setImporting(true); setImportMsg('');
+    try {
+      const { BONUS_ARTICLES } = await import('./bonusKB.js');
+      const now = new Date().toISOString();
+      const batch = writeBatch(db);
+      BONUS_ARTICLES.forEach((t, i) => {
+        const existing = articles.find(x => x.id === t.id);
+        batch.set(doc(db, 'knowledge_articles', t.id), {
+          title: t.title, category: t.category, content: t.content, managerOnly: true,
+          authorId: loggedInUser.id, authorName: loggedInUser.name,
+          createdAt: existing?.createdAt || now, updatedAt: new Date(Date.now() - i * 1000).toISOString()
+        });
+      });
+      await batch.commit();
+      setImportMsg(`已匯入 ${BONUS_ARTICLES.length} 篇獎金與制度文章（僅主管可見）`);
+    } catch (e) { console.error(e); setImportMsg('匯入失敗，請稍後再試'); } finally { setImporting(false); }
+  };
+
   const handleImportTraining = async () => {
     if (!loggedInUser || importing) return;
     setImporting(true); setImportMsg('');
@@ -6862,6 +6882,11 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
           {isManager && (
             <button onClick={handleImportTraining} disabled={importing} className="flex items-center gap-1.5 bg-amber-500 hover:bg-amber-600 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition disabled:opacity-50">
               {importing ? <Loader2 className="animate-spin" size={14} /> : <BookOpen size={14} />} 匯入新人訓練教材
+            </button>
+          )}
+          {isManager && (
+            <button onClick={handleImportBonus} disabled={importing} className="flex items-center gap-1.5 bg-violet-500 hover:bg-violet-600 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition disabled:opacity-50">
+              {importing ? <Loader2 className="animate-spin" size={14} /> : <Award size={14} />} 匯入獎金制度
             </button>
           )}
           <button onClick={openAdd} className="flex items-center gap-1.5 bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-lg font-bold text-xs sm:text-sm transition"><Plus size={14} /> 新增文章</button>
@@ -9122,6 +9147,359 @@ const PersonalGoalsCard = ({ loggedInUser, records, activities }) => {
   );
 };
 
+// ===== 四星會／職級評量／組織津貼：計算邏輯（依 115 年下半年公司辦法；金額為依系統內已發單資料的推算，實際以公司核算為準）=====
+const SUP_KEY = (role) => (role === '區經理' || role === '處經理') ? 'R' : role === '業務襄理' ? 'M' : (role === '業務主任' || role === '新進業務主任') ? 'D' : null;
+const SUP_LABEL = { R: '區經理', M: '業務襄理', D: '業務主任' };
+const FOUR_STAR_TARGET = 4;
+const ORG_QUOTA_MONTHLY = 40000; // 區經理特別／升級／輔導獎金的每月責任額（FYC）
+const ORG_HALF_YEAR_MIN = 180000; // 半年特別／升級獎金的半年 FYC 門檻
+
+// 組織津貼費率表：key = 領獎主管類型 + 下線主管的路徑（例如 R + 'MD' ＝區經理 → 業務襄理 → 其下的業務主任）
+const ORG_ALLOWANCE_RATES = {
+  R: { D: [0.07875, '特別'], M: [0.063, '特別'], MD: [0.0315, '特別'], MM: [0.0315, '特別'], DD: [0.0525, '特別'], R: [0.063, '升級'], RR: [0.0105, '輔導'] },
+  M: { D: [0.063, '特別'], MM: [0.021, '特別'], MD: [0.021, '特別'], DD: [0.0315, '特別'], M: [0.0525, '升級'] },
+  D: { D: [0.0525, '升級'], DD: [0.0315, '特別'] }
+};
+// 半年（1~6月、7~12月）達 18 萬時加發：[路徑] → 費率
+const ORG_HALF_RATES = { R: { M: 0.02625, D: 0.0525 }, M: { D: 0.02625, M: 0.02625 }, D: { D: 0.02625 } };
+
+const orgRateFor = (sKey, path) => {
+  const hit = ORG_ALLOWANCE_RATES[sKey]?.[path];
+  if (hit) return hit;
+  // 區經理的輔導獎金：第二代區經理(及其轄下襄理、主任)的單位 1.575%
+  if (sKey === 'R' && path.startsWith('R') && path.length >= 2 && !path.slice(1).includes('R')) return [0.01575, '輔導'];
+  return null;
+};
+
+const fycOfRecord = (r) => (r.premium || 0) * (PRODUCT_MAPPING[r.typeCode]?.commissionRate || 0);
+const isIssuedRecord = (r) => (r.status || '已發單') === '已發單';
+
+// 把已發單資料彙整成 agentId → 月份 → {fyc, weighted, premium, n, insured:Set}
+const aggregateByAgentMonth = (records) => {
+  const map = {};
+  (records || []).forEach(r => {
+    if (!isIssuedRecord(r)) return;
+    const mo = (r.date || '').slice(0, 7);
+    if (!mo) return;
+    const id = String(r.agentId);
+    const a = (map[id] = map[id] || {});
+    const b = (a[mo] = a[mo] || { fyc: 0, weighted: 0, premium: 0, n: 0, insured: new Set() });
+    b.fyc += fycOfRecord(r); b.weighted += r.weighted || 0; b.premium += r.premium || 0; b.n += 1;
+    const nm = (r.insuredName || '').trim();
+    if (nm) b.insured.add(nm);
+  });
+  return map;
+};
+
+const buildOrgIndex = (team) => {
+  const byId = {}, kids = {};
+  (team || []).forEach(m => { byId[String(m.id)] = m; });
+  (team || []).forEach(m => {
+    const p = m.parentId ? String(m.parentId) : '';
+    if (p && byId[p] && p !== String(m.id)) (kids[p] = kids[p] || []).push(m);
+  });
+  return { byId, kids };
+};
+
+// 主管自己的「組」：本人 + 其下直接帶領的業務代表（遇到另一位主管就停）
+const groupMemberIds = (idx, id) => {
+  const out = [String(id)];
+  const walk = (pid) => (idx.kids[pid] || []).forEach(c => { if (SUP_KEY(c.role)) return; out.push(String(c.id)); walk(String(c.id)); });
+  walk(String(id));
+  return out;
+};
+// 整條線（本人 + 所有下線）
+const subtreeIds = (idx, id) => {
+  const out = [String(id)];
+  const walk = (pid) => (idx.kids[pid] || []).forEach(c => { out.push(String(c.id)); walk(String(c.id)); });
+  walk(String(id));
+  return out;
+};
+// 找出某主管底下每一位下線主管，以及路徑（例如 'MD'）
+const downlineSupervisors = (idx, id) => {
+  const out = [];
+  const walk = (pid, path) => (idx.kids[pid] || []).forEach(c => {
+    const k = SUP_KEY(c.role);
+    if (k) { const np = path + k; out.push({ m: c, path: np }); walk(String(c.id), np); } else walk(String(c.id), path);
+  });
+  walk(String(id), '');
+  return out;
+};
+
+const sumIds = (agg, ids, month, key) => ids.reduce((s, i) => s + (agg[i]?.[month]?.[key] || 0), 0);
+
+// 組織津貼推算：每位主管每月、每年（特別／升級／輔導＋半年加發）
+const computeOrgAllowances = ({ team, records, year }) => {
+  const idx = buildOrgIndex(team);
+  const agg = aggregateByAgentMonth(records);
+  const months = Array.from({ length: 12 }, (_, i) => `${year}-${String(i + 1).padStart(2, '0')}`);
+  const sups = (team || []).filter(m => SUP_KEY(m.role));
+  return sups.map(s => {
+    const sKey = SUP_KEY(s.role);
+    const down = downlineSupervisors(idx, s.id).map(d => {
+      const rate = orgRateFor(sKey, d.path);
+      return rate ? { ...d, rate: rate[0], kind: rate[1], gids: groupMemberIds(idx, d.m.id) } : null;
+    }).filter(Boolean);
+    const allIds = subtreeIds(idx, s.id);
+    const monthly = months.map(mo => {
+      const unitFyc = sumIds(agg, allIds, mo, 'fyc');
+      const quota = sKey === 'R' ? Math.min(1, unitFyc / ORG_QUOTA_MONTHLY) : 1;
+      const lines = down.map(d => {
+        const fyc = sumIds(agg, d.gids, mo, 'fyc');
+        return { name: d.m.name, role: SUP_LABEL[SUP_KEY(d.m.role)], path: d.path, kind: d.kind, rate: d.rate, fyc, amount: Math.round(fyc * d.rate * quota) };
+      }).filter(l => l.fyc > 0);
+      const total = lines.reduce((x, l) => x + l.amount, 0);
+      return { month: mo, unitFyc, quota, lines, total };
+    });
+    const half = [0, 1].map(h => {
+      const ms = months.slice(h * 6, h * 6 + 6);
+      const lines = [];
+      down.forEach(d => {
+        const r = ORG_HALF_RATES[sKey]?.[d.path];
+        if (!r) return;
+        const fyc = ms.reduce((x, mo) => x + sumIds(agg, d.gids, mo, 'fyc'), 0);
+        if (fyc >= ORG_HALF_YEAR_MIN) lines.push({ name: d.m.name, role: SUP_LABEL[SUP_KEY(d.m.role)], path: d.path, kind: d.kind === '升級' ? '升級(半年)' : '特別(半年)', rate: r, fyc, amount: Math.round(fyc * r) });
+      });
+      return { half: h + 1, lines, total: lines.reduce((x, l) => x + l.amount, 0) };
+    });
+    const byKind = {};
+    monthly.forEach(m => m.lines.forEach(l => { byKind[l.kind] = (byKind[l.kind] || 0) + l.amount; }));
+    half.forEach(h => h.lines.forEach(l => { byKind[l.kind] = (byKind[l.kind] || 0) + l.amount; }));
+    const annual = monthly.reduce((x, m) => x + m.total, 0) + half.reduce((x, h) => x + h.total, 0);
+    return { m: s, sKey, down, monthly, half, byKind, annual };
+  });
+};
+
+// 四星會：每月有 4 位不同被保險人的保單核發
+const computeFourStar = ({ team, records, month, lookback = 6 }) => {
+  const agg = aggregateByAgentMonth(records);
+  const [y, mo] = month.split('-').map(Number);
+  const trail = Array.from({ length: lookback }, (_, i) => { const d = new Date(y, mo - 1 - (lookback - 1 - i), 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; });
+  return (team || []).map(m => {
+    const id = String(m.id);
+    const cnt = (k) => agg[id]?.[k]?.insured.size || 0;
+    const now = cnt(month);
+    const hist = trail.map(k => ({ month: k, n: cnt(k), ok: cnt(k) >= FOUR_STAR_TARGET }));
+    const yearOk = Array.from({ length: mo }, (_, i) => cnt(`${y}-${String(i + 1).padStart(2, '0')}`) >= FOUR_STAR_TARGET).filter(Boolean).length;
+    return { m, now, ok: now >= FOUR_STAR_TARGET, need: Math.max(0, FOUR_STAR_TARGET - now), hist, yearOk, months: mo };
+  });
+};
+
+// ===== 職級評量（115 年 7~12 月標準）=====
+// 業務代表：每季（7~9、10~12）；主管：直轄單位半年（7~12）
+const REP_EVAL = {
+  first: [{ w: 25000, n: 1 }, { w: 75000, n: 0 }, { f: 12000 }],
+  later: [{ w: 37500, n: 1 }, { w: 25000, n: 2 }, { f: 12000 }]
+};
+const SUP_EVAL = {
+  D: { title: '業務主任（A 約）', conds: [
+    { k: '一', result: '維持業務主任 A', w: 900000, f: 120000, p: 3650000 },
+    { k: '二', result: '調整為業務主任 B', w: 675000, f: 90000, p: 2750000 },
+    { k: '三', result: '可申請維持業務主任 B（差額下期補足）', w: 337500, f: 45000, p: 1375000 } ] },
+  M: { title: '業務襄理（92 年後委任）', conds: [
+    { k: '一', result: '業務襄理 A（另需 1 組 2AG 或 4AG）', w: 1080000, f: 144000, p: 4400000 },
+    { k: '二', result: '業務襄理 B', w: 900000, f: 120000, p: 3650000 },
+    { k: '三', result: '可申請維持襄理 B（差額下期補足）', w: 450000, f: 60000, p: 1825000 },
+    { k: '四', result: '可申請調整為業務主任 B', w: 675000, f: 90000, p: 2750000 } ] },
+  R: { title: '區經理（合約 15 年以下）', conds: [
+    { k: '一', result: '維持區經理', w: 1350000, f: 180000, p: 5500000 },
+    { k: '二', result: '調整為展業顧問', w: 1210000, f: 162000, p: 4950000 },
+    { k: '三', result: '可申請維持展業顧問（差額下期補足）', w: 605000, f: 81000, p: 2475000 } ] }
+};
+const evalPeriod = (month) => {
+  const [y, mo] = month.split('-').map(Number);
+  const q0 = Math.floor((mo - 1) / 3) * 3, h0 = mo <= 6 ? 0 : 6;
+  const mk = (s, len) => Array.from({ length: len }, (_, i) => `${y}-${String(s + i + 1).padStart(2, '0')}`);
+  return { quarter: mk(q0, 3), half: mk(h0, 6) };
+};
+const computeRankEval = ({ team, records, month }) => {
+  const idx = buildOrgIndex(team);
+  const agg = aggregateByAgentMonth(records);
+  const per = evalPeriod(month);
+  const today = new Date(month + '-01');
+  return (team || []).map(m => {
+    const k = SUP_KEY(m.role);
+    if (!k) {
+      const ids = [String(m.id)];
+      const w = per.quarter.reduce((x, mo) => x + sumIds(agg, ids, mo, 'weighted'), 0);
+      const f = per.quarter.reduce((x, mo) => x + sumIds(agg, ids, mo, 'fyc'), 0);
+      const n = per.quarter.reduce((x, mo) => x + sumIds(agg, ids, mo, 'n'), 0);
+      const reg = m.promotionDates?.registered;
+      const firstYear = reg ? (today - new Date(reg)) / 86400000 < 365 : false;
+      const rules = firstYear ? REP_EVAL.first : REP_EVAL.later;
+      const ok = rules.some(r => r.f ? f >= r.f : (w >= r.w && n >= r.n));
+      const gaps = rules.map(r => r.f ? { t: `FYC 再 ${Math.max(0, Math.round(r.f - f)).toLocaleString()}`, v: Math.max(0, r.f - f) / r.f } : { t: `加權保費再 ${Math.max(0, Math.round(r.w - w)).toLocaleString()}${r.n && n < r.n ? `、再 ${r.n - n} 件` : ''}`, v: Math.max(Math.max(0, r.w - w) / r.w, r.n ? Math.max(0, r.n - n) / r.n : 0) });
+      const best = gaps.sort((a, b) => a.v - b.v)[0];
+      return { m, type: 'rep', period: per.quarter, w, f, n, firstYear, hasReg: !!reg, ok, gap: ok ? '' : best.t };
+    }
+    const gids = groupMemberIds(idx, m.id);
+    const w = per.half.reduce((x, mo) => x + sumIds(agg, gids, mo, 'weighted'), 0);
+    const f = per.half.reduce((x, mo) => x + sumIds(agg, gids, mo, 'fyc'), 0);
+    const p = per.half.reduce((x, mo) => x + sumIds(agg, gids, mo, 'premium'), 0);
+    const conds = SUP_EVAL[k].conds.map(c => {
+      const ratio = Math.max(w / c.w, f / c.f, p / c.p);
+      return { ...c, ratio, ok: ratio >= 1 };
+    });
+    return { m, type: 'sup', sKey: k, period: per.half, w, f, p, conds, title: SUP_EVAL[k].title };
+  });
+};
+
+// --- 關注名單下方：四星會／職級評量／組織津貼 ---
+const TeamTrackers = ({ team, records, loggedInUser }) => {
+  const [tab, setTab] = useState('star');
+  const [open, setOpen] = useState(null);
+  const month = getCurrentMonth();
+  const year = Number(month.slice(0, 4));
+  const unit = useMemo(() => {
+    const all = team || [];
+    const me = all.find(m => String(m.id) === String(loggedInUser?.id));
+    return me ? getDistrictMembers(all, me.name) : (loggedInUser ? [loggedInUser] : []);
+  }, [team, loggedInUser]);
+  const star = useMemo(() => computeFourStar({ team: unit, records, month }), [unit, records, month]);
+  const ranks = useMemo(() => computeRankEval({ team: unit, records, month }), [unit, records, month]);
+  const allow = useMemo(() => computeOrgAllowances({ team: unit, records, year }), [unit, records, year]);
+  const fmt = (n) => Math.round(n || 0).toLocaleString();
+  const curIdx = Number(month.slice(5)) - 1;
+  const starSorted = [...star].sort((a, b) => (b.now - a.now) || a.m.name.localeCompare(b.m.name));
+  const sumAnnual = allow.reduce((s, x) => s + x.annual, 0);
+  const sumMonth = allow.reduce((s, x) => s + (x.monthly[curIdx]?.total || 0), 0);
+  const perName = (iso) => `${Number(iso.slice(5))}月`;
+
+  return (
+    <Card className="p-5 border-t-4 border-t-violet-400">
+      <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+        <h3 className="font-bold text-gray-800 flex items-center gap-2 text-sm"><Award size={16} className="text-violet-500" /> 單位追蹤：四星會・職級評量・組織津貼</h3>
+        <div className="inline-flex p-1 rounded-full bg-gray-100">
+          {[['star', '四星會'], ['rank', '職級評量'], ['allow', '組織津貼']].map(([k, l]) => (
+            <button key={k} onClick={() => { setTab(k); setOpen(null); }} className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition ${tab === k ? 'bg-violet-600 text-white' : 'text-gray-500 hover:text-gray-800'}`}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      {tab === 'star' && (
+        <div>
+          <p className="text-xs text-gray-400 mb-3">四星會：每個月要有 {FOUR_STAR_TARGET} 位「不同被保險人」的保單核發（已發單）。本月（{month}）進度如下，右側為近 6 個月與今年達成月數。</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[560px]">
+              <thead><tr className="text-[11px] text-gray-400 text-left"><th className="pb-2 font-normal">成員</th><th className="pb-2 font-normal">本月不同被保險人</th><th className="pb-2 font-normal">狀態</th><th className="pb-2 font-normal">近 6 個月</th><th className="pb-2 font-normal text-right">今年達成</th></tr></thead>
+              <tbody>
+                {starSorted.map(r => (
+                  <tr key={r.m.id} className="border-t border-gray-100">
+                    <td className="py-2"><span className="font-bold text-gray-900">{r.m.name}</span><span className="text-[10px] text-gray-400 ml-1.5">{r.m.role}</span></td>
+                    <td className="py-2 w-44"><div className="flex items-center gap-2"><div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden"><div className={`h-full rounded-full ${r.ok ? 'bg-emerald-500' : 'bg-violet-400'}`} style={{ width: `${Math.min(100, r.now / FOUR_STAR_TARGET * 100)}%` }}></div></div><span className="text-xs font-bold tabular-nums text-gray-700">{r.now}/{FOUR_STAR_TARGET}</span></div></td>
+                    <td className="py-2">{r.ok ? <span className="text-[11px] font-bold text-emerald-600">✓ 已達標</span> : <span className="text-[11px] text-amber-600 font-semibold">還差 {r.need} 人</span>}</td>
+                    <td className="py-2"><div className="flex gap-1">{r.hist.map(h => <span key={h.month} title={`${h.month}：${h.n} 人`} className={`w-5 h-5 rounded text-[9px] flex items-center justify-center font-bold ${h.ok ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-400'}`}>{h.n}</span>)}</div></td>
+                    <td className="py-2 text-right text-xs font-bold tabular-nums text-gray-700">{r.yearOk} / {r.months} 個月</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[10.5px] text-gray-400 mt-2">被保險人姓名以業績回報填寫的為準，同一人只算 1 位；只計入狀態為「已發單」的保單。</p>
+        </div>
+      )}
+
+      {tab === 'rank' && (
+        <div className="space-y-3">
+          <p className="text-xs text-gray-400">依公司 115 年 7~12 月合約評量標準。業務代表看本季（{ranks.find(r => r.type === 'rep')?.period?.[0] ? `${perName(ranks.find(r => r.type === 'rep').period[0])}～${perName(ranks.find(r => r.type === 'rep').period[2])}` : '本季'}），主管看直轄單位半年累計。金額以系統內已發單資料推算，FYC 未含行銷獎金，實際以公司核算為準。</p>
+          {['R', 'M', 'D'].map(k => {
+            const list = ranks.filter(r => r.type === 'sup' && r.sKey === k);
+            if (!list.length) return null;
+            return (
+              <div key={k}>
+                <p className="text-xs font-bold text-gray-500 mb-2">{SUP_LABEL[k]}（直轄單位・半年）</p>
+                <div className="space-y-2">
+                  {list.map(r => (
+                    <div key={r.m.id} className="rounded-xl border border-gray-100 p-3">
+                      <div className="flex flex-wrap items-baseline justify-between gap-2">
+                        <p className="font-bold text-gray-900 text-sm">{r.m.name} <span className="text-[10px] text-gray-400 font-normal">{r.title}</span></p>
+                        <p className="text-[11px] text-gray-500 tabular-nums">加權保費 {fmt(r.w)}・FYC {fmt(r.f)}・實收保費 {fmt(r.p)}</p>
+                      </div>
+                      <div className="mt-2 space-y-1.5">
+                        {r.conds.map(c => (
+                          <div key={c.k} className="flex items-center gap-2 text-[11px]">
+                            <span className={`w-14 shrink-0 font-bold ${c.ok ? 'text-emerald-600' : 'text-gray-500'}`}>條件{c.k}</span>
+                            <div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden"><div className={`h-full rounded-full ${c.ok ? 'bg-emerald-500' : 'bg-violet-400'}`} style={{ width: `${Math.min(100, c.ratio * 100)}%` }}></div></div>
+                            <span className="w-9 text-right tabular-nums text-gray-600">{Math.min(999, Math.round(c.ratio * 100))}%</span>
+                            <span className="w-52 shrink-0 text-gray-500 truncate" title={c.result}>{c.ok ? '✓ ' : ''}{c.result}</span>
+                          </div>
+                        ))}
+                      </div>
+                      <p className="text-[10px] text-gray-400 mt-1.5">門檻：加權保費、FYC、實收保費任一達標即可。條件{r.conds[0].k}：{fmt(r.conds[0].w)} / {fmt(r.conds[0].f)} / {fmt(r.conds[0].p)}</p>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            );
+          })}
+          <div>
+            <p className="text-xs font-bold text-gray-500 mb-2">業務代表（個人・本季）</p>
+            <div className="overflow-x-auto">
+              <table className="w-full text-sm min-w-[520px]">
+                <thead><tr className="text-[11px] text-gray-400 text-left"><th className="pb-2 font-normal">成員</th><th className="pb-2 font-normal">適用標準</th><th className="pb-2 font-normal text-right">加權保費</th><th className="pb-2 font-normal text-right">件數</th><th className="pb-2 font-normal text-right">FYC</th><th className="pb-2 font-normal pl-3">結果</th></tr></thead>
+                <tbody>
+                  {ranks.filter(r => r.type === 'rep').map(r => (
+                    <tr key={r.m.id} className="border-t border-gray-100">
+                      <td className="py-2 font-bold text-gray-900">{r.m.name}</td>
+                      <td className="py-2 text-[11px] text-gray-500">{r.firstYear ? '簽約第一年' : (r.hasReg ? '簽約第二年起' : '第二年起（未填登錄日）')}</td>
+                      <td className="py-2 text-right tabular-nums">{fmt(r.w)}</td><td className="py-2 text-right tabular-nums">{r.n}</td><td className="py-2 text-right tabular-nums">{fmt(r.f)}</td>
+                      <td className="py-2 pl-3 text-[11px]">{r.ok ? <span className="font-bold text-emerald-600">✓ 達標</span> : <span className="text-amber-600 font-semibold">未達標：{r.gap}</span>}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+            <p className="text-[10.5px] text-gray-400 mt-2">第一年：加權保費 25,000 且 1 件，或加權保費 75,000，或 FYC 12,000；第二年起：37,500 且 1 件，或 25,000 且 2 件，或 FYC 12,000。件數以系統內已發單筆數計，實際件數規則以公司為準。</p>
+          </div>
+        </div>
+      )}
+
+      {tab === 'allow' && (
+        <div>
+          <div className="grid grid-cols-2 gap-3 mb-3">
+            <div className="rounded-xl bg-violet-50 border border-violet-100 p-3"><p className="text-[11px] text-violet-500 font-bold">{Number(month.slice(5))} 月全單位組織津貼（推算）</p><p className="text-xl font-black text-gray-900 tabular-nums">${fmt(sumMonth)}</p></div>
+            <div className="rounded-xl bg-violet-50 border border-violet-100 p-3"><p className="text-[11px] text-violet-500 font-bold">{year} 年累計（含半年加發）</p><p className="text-xl font-black text-gray-900 tabular-nums">${fmt(sumAnnual)}</p></div>
+          </div>
+          <p className="text-xs text-gray-400 mb-2">組織津貼＝下線組織帶來的「特別獎金（每月＋半年）、升級獎金、輔導獎金」，依下線各組已發單的 FYC 乘上辦法費率推算；區經理另需轄屬單位每月 FYC 達 40,000 才全額，未達依比例。點成員看明細。</p>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[560px]">
+              <thead><tr className="text-[11px] text-gray-400 text-left"><th className="pb-2 font-normal">主管</th><th className="pb-2 font-normal text-right">本月</th><th className="pb-2 font-normal text-right">年度累計</th><th className="pb-2 font-normal text-right">特別</th><th className="pb-2 font-normal text-right">升級</th><th className="pb-2 font-normal text-right">輔導</th></tr></thead>
+              <tbody>
+                {allow.map(x => (
+                  <React.Fragment key={x.m.id}>
+                    <tr className="border-t border-gray-100 cursor-pointer hover:bg-gray-50" onClick={() => setOpen(open === x.m.id ? null : x.m.id)}>
+                      <td className="py-2"><span className="font-bold text-gray-900">{x.m.name}</span><span className="text-[10px] text-gray-400 ml-1.5">{x.m.role}</span></td>
+                      <td className="py-2 text-right tabular-nums font-bold">{fmt(x.monthly[curIdx]?.total)}</td>
+                      <td className="py-2 text-right tabular-nums font-bold text-violet-700">{fmt(x.annual)}</td>
+                      <td className="py-2 text-right tabular-nums text-gray-500">{fmt((x.byKind['特別'] || 0) + (x.byKind['特別(半年)'] || 0))}</td>
+                      <td className="py-2 text-right tabular-nums text-gray-500">{fmt((x.byKind['升級'] || 0) + (x.byKind['升級(半年)'] || 0))}</td>
+                      <td className="py-2 text-right tabular-nums text-gray-500">{fmt(x.byKind['輔導'])}</td>
+                    </tr>
+                    {open === x.m.id && (
+                      <tr><td colSpan={6} className="bg-gray-50 rounded-lg p-3">
+                        {x.down.length === 0 ? <p className="text-xs text-gray-400">目前沒有符合辦法的下線主管（需有下線業務主任／襄理／區經理，且組織架構的上線要填對）。</p> : (<>
+                          <p className="text-[11px] font-bold text-gray-500 mb-1">{Number(month.slice(5))} 月明細</p>
+                          {x.monthly[curIdx].lines.length === 0 ? <p className="text-xs text-gray-400">本月下線單位還沒有已發單的 FYC。</p> : x.monthly[curIdx].lines.map((l, i) => (
+                            <p key={i} className="text-xs text-gray-600 flex flex-wrap gap-x-2"><span className="font-semibold w-20">{l.name}</span><span className="w-20">{l.role}・{l.kind}</span><span className="tabular-nums">FYC {fmt(l.fyc)} × {(l.rate * 100).toFixed(3).replace(/\.?0+$/, '')}%{x.sKey === 'R' && x.monthly[curIdx].quota < 1 ? ` × 責任額${Math.round(x.monthly[curIdx].quota * 100)}%` : ''} = <b>{fmt(l.amount)}</b></span></p>
+                          ))}
+                          <p className="text-[11px] font-bold text-gray-500 mt-2 mb-1">每月推算</p>
+                          <div className="flex flex-wrap gap-1.5">{x.monthly.map((m, i) => <span key={m.month} className={`px-2 py-1 rounded-md text-[11px] tabular-nums ${i === curIdx ? 'bg-violet-600 text-white font-bold' : m.total ? 'bg-white border border-gray-200 text-gray-700' : 'bg-white border border-gray-100 text-gray-300'}`}>{i + 1}月 {fmt(m.total)}</span>)}</div>
+                          {x.half.some(h => h.total > 0) && <p className="text-[11px] text-gray-500 mt-2">半年加發：{x.half.map(h => h.total > 0 ? `${h.half === 1 ? '上' : '下'}半年 ${fmt(h.total)}（${h.lines.map(l => l.name).join('、')}）` : '').filter(Boolean).join('；')}</p>}
+                        </>)}
+                      </td></tr>
+                    )}
+                  </React.Fragment>
+                ))}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[10.5px] text-gray-400 mt-2">FYC 以「保費×商品佣金率」推算，未含行銷獎金及 103 年前商品加成；僅供規劃參考，正式金額以公司發放為準。計算方式與範例請見知識庫「獎金制度」分類。</p>
+        </div>
+      )}
+    </Card>
+  );
+};
+
 // --- 關注名單 (獨立分頁：關注銷售 + 關注增員 兩個列表) ---
 // --- 區運作 BINGO 挑戰賽：計分邏輯 ---
 const getISOWeekKey = (d) => {
@@ -9598,7 +9976,7 @@ const TrainingChecklistPage = ({ team }) => {
   );
 };
 
-const WatchlistPage = ({ loggedInUser, customers }) => {
+const WatchlistPage = ({ loggedInUser, customers, team, records }) => {
   const today = getTodayDate();
   const [busyId, setBusyId] = useState(null);
   const [completingContact, setCompletingContact] = useState(null);
@@ -9681,6 +10059,8 @@ const WatchlistPage = ({ loggedInUser, customers }) => {
           {renderList(recruitWatch, 'teal', toggleRecruitWatch)}
         </Card>
       </div>
+
+      {team && records && <TeamTrackers team={team} records={records} loggedInUser={loggedInUser} />}
 
       {completingContact && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -14468,7 +14848,7 @@ const App = () => {
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
-        {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
+        {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} team={team} records={enrichedRecords} />}
         {activeTab === 'warroom' && <SalesWarRoomPage loggedInUser={loggedInUser} team={team} customers={customers} records={enrichedRecords} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'announce' && <AnnouncementsPage loggedInUser={loggedInUser} announcements={announcements} canPost={isTeamScheduleViewer} onSeen={handleMarkAnnouncementsSeen} />}
         {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} isManagerViewer={isTeamScheduleViewer} />}
