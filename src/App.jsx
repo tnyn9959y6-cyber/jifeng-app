@@ -3483,6 +3483,22 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const qualRows = useMemo(() => members.map(m => ({ m, q: getQualityInfo(m, records) })).filter(x => x.q), [members, records]);
   const qualActive = qualRows.filter(x => x.q.state === 'active').length;
   const qualUnset = qualRows.filter(x => x.q.state === 'unset').length;
+  const [seedMsg, setSeedMsg] = useState('');
+  const seedQuality = async () => {
+    const plan = [['莊唯妮', '2026-05', '2026-08-01'], ['尤咨穎', '2026-07', null], ['陳鈺雯', '2026-08', null]];
+    const done = [], miss = [];
+    for (const [nm, ym, promo] of plan) {
+      const m = (team || []).find(x => x.name === nm);
+      if (!m) { miss.push(nm); continue; }
+      try {
+        const upd = { qualityTalentStartMonth: ym };
+        if (promo) upd.promotionDates = { ...(m.promotionDates || {}), supervisor: promo };
+        await updateDoc(doc(db, 'user', m.id), upd);
+        done.push(nm);
+      } catch (e) { console.error(e); miss.push(nm); }
+    }
+    setSeedMsg(`已設定：${done.join('、') || '無'}${miss.length ? `；找不到或失敗：${miss.join('、')}` : ''}（重新整理後生效）`);
+  };
 
   // ---- 增員 ----
   const recList = useMemo(() => (recruits || []).filter(r => !r.recruiterId || ids.has(String(r.recruiterId)) || true).map(r => ({ ...r, st: getRecruitStatus(r) })), [recruits]);
@@ -3820,6 +3836,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
   const sections = [
     ['overview', '總覽', LayoutGrid], ['activity', '全體活動量', Activity], ['goals', '個人目標', Target], ['contest', '競賽狀況', Trophy],
     ['quality', '優培狀況', Award], ['cases', '案件狀況', ClipboardList], ['recruit', '增員狀況', UserPlus],
+    ['track', '單位追蹤', Star],
   ];
   const sectionTitle = sections.find(s => s[0] === section)?.[1];
 
@@ -4006,12 +4023,24 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
             </div>
           </div>
         )}
+        {section === 'track' && (
+          <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar text-gray-900">
+            <TeamTrackers team={team} records={records} loggedInUser={loggedInUser} />
+          </div>
+        )}
+
         {section === 'quality' && (
           <div className="grid grid-cols-[1fr_280px] gap-3 flex-1 min-h-0">
             <Panel title="優培狀況（點成員展開細項）" icon={Award} tone="text-orange-300">{qualityList(30, true)}</Panel>
             <div className="flex flex-col gap-3 min-h-0">
               <KPI icon={Award} label="進行中" value={qualActive} unit="人" sub="每階段 3 個月" color="#fb923c" />
               <KPI icon={AlertTriangle} label="未填期別" value={qualUnset} unit="人" sub="請到個人設定補上" color="#fb7185" />
+              {loggedInUser?.name === '吳政翰' && (
+                <div className="mt-auto">
+                  <button onClick={seedQuality} className="w-full text-[11px] text-gray-400 hover:text-orange-300 border border-white/10 rounded-lg py-1.5">補入優培期別（唯妮 11405・咨穎 11407・鈺雯 11408）</button>
+                  {seedMsg && <p className="text-[10px] text-orange-200 mt-1">{seedMsg}</p>}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -9281,7 +9310,10 @@ const computeFourStar = ({ team, records, month, lookback = 6 }) => {
     const now = cnt(month);
     const hist = trail.map(k => ({ month: k, n: cnt(k), ok: cnt(k) >= FOUR_STAR_TARGET }));
     const yearOk = Array.from({ length: mo }, (_, i) => cnt(`${y}-${String(i + 1).padStart(2, '0')}`) >= FOUR_STAR_TARGET).filter(Boolean).length;
-    return { m, now, ok: now >= FOUR_STAR_TARGET, need: Math.max(0, FOUR_STAR_TARGET - now), hist, yearOk, months: mo };
+    let streak = 0, k = month;
+    if (cnt(k) < FOUR_STAR_TARGET) k = ymAdd(k, -1); // 本月還沒達標就從上個月往前算
+    while (cnt(k) >= FOUR_STAR_TARGET && streak < 60) { streak++; k = ymAdd(k, -1); }
+    return { m, now, ok: now >= FOUR_STAR_TARGET, need: Math.max(0, FOUR_STAR_TARGET - now), hist, yearOk, months: mo, streak };
   });
 };
 
@@ -9344,7 +9376,71 @@ const computeRankEval = ({ team, records, month }) => {
   });
 };
 
-// --- 關注名單下方：四星會／職級評量／組織津貼 ---
+// ===== 增員獎金／增員培育獎金（115 年 7~12 月辦法）=====
+const ymAdd = (ym, n) => { const [y, m] = ym.split('-').map(Number); const d = new Date(y, m - 1 + n, 1); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`; };
+const nearestSupervisorOf = (idx, id) => {
+  let cur = idx.byId[String(id)], guard = 0;
+  while (cur && guard++ < 20) {
+    const p = cur.parentId ? idx.byId[String(cur.parentId)] : null;
+    if (!p) return null;
+    if (SUP_KEY(p.role)) return p;
+    cur = p;
+  }
+  return null;
+};
+const NURTURE_TIERS = [[300000, 0.20], [210000, 0.18], [150000, 0.16], [100000, 0.14], [60000, 0.12], [30000, 0.10]];
+const nurtureRate = (total) => (NURTURE_TIERS.find(t => total >= t[0]) || [0, 0])[1];
+const recruitBonusAmount = (fyc) => fyc >= 50000 ? Math.min(25000, Math.round(fyc * 0.10)) : fyc >= 30000 ? Math.round(fyc * 0.05) : 0;
+
+const computeRecruitBonuses = ({ team, records, year, today }) => {
+  const idx = buildOrgIndex(team);
+  const agg = aggregateByAgentMonth(records);
+  const issued = (records || []).filter(isIssuedRecord);
+  // 一、增員獎金：115/7~12 簽約的新人，合約生效日起 6 個月內壽險＋意外險 FYC 達 30,000
+  const newcomers = (team || []).filter(m => {
+    const reg = m.promotionDates?.registered;
+    return reg && reg >= `${year}-07-01` && reg <= `${year}-12-31`;
+  }).map(m => {
+    const reg = m.promotionDates.registered;
+    const end = new Date(reg); end.setMonth(end.getMonth() + 6);
+    const endIso = end.toISOString().slice(0, 10);
+    const fyc = issued.filter(r => String(r.agentId) === String(m.id) && r.date >= reg && r.date < endIso).reduce((s, r) => s + fycOfRecord(r), 0);
+    const sup = nearestSupervisorOf(idx, m.id);
+    return { m, reg, endIso, fyc, amount: recruitBonusAmount(fyc), need: Math.max(0, 30000 - fyc), done: today >= endIso, receiver: sup?.name || '—' };
+  });
+  // 二、增員培育獎金（每季）：目標新人每季合計 FYC（＋行銷獎金）依級距，專案新人委任主任後以 1.5 倍計
+  const quarters = [{ label: '第 3 季（7~9 月）', months: [7, 8, 9] }, { label: '第 4 季（10~12 月）', months: [10, 11, 12] }].map(q => ({ ...q, months: q.months.map(n => `${year}-${String(n).padStart(2, '0')}`) }));
+  const nurture = quarters.map(q => {
+    const byRecv = {};
+    (team || []).forEach(m => {
+      const proj = m.qualityTalentStartMonth || '';
+      const reg = m.promotionDates?.registered ? m.promotionDates.registered.slice(0, 7) : '';
+      const promo = m.promotionDates?.supervisor ? m.promotionDates.supervisor.slice(0, 7) : '';
+      const npStart = reg ? ymAdd(reg, 1) : '';
+      const rows = q.months.map(mo => {
+        let mult = 0, kind = '';
+        if (proj && mo >= proj && mo <= ymAdd(proj, 23)) { kind = '專案新人'; mult = (promo && mo >= promo && promo <= ymAdd(proj, 12)) ? 1.5 : 1; }
+        else if (!proj && npStart && mo >= npStart && mo <= ymAdd(npStart, 23) && promo && promo <= ymAdd(npStart, 12)) { kind = '非專案新人'; mult = mo >= promo ? 1.5 : 0; }
+        const fyc = agg[String(m.id)]?.[mo]?.fyc || 0;
+        return { mo, mult, fyc, kind };
+      }).filter(r => r.mult > 0);
+      if (!rows.length) return;
+      const sum = rows.reduce((s, r) => s + r.fyc, 0);
+      const qualified = sum / rows.length >= 10000;
+      const counted = qualified ? rows.reduce((s, r) => s + r.fyc * r.mult, 0) : 0;
+      const recv = nearestSupervisorOf(idx, m.id);
+      if (!recv) return;
+      const g = (byRecv[recv.id] = byRecv[recv.id] || { recv, items: [], base: 0 });
+      g.items.push({ m, kind: rows[0].kind, months: rows.length, fyc: sum, mult: rows.some(r => r.mult === 1.5) ? (rows.every(r => r.mult === 1.5) ? '1.5' : '1／1.5') : '1', qualified, counted });
+      g.base += counted;
+    });
+    const list = Object.values(byRecv).map(g => ({ ...g, rate: nurtureRate(g.base), amount: Math.round(g.base * nurtureRate(g.base)) })).sort((a, b) => b.amount - a.amount);
+    return { ...q, list, total: list.reduce((s, g) => s + g.amount, 0) };
+  });
+  return { newcomers, nurture };
+};
+
+// --- 每月總覽「單位追蹤」：四星會／職級評量／組織津貼／增員獎金 ---
 const TeamTrackers = ({ team, records, loggedInUser }) => {
   const [tab, setTab] = useState('star');
   const [open, setOpen] = useState(null);
@@ -9361,6 +9457,7 @@ const TeamTrackers = ({ team, records, loggedInUser }) => {
   const fmt = (n) => Math.round(n || 0).toLocaleString();
   const curIdx = Number(month.slice(5)) - 1;
   const starSorted = [...star].sort((a, b) => (b.now - a.now) || a.m.name.localeCompare(b.m.name));
+  const rb = useMemo(() => computeRecruitBonuses({ team: unit, records, year, today: getTodayDate() }), [unit, records, year]);
   const sumAnnual = allow.reduce((s, x) => s + x.annual, 0);
   const sumMonth = allow.reduce((s, x) => s + (x.monthly[curIdx]?.total || 0), 0);
   const perName = (iso) => `${Number(iso.slice(5))}月`;
@@ -9370,7 +9467,7 @@ const TeamTrackers = ({ team, records, loggedInUser }) => {
       <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
         <h3 className="font-bold text-gray-800 flex items-center gap-2 text-sm"><Award size={16} className="text-violet-500" /> 單位追蹤：四星會・職級評量・組織津貼</h3>
         <div className="inline-flex p-1 rounded-full bg-gray-100">
-          {[['star', '四星會'], ['rank', '職級評量'], ['allow', '組織津貼']].map(([k, l]) => (
+          {[['star', '四星會'], ['rank', '職級評量'], ['allow', '組織津貼'], ['recruit', '增員獎金']].map(([k, l]) => (
             <button key={k} onClick={() => { setTab(k); setOpen(null); }} className={`px-3.5 py-1.5 rounded-full text-xs font-bold transition ${tab === k ? 'bg-violet-600 text-white' : 'text-gray-500 hover:text-gray-800'}`}>{l}</button>
           ))}
         </div>
@@ -9381,7 +9478,7 @@ const TeamTrackers = ({ team, records, loggedInUser }) => {
           <p className="text-xs text-gray-400 mb-3">四星會：每個月要有 {FOUR_STAR_TARGET} 位「不同被保險人」的保單核發（已發單）。本月（{month}）進度如下，右側為近 6 個月與今年達成月數。</p>
           <div className="overflow-x-auto">
             <table className="w-full text-sm min-w-[560px]">
-              <thead><tr className="text-[11px] text-gray-400 text-left"><th className="pb-2 font-normal">成員</th><th className="pb-2 font-normal">本月不同被保險人</th><th className="pb-2 font-normal">狀態</th><th className="pb-2 font-normal">近 6 個月</th><th className="pb-2 font-normal text-right">今年達成</th></tr></thead>
+              <thead><tr className="text-[11px] text-gray-400 text-left"><th className="pb-2 font-normal">成員</th><th className="pb-2 font-normal">本月不同被保險人</th><th className="pb-2 font-normal">狀態</th><th className="pb-2 font-normal">近 6 個月</th><th className="pb-2 font-normal text-right">連續</th><th className="pb-2 font-normal text-right">今年達成</th></tr></thead>
               <tbody>
                 {starSorted.map(r => (
                   <tr key={r.m.id} className="border-t border-gray-100">
@@ -9389,13 +9486,14 @@ const TeamTrackers = ({ team, records, loggedInUser }) => {
                     <td className="py-2 w-44"><div className="flex items-center gap-2"><div className="flex-1 h-1.5 rounded-full bg-gray-100 overflow-hidden"><div className={`h-full rounded-full ${r.ok ? 'bg-emerald-500' : 'bg-violet-400'}`} style={{ width: `${Math.min(100, r.now / FOUR_STAR_TARGET * 100)}%` }}></div></div><span className="text-xs font-bold tabular-nums text-gray-700">{r.now}/{FOUR_STAR_TARGET}</span></div></td>
                     <td className="py-2">{r.ok ? <span className="text-[11px] font-bold text-emerald-600">✓ 已達標</span> : <span className="text-[11px] text-amber-600 font-semibold">還差 {r.need} 人</span>}</td>
                     <td className="py-2"><div className="flex gap-1">{r.hist.map(h => <span key={h.month} title={`${h.month}：${h.n} 人`} className={`w-5 h-5 rounded text-[9px] flex items-center justify-center font-bold ${h.ok ? 'bg-emerald-500 text-white' : 'bg-gray-100 text-gray-400'}`}>{h.n}</span>)}</div></td>
+                    <td className="py-2 text-right text-xs tabular-nums text-gray-600">{r.streak} 個月{r.streak >= 6 ? ' 🎁' : ''}</td>
                     <td className="py-2 text-right text-xs font-bold tabular-nums text-gray-700">{r.yearOk} / {r.months} 個月</td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
-          <p className="text-[10.5px] text-gray-400 mt-2">被保險人姓名以業績回報填寫的為準，同一人只算 1 位；只計入狀態為「已發單」的保單。</p>
+          <p className="text-[10.5px] text-gray-400 mt-2">被保險人姓名以業績回報填寫的為準，同一人只算 1 位；只計入狀態為「已發單」的保單。優培專案新人「連續 6 個月」達標可得 iPad 一台（專案期間限一次）。</p>
         </div>
       )}
 
@@ -9451,6 +9549,47 @@ const TeamTrackers = ({ team, records, loggedInUser }) => {
             </div>
             <p className="text-[10.5px] text-gray-400 mt-2">第一年：加權保費 25,000 且 1 件，或加權保費 75,000，或 FYC 12,000；第二年起：37,500 且 1 件，或 25,000 且 2 件，或 FYC 12,000。件數以系統內已發單筆數計，實際件數規則以公司為準。</p>
           </div>
+        </div>
+      )}
+
+      {tab === 'recruit' && (
+        <div className="space-y-5">
+          <div>
+            <p className="text-xs font-bold text-gray-500 mb-1">增員獎金（{year} 年 7~12 月簽約的新人）</p>
+            <p className="text-[11px] text-gray-400 mb-2">新人合約生效日起 6 個月內，壽險＋意外險 FYC 滿 30,000 才有獎金：30,000～49,999 給 5%，50,000 以上給 10%（上限 25,000）。以組織架構的「登錄日期」為合約生效日，獎金給最近的上線主管（若新人是由業務代表引薦且三方簽聲明書，獎金改給引薦的業務代表）。</p>
+            {rb.newcomers.length === 0 ? <p className="text-xs text-gray-400 py-2">目前沒有登錄日期落在 {year} 年 7~12 月的新人（請到組織架構補上登錄日期）。</p> : (
+              <div className="overflow-x-auto"><table className="w-full text-sm min-w-[560px]">
+                <thead><tr className="text-[11px] text-gray-400 text-left"><th className="pb-2 font-normal">新人</th><th className="pb-2 font-normal">登錄日</th><th className="pb-2 font-normal">6 個月期限</th><th className="pb-2 font-normal text-right">FYC</th><th className="pb-2 font-normal text-right">獎金</th><th className="pb-2 font-normal pl-3">領取人</th></tr></thead>
+                <tbody>{rb.newcomers.map(n => (
+                  <tr key={n.m.id} className="border-t border-gray-100">
+                    <td className="py-2 font-bold text-gray-900">{n.m.name}</td>
+                    <td className="py-2 text-xs text-gray-500 tabular-nums">{n.reg}</td>
+                    <td className="py-2 text-xs text-gray-500 tabular-nums">{n.endIso}{n.done ? '（已結束）' : ''}</td>
+                    <td className="py-2 text-right tabular-nums">{fmt(n.fyc)}</td>
+                    <td className="py-2 text-right tabular-nums font-bold text-violet-700">{n.amount ? fmt(n.amount) : <span className="text-gray-300 font-normal">{n.need ? `差 ${fmt(n.need)}` : '—'}</span>}</td>
+                    <td className="py-2 pl-3 text-xs text-gray-600">{n.receiver}</td>
+                  </tr>))}</tbody>
+              </table></div>
+            )}
+          </div>
+          <div>
+            <p className="text-xs font-bold text-gray-500 mb-1">增員培育獎金（每季）</p>
+            <p className="text-[11px] text-gray-400 mb-2">目標新人（優培專案新人：專案生效月起 24 個月；非專案新人：登錄次月起 24 個月且一年內升主任）每季每月平均 FYC 達 10,000 才計入；委任主任後以 1.5 倍計。合計 30,000 以上依級距 10%～20%。優培期別取自成員的「優培期別」，升任主任日期取自組織架構。FYC 未含行銷獎金。</p>
+            {rb.nurture.map(q => (
+              <div key={q.label} className="mb-3">
+                <p className="text-[12px] font-bold text-gray-700 mb-1">{q.label}　合計 <span className="text-violet-700">${fmt(q.total)}</span></p>
+                {q.list.length === 0 ? <p className="text-xs text-gray-400">沒有符合的目標新人（需有優培期別，或登錄日期＋升任主任日期）。</p> : q.list.map(g => (
+                  <div key={g.recv.id} className="rounded-xl border border-gray-100 p-3 mb-2">
+                    <p className="text-sm font-bold text-gray-900">{g.recv.name}　<span className="text-xs font-normal text-gray-500">計入基礎 {fmt(g.base)} × {Math.round(g.rate * 100)}% ＝ </span><span className="text-violet-700">${fmt(g.amount)}</span></p>
+                    <div className="mt-1 space-y-0.5">{g.items.map(it => (
+                      <p key={it.m.id} className="text-[11px] text-gray-500 flex flex-wrap gap-x-3"><span className="font-semibold text-gray-700 w-14">{it.m.name}</span><span>{it.kind}</span><span className="tabular-nums">{it.months} 個月 FYC {fmt(it.fyc)}（月均 {fmt(it.fyc / it.months)}）× {it.mult}</span><span className={it.qualified ? 'text-emerald-600 font-semibold' : 'text-amber-600'}>{it.qualified ? '計入 ' + fmt(it.counted) : '月均未達 10,000'}</span></p>
+                    ))}</div>
+                  </div>
+                ))}
+              </div>
+            ))}
+          </div>
+          <p className="text-[10.5px] text-gray-400">以上為依系統已發單資料的推算，未含行銷獎金，領取還須主管在每季最後一日仍具主管身分；正式金額以公司發放為準。詳見知識庫「獎金與制度」。</p>
         </div>
       )}
 
@@ -9976,7 +10115,7 @@ const TrainingChecklistPage = ({ team }) => {
   );
 };
 
-const WatchlistPage = ({ loggedInUser, customers, team, records }) => {
+const WatchlistPage = ({ loggedInUser, customers }) => {
   const today = getTodayDate();
   const [busyId, setBusyId] = useState(null);
   const [completingContact, setCompletingContact] = useState(null);
@@ -10060,7 +10199,6 @@ const WatchlistPage = ({ loggedInUser, customers, team, records }) => {
         </Card>
       </div>
 
-      {team && records && <TeamTrackers team={team} records={records} loggedInUser={loggedInUser} />}
 
       {completingContact && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -14848,7 +14986,7 @@ const App = () => {
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
-        {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} team={team} records={enrichedRecords} />}
+        {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
         {activeTab === 'warroom' && <SalesWarRoomPage loggedInUser={loggedInUser} team={team} customers={customers} records={enrichedRecords} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'announce' && <AnnouncementsPage loggedInUser={loggedInUser} announcements={announcements} canPost={isTeamScheduleViewer} onSeen={handleMarkAnnouncementsSeen} />}
         {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} isManagerViewer={isTeamScheduleViewer} />}
