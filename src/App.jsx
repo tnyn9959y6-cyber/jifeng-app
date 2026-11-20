@@ -256,6 +256,25 @@ const calcAge = (birthday) => {
 
 const getGoogleMapsUrl = (address) => `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(address)}`;
 const getAppleMapsUrl = (address) => `https://maps.apple.com/?q=${encodeURIComponent(address)}`;
+const getThreadsUrl = (handle) => /^https?:\/\//i.test(handle) ? handle : `https://www.threads.com/@${encodeURIComponent(handle.trim().replace(/^@/, ''))}`;
+const GRADE_DEFS = {
+  lower: [
+    { key: 'a', title: 'a', desc: '信任高・接觸高' },
+    { key: 'b', title: 'b', desc: '信任高・接觸低' },
+    { key: 'c', title: 'c', desc: '信任低・接觸高' },
+    { key: 'd', title: 'd', desc: '信任低・接觸低' },
+  ],
+  upper: [
+    { key: 'A', title: 'A', desc: '高資產主要接觸客戶' },
+    { key: 'B', title: 'B', desc: '一般客戶' },
+    { key: 'C', title: 'C', desc: '保服承接、第二順位業務' },
+    { key: 'D', title: 'D', desc: '解約、減額繳清、取消附約等' },
+  ],
+};
+const gradeDesc = (g) => { const f = [...GRADE_DEFS.lower, ...GRADE_DEFS.upper].find(x => x.key === g); return f ? f.desc : ''; };
+const gradeCls = (g) => !g ? '' : (g === g.toUpperCase() ? 'bg-indigo-600 text-white border-indigo-600' : 'bg-white text-indigo-600 border-indigo-300');
+const GradeBadge = ({ grade }) => grade ? <span title={gradeDesc(grade)} className={`inline-flex items-center justify-center min-w-[20px] h-5 px-1.5 rounded-full border text-[11px] font-extrabold ${gradeCls(grade)}`}>{grade}</span> : null;
+
 const getInstagramUrl = (handle) => /^https?:\/\//i.test(handle) ? handle : `https://instagram.com/${encodeURIComponent(handle.replace(/^@/, ''))}`;
 const openLineChat = (lineId) => {
   try { navigator.clipboard?.writeText(lineId); } catch (e) { /* ignore */ }
@@ -7652,17 +7671,141 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
   );
 };
 
+
+// --- 客戶分級：一次一張卡的快速分類頁 ---
+const GradeSorterModal = ({ isOpen, onClose, customers, records, loggedInUser }) => {
+  const [mode, setMode] = useState('todo');
+  const [ids, setIds] = useState([]);
+  const [idx, setIdx] = useState(0);
+  const [history, setHistory] = useState([]);
+  const [dealMap, setDealMap] = useState({});
+  const [busy, setBusy] = useState(false);
+
+  const buildQueue = (m) => customers.filter(c => m === 'all' || !c.grade).map(c => c.id);
+  useEffect(() => {
+    if (!isOpen) return;
+    setMode('todo'); setIds(buildQueue('todo')); setIdx(0); setHistory([]); setDealMap({});
+    // eslint-disable-next-line
+  }, [isOpen]);
+
+  if (!isOpen) return null;
+  const switchMode = (m) => { setMode(m); setIds(buildQueue(m)); setIdx(0); setHistory([]); };
+  const cur = idx < ids.length ? customers.find(c => c.id === ids[idx]) : null;
+  const myRecords = (name) => (records || []).filter(r => r.agentId === loggedInUser.id && (r.insuredName || '').trim() === (name || '').trim());
+  const defaultDeal = (c) => c.grade ? c.grade === c.grade.toUpperCase() : (myRecords(c.name).length > 0 || (c.tags || []).includes('既有客戶'));
+  const isDeal = cur ? (dealMap[cur.id] !== undefined ? dealMap[cur.id] : defaultDeal(cur)) : false;
+  const options = isDeal ? GRADE_DEFS.upper : GRADE_DEFS.lower;
+  const total = ids.length;
+
+  const pick = async (key) => {
+    if (!cur || busy) return;
+    setBusy(true);
+    try {
+      await updateDoc(doc(db, 'customers', cur.id), { grade: key });
+      setHistory(h => [...h, { id: cur.id, prev: cur.grade || '', idx }]);
+      setIdx(i => i + 1);
+    } catch (e) { console.error(e); } finally { setBusy(false); }
+  };
+  const skip = () => { if (cur) { setHistory(h => [...h, { id: cur.id, prev: null, idx }]); setIdx(i => i + 1); } };
+  const goBack = async () => {
+    if (history.length === 0 || busy) return;
+    const last = history[history.length - 1];
+    setBusy(true);
+    try {
+      if (last.prev !== null) await updateDoc(doc(db, 'customers', last.id), { grade: last.prev });
+      setHistory(h => h.slice(0, -1));
+      setIdx(last.idx);
+    } catch (e) { console.error(e); } finally { setBusy(false); }
+  };
+
+  const policies = cur ? myRecords(cur.name) : [];
+  const lastVisit = cur ? (cur.visitLog || []).reduce((m, v) => (v.date && v.date > m ? v.date : m), '') : '';
+
+  return (
+    <div className="fixed inset-0 z-[120] bg-slate-950 text-white flex flex-col">
+      <div className="flex items-center justify-between px-4 pt-4 pb-2 shrink-0">
+        <button onClick={goBack} disabled={history.length === 0 || busy} className="flex items-center gap-1 text-sm font-bold px-3 py-2 rounded-full bg-white/10 disabled:opacity-30"><RotateCcw size={15} /> 返回上一張</button>
+        <div className="text-center">
+          <p className="text-sm font-bold">客戶快速分類</p>
+          <p className="text-[11px] text-white/50">{total === 0 ? '沒有待分類客戶' : `${Math.min(idx + 1, total)} / ${total}`}</p>
+        </div>
+        <button onClick={onClose} className="p-2 rounded-full bg-white/10"><X size={18} /></button>
+      </div>
+      <div className="px-4 shrink-0">
+        <div className="h-1 rounded-full bg-white/10 overflow-hidden"><div className="h-full bg-indigo-400 transition-all" style={{ width: total ? `${Math.min(idx, total) / total * 100}%` : '0%' }} /></div>
+        <div className="flex gap-2 mt-3 justify-center">
+          {[['todo', '只看尚未分級'], ['all', '全部客戶（可重新分類）']].map(([k, l]) => (
+            <button key={k} onClick={() => switchMode(k)} className={`text-xs font-bold px-3 py-1.5 rounded-full border ${mode === k ? 'bg-white text-slate-900 border-white' : 'border-white/20 text-white/70'}`}>{l}</button>
+          ))}
+        </div>
+      </div>
+
+      <div className="flex-1 overflow-y-auto px-4 py-4 flex flex-col items-center">
+        {!cur ? (
+          <div className="m-auto text-center space-y-3">
+            <CheckCircle2 size={48} className="mx-auto text-emerald-400" />
+            <p className="text-lg font-bold">{total === 0 ? '所有客戶都分級完了' : '這一輪分類完成'}</p>
+            <p className="text-sm text-white/50">按右上角關閉，或按左上角返回修改上一張</p>
+            <button onClick={onClose} className="mt-2 px-6 py-3 rounded-2xl bg-indigo-600 font-bold">完成</button>
+          </div>
+        ) : (
+          <div className="w-full max-w-md space-y-4">
+            <div className="rounded-3xl bg-white/[0.06] border border-white/10 p-5 space-y-3">
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="text-2xl font-extrabold truncate">{cur.name}</p>
+                  <div className="flex flex-wrap gap-1.5 mt-2">
+                    {(cur.tags || []).map(t => <span key={t} className="text-[11px] rounded-full px-2.5 py-0.5 border border-white/20 text-white/80">{t}</span>)}
+                  </div>
+                </div>
+                {cur.grade && <span className="shrink-0 text-xs text-white/60">目前：<b className="text-white text-lg">{cur.grade}</b></span>}
+              </div>
+              <div className="text-[13px] text-white/70 space-y-1">
+                {(cur.region || cur.incomeRange) && <p>{[cur.region, cur.incomeRange].filter(Boolean).join('．')}</p>}
+                <p>上次聯繫：{lastVisit || '無紀錄'}</p>
+                <p>保單：{policies.length > 0 ? `${policies.length} 張，實收 ${formatMoney(policies.reduce((a, r) => a + (r.premium || 0), 0))}` : '無'}</p>
+                {cur.notes && <p className="text-white/50 line-clamp-3">備註：{cur.notes}</p>}
+              </div>
+              {(cur.threadsHandle || cur.igHandle) && (
+                <div className="flex gap-2">
+                  {cur.igHandle && <a href={getInstagramUrl(cur.igHandle)} target="_blank" rel="noopener noreferrer" className="text-[11px] font-extrabold px-3 py-1.5 rounded-full bg-white/10 text-pink-300">IG</a>}
+                  {cur.threadsHandle && <a href={getThreadsUrl(cur.threadsHandle)} target="_blank" rel="noopener noreferrer" className="text-[11px] font-extrabold px-3 py-1.5 rounded-full bg-white/10">Threads</a>}
+                </div>
+              )}
+              <div className="flex rounded-2xl bg-black/30 p-1">
+                {[[false, '尚未成交（小寫）'], [true, '已成交（大寫）']].map(([v, l]) => (
+                  <button key={String(v)} onClick={() => setDealMap(m => ({ ...m, [cur.id]: v }))} className={`flex-1 text-xs font-bold py-2 rounded-xl transition ${isDeal === v ? 'bg-indigo-600 text-white' : 'text-white/50'}`}>{l}</button>
+                ))}
+              </div>
+            </div>
+            <div className="grid grid-cols-2 gap-3">
+              {options.map(g => (
+                <button key={g.key} disabled={busy} onClick={() => pick(g.key)} className="rounded-2xl bg-white/10 hover:bg-indigo-600 active:scale-95 transition p-4 text-left disabled:opacity-50">
+                  <p className="text-3xl font-extrabold leading-none">{g.title}</p>
+                  <p className="text-[12px] text-white/70 mt-2 leading-snug">{g.desc}</p>
+                </button>
+              ))}
+            </div>
+            <button onClick={skip} className="w-full text-sm font-bold text-white/50 py-2">先跳過這位</button>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+};
+
 const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relationships }) => {
   const [search, setSearch] = useState('');
   const [showFilter, setShowFilter] = useState(false);
-  const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '', vipOnly: false, igOnly: false, salesWatchOnly: false, recruitWatchOnly: false });
+  const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '', grade: '', vipOnly: false, igOnly: false, salesWatchOnly: false, recruitWatchOnly: false });
   const [editCustomer, setEditCustomer] = useState(null);
   const [isAdding, setIsAdding] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState(null);
   const [isIGOpen, setIsIGOpen] = useState(false);
   const [isNotionOpen, setIsNotionOpen] = useState(false);
+  const [isSortOpen, setIsSortOpen] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
-  const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', birthday: '', gender: '', region: '', incomeRange: '', tags: ['準客戶'], notes: '', nextFollowUpDate: '', address: '', emergencyContactId: '', emergencyContactName: '' };
+  const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', threadsHandle: '', grade: '', birthday: '', gender: '', region: '', incomeRange: '', tags: ['準客戶'], notes: '', nextFollowUpDate: '', address: '', emergencyContactId: '', emergencyContactName: '' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const loaded = customersLoaded;
@@ -7697,7 +7840,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
 
   const filteredCustomers = useMemo(() => {
     return customers.filter(c => {
-      const matchSearch = !search || c.name.includes(search) || (c.phone || '').includes(search) || (c.igHandle || '').toLowerCase().includes(search.toLowerCase());
+      const matchSearch = !search || c.name.includes(search) || (c.phone || '').includes(search) || (c.igHandle || '').toLowerCase().includes(search.toLowerCase()) || (c.threadsHandle || '').toLowerCase().includes(search.toLowerCase());
       const age = calcAge(c.birthday);
       const matchAgeMin = !filters.ageMin || (age !== null && age >= Number(filters.ageMin));
       const matchAgeMax = !filters.ageMax || (age !== null && age <= Number(filters.ageMax));
@@ -7705,11 +7848,12 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
       const matchRegion = !filters.region || c.region === filters.region;
       const matchIncome = !filters.incomeRange || c.incomeRange === filters.incomeRange;
       const matchTag = !filters.tag || (c.tags || []).includes(filters.tag);
+      const matchGrade = !filters.grade || (filters.grade === '_none' ? !c.grade : c.grade === filters.grade);
       const matchVip = !filters.vipOnly || isVIPCustomer(c, records);
       const matchIg = !filters.igOnly || isIGListCustomer(c);
       const matchSalesWatch = !filters.salesWatchOnly || c.specialFocus;
       const matchRecruitWatch = !filters.recruitWatchOnly || c.specialFocusRecruit;
-      return matchSearch && matchAgeMin && matchAgeMax && matchGender && matchRegion && matchIncome && matchTag && matchVip && matchIg && matchSalesWatch && matchRecruitWatch;
+      return matchSearch && matchAgeMin && matchAgeMax && matchGender && matchRegion && matchIncome && matchTag && matchGrade && matchVip && matchIg && matchSalesWatch && matchRecruitWatch;
     });
   }, [customers, search, filters, records]);
 
@@ -7721,7 +7865,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   const openAdd = () => { setForm(emptyForm); setIsAdding(true); };
   const openEdit = (c) => {
     setEditCustomer(c);
-    setForm({ name: c.name, phone: c.phone || '', lineId: c.lineId || '', igHandle: c.igHandle || '', birthday: c.birthday || '', gender: c.gender || '', region: c.region || '', incomeRange: c.incomeRange || '', tags: (c.tags && c.tags.length) ? c.tags : ['準客戶'], notes: c.notes || '', nextFollowUpDate: c.nextFollowUpDate || '', address: c.address || '', emergencyContactId: c.emergencyContactId || '', emergencyContactName: c.emergencyContactName || '' });
+    setForm({ name: c.name, phone: c.phone || '', lineId: c.lineId || '', igHandle: c.igHandle || '', threadsHandle: c.threadsHandle || '', grade: c.grade || '', birthday: c.birthday || '', gender: c.gender || '', region: c.region || '', incomeRange: c.incomeRange || '', tags: (c.tags && c.tags.length) ? c.tags : ['準客戶'], notes: c.notes || '', nextFollowUpDate: c.nextFollowUpDate || '', address: c.address || '', emergencyContactId: c.emergencyContactId || '', emergencyContactName: c.emergencyContactName || '' });
   };
 
   const handleSave = async () => {
@@ -7810,7 +7954,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
 
   useEffect(() => {
     if (mergeSource && mergeTarget) {
-      const fields = ['name', 'phone', 'lineId', 'igHandle', 'birthday', 'gender', 'region', 'incomeRange', 'address', 'notes', 'nextFollowUpDate'];
+      const fields = ['name', 'phone', 'lineId', 'igHandle', 'threadsHandle', 'birthday', 'gender', 'region', 'incomeRange', 'address', 'notes', 'nextFollowUpDate'];
       const defaults = {};
       fields.forEach(f => { defaults[f] = mergeTarget[f] || mergeSource[f] || ''; });
       setMergeChoices(defaults);
@@ -7859,6 +8003,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   return (
     <div className="max-w-6xl md:max-w-none md:h-full mx-auto space-y-6 md:space-y-0 animate-fade-in pb-12 md:pb-0">
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除客戶" message="確定要刪除此客戶資料嗎？此動作無法復原。" />
+      <GradeSorterModal isOpen={isSortOpen} onClose={() => setIsSortOpen(false)} customers={customers} records={records} loggedInUser={loggedInUser} />
       <IGImportModal isOpen={isIGOpen} onClose={() => setIsIGOpen(false)} loggedInUser={loggedInUser} existingNames={existingNames} onImported={() => {}} />
       <RelationshipNetworkModal isOpen={!!networkFocusId} onClose={() => setNetworkFocusId(null)} focusId={networkFocusId} setFocusId={setNetworkFocusId} customers={customers} relationships={relationships || []} loggedInUser={loggedInUser} />
       <NotionImportModal isOpen={isNotionOpen} onClose={() => setIsNotionOpen(false)} loggedInUser={loggedInUser} onImported={() => {}} />
@@ -7875,6 +8020,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                 <div><label className="text-[10px] font-bold text-gray-400 block mb-1">性別</label><select className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none" value={filters.gender} onChange={e => setFilters({ ...filters, gender: e.target.value })}><option value="">全部</option>{GENDER_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
                 <div><label className="text-[10px] font-bold text-gray-400 block mb-1">地區</label><select className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none" value={filters.region} onChange={e => setFilters({ ...filters, region: e.target.value })}><option value="">全部</option>{TAIWAN_REGIONS.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
                 <div><label className="text-[10px] font-bold text-gray-400 block mb-1">年收入</label><select className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none" value={filters.incomeRange} onChange={e => setFilters({ ...filters, incomeRange: e.target.value })}><option value="">全部</option>{INCOME_RANGES.map(r => <option key={r} value={r}>{r}</option>)}</select></div>
+                <div><label className="text-[10px] font-bold text-gray-400 block mb-1">分級</label><select className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none" value={filters.grade} onChange={e => setFilters({ ...filters, grade: e.target.value })}><option value="">全部</option><option value="_none">尚未分級</option>{[...GRADE_DEFS.lower, ...GRADE_DEFS.upper].map(g => <option key={g.key} value={g.key}>{g.key}｜{g.desc}</option>)}</select></div>
                 <div><label className="text-[10px] font-bold text-gray-400 block mb-1">標籤</label><select className="w-full p-2 bg-white border border-gray-200 rounded-lg text-sm outline-none" value={filters.tag} onChange={e => setFilters({ ...filters, tag: e.target.value })}><option value="">全部</option>{CUSTOMER_TAGS.map(t => <option key={t} value={t}>{t}</option>)}</select></div>
               </div>
               <div className="flex flex-wrap gap-x-4 gap-y-2">
@@ -7889,6 +8035,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
           onToggleWatch={toggleSalesWatch} onOpenEdit={openEdit} onNetwork={setNetworkFocusId} onMerge={openMerge} onDelete={setDeleteTarget} onLine={openLineChat}
           menuId={cardMenuOpenId} setMenuId={setCardMenuOpenId} getInstagramUrl={getInstagramUrl}
           addItems={[
+            { label: '快速分類 a~d / A~D', icon: Layers, onClick: () => setIsSortOpen(true) },
             { label: '新增客戶', icon: UserPlus, onClick: openAdd },
             { label: 'IG 匯入', icon: Upload, onClick: () => setIsIGOpen(true) },
             { label: 'CSV 上傳', icon: Upload, onClick: () => setIsNotionOpen(true) }
@@ -7901,6 +8048,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
         today={getTodayDate()} isVIP={(c) => isVIPCustomer(c, records)} isIG={isIGListCustomer} isDue={isFollowUpDue}
         onToggleWatch={toggleSalesWatch} onToggleRecruitWatch={toggleRecruitWatch} onOpenEdit={openEdit} onNetwork={setNetworkFocusId} onMerge={openMerge} onDelete={setDeleteTarget} onLine={openLineChat} getInstagramUrl={getInstagramUrl}
         addItems={[
+          { label: '快速分類 a~d / A~D', icon: Layers, onClick: () => setIsSortOpen(true) },
           { label: '新增客戶', icon: UserPlus, onClick: openAdd },
           { label: 'IG 匯入', icon: Upload, onClick: () => setIsIGOpen(true) },
           { label: 'CSV 上傳', icon: Upload, onClick: () => setIsNotionOpen(true) }
@@ -8083,6 +8231,11 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                     <Upload size={12} /> IG: {c.igHandle}
                   </a>
                 )}
+                {c.threadsHandle && (
+                  <a href={getThreadsUrl(c.threadsHandle)} target="_blank" rel="noopener noreferrer" className="flex items-center gap-1.5 text-gray-700 hover:underline">
+                    <Upload size={12} /> Threads: {c.threadsHandle}
+                  </a>
+                )}
                 {c.birthday && <p className="flex items-center gap-1.5"><Cake size={12} /> {c.birthday}</p>}
                 {c.region && <p>{c.region}{c.incomeRange ? ` · ${c.incomeRange}` : ''}</p>}
                 {c.address && (
@@ -8167,6 +8320,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">LINE ID</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.lineId} onChange={e => setForm({ ...form, lineId: e.target.value })} /></div>
                 <div><label className="text-xs font-bold text-gray-500 block mb-1">IG 帳號</label><input type="text" className="w-full p-2 border border-gray-200 rounded-lg" value={form.igHandle} onChange={e => setForm({ ...form, igHandle: e.target.value })} /></div>
+                <div><label className="text-xs font-bold text-gray-500 block mb-1">Threads ID</label><input type="text" placeholder="例：wu_chenghan（不用加 @）" className="w-full p-2 border border-gray-200 rounded-lg" value={form.threadsHandle} onChange={e => setForm({ ...form, threadsHandle: e.target.value })} /></div>
               </div>
               <div className="grid grid-cols-2 gap-3">
                 <div>
@@ -8207,6 +8361,14 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                   onCreateNew={async () => { window.alert('若這個人不在客戶名單裡，直接在上方姓名欄填寫文字即可，不需要建立新客戶卡'); return null; }}
                 />
                 <p className="text-[10px] text-gray-400 mt-1">若對方是系統裡的客戶，用下面的搜尋框連結，之後可以直接點過去看他的資料</p>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">客戶分級（小寫＝未成交，大寫＝已成交）</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.grade} onChange={e => setForm({ ...form, grade: e.target.value })}>
+                  <option value="">尚未分級</option>
+                  <optgroup label="未成交">{GRADE_DEFS.lower.map(g => <option key={g.key} value={g.key}>{g.key}｜{g.desc}</option>)}</optgroup>
+                  <optgroup label="已成交">{GRADE_DEFS.upper.map(g => <option key={g.key} value={g.key}>{g.key}｜{g.desc}</option>)}</optgroup>
+                </select>
               </div>
               <div>
                 <label className="text-xs font-bold text-gray-500 block mb-2">標籤（可複選）</label>
@@ -8277,8 +8439,8 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
             {mergeTarget && mergeSource && (
               <div className="space-y-3 border-t border-gray-100 pt-4">
                 <p className="text-[10px] text-gray-400">標籤會自動合併兩邊的所有標籤，不需要選擇。</p>
-                {['name', 'phone', 'lineId', 'igHandle', 'birthday', 'gender', 'region', 'incomeRange', 'address', 'nextFollowUpDate', 'notes'].map(field => {
-                  const labelMap = { name: '姓名', phone: '電話', lineId: 'LINE ID', igHandle: 'IG帳號', birthday: '生日', gender: '性別', region: '地區', incomeRange: '年收入', address: '地址', nextFollowUpDate: '下次追蹤日期', notes: '備註' };
+                {['name', 'phone', 'lineId', 'igHandle', 'threadsHandle', 'birthday', 'gender', 'region', 'incomeRange', 'address', 'nextFollowUpDate', 'notes'].map(field => {
+                  const labelMap = { name: '姓名', phone: '電話', lineId: 'LINE ID', igHandle: 'IG帳號', threadsHandle: 'Threads', birthday: '生日', gender: '性別', region: '地區', incomeRange: '年收入', address: '地址', nextFollowUpDate: '下次追蹤日期', notes: '備註' };
                   if (!mergeSource[field] && !mergeTarget[field]) return null;
                   return (
                     <div key={field} className="text-xs">
@@ -10115,8 +10277,28 @@ const TrainingChecklistPage = ({ team }) => {
   );
 };
 
-const WatchlistPage = ({ loggedInUser, customers }) => {
+const WatchlistPage = ({ loggedInUser, customers, scheduleEvents = [] }) => {
   const today = getTodayDate();
+  const [reviewRange, setReviewRange] = useState(1);
+  const [reviewSort, setReviewSort] = useState('recent');
+  const reviewRows = useMemo(() => {
+    const d = new Date(today);
+    d.setMonth(d.getMonth() - reviewRange);
+    const start = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+    const map = {};
+    (scheduleEvents || []).forEach(e => {
+      if (!e.customerId || e.status === 'cancelled' || !e.date || e.date < start || e.date > today) return;
+      const c = customers.find(x => x.id === e.customerId);
+      if (!c) return;
+      const r = map[c.id] || (map[c.id] = { c, count: 0, done: 0, last: '', lastTitle: '' });
+      r.count += 1;
+      if (e.status === 'completed') r.done += 1;
+      if (e.date >= r.last) { r.last = e.date; r.lastTitle = e.title || e.type || ''; }
+    });
+    const rows = Object.values(map);
+    rows.sort((a, b) => reviewSort === 'count' ? (b.count - a.count || b.last.localeCompare(a.last)) : reviewSort === 'grade' ? ((a.c.grade || '~').localeCompare(b.c.grade || '~') || b.last.localeCompare(a.last)) : b.last.localeCompare(a.last));
+    return { start, rows };
+  }, [scheduleEvents, customers, reviewRange, reviewSort, today]);
   const [busyId, setBusyId] = useState(null);
   const [completingContact, setCompletingContact] = useState(null);
   const [contactType, setContactType] = useState('appointment');
@@ -10171,6 +10353,7 @@ const WatchlistPage = ({ loggedInUser, customers }) => {
             </div>
             <div className="flex gap-1.5 shrink-0">
               {c.igHandle && <a href={getInstagramUrl(c.igHandle)} target="_blank" rel="noopener noreferrer" title="開啟 IG" className="bg-gradient-to-tr from-amber-400 via-pink-500 to-purple-600 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center">IG</a>}
+              {c.threadsHandle && <a href={getThreadsUrl(c.threadsHandle)} target="_blank" rel="noopener noreferrer" title="開啟 Threads" className="bg-gray-900 text-white text-xs font-bold px-3 py-2 rounded-lg flex items-center">Threads</a>}
               <button disabled={busyId === c.id} onClick={() => openContactModal(c)} className={`${s.btn} text-white text-xs font-bold px-3 py-2 rounded-lg transition disabled:opacity-50 flex items-center gap-1`}>
                 {busyId === c.id ? <Loader2 size={14} className="animate-spin" /> : <CheckCircle2 size={14} />} 標記聯繫
               </button>
@@ -10199,6 +10382,56 @@ const WatchlistPage = ({ loggedInUser, customers }) => {
         </Card>
       </div>
 
+      <Card className="p-5 border-t-4 border-t-indigo-400">
+        <div className="flex flex-wrap items-center justify-between gap-3 mb-4">
+          <div>
+            <h3 className="font-bold text-gray-800 text-sm flex items-center gap-2"><Users size={16} className="text-indigo-500" /> 接觸回顧總表（{reviewRows.rows.length} 人）</h3>
+            <p className="text-[11px] text-gray-400 mt-1">統計 {reviewRows.start} ～ {today}，行事曆裡有建檔、且連結到客戶的行程</p>
+          </div>
+          <div className="flex items-center gap-2">
+            <div className="flex rounded-lg bg-gray-100 p-0.5">
+              {[[1, '近 1 個月'], [3, '近 3 個月']].map(([v, l]) => (
+                <button key={v} onClick={() => setReviewRange(v)} className={`text-xs font-bold px-3 py-1.5 rounded-md ${reviewRange === v ? 'bg-white shadow text-indigo-600' : 'text-gray-500'}`}>{l}</button>
+              ))}
+            </div>
+            <select value={reviewSort} onChange={e => setReviewSort(e.target.value)} className="text-xs font-bold border border-gray-200 rounded-lg px-2 py-2 bg-white">
+              <option value="recent">依最近接觸</option>
+              <option value="count">依接觸次數</option>
+              <option value="grade">依分級</option>
+            </select>
+          </div>
+        </div>
+        {reviewRows.rows.length === 0 ? (
+          <p className="text-center text-gray-400 text-sm py-8">這段期間沒有連結到客戶的行事曆行程</p>
+        ) : (
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm min-w-[520px]">
+              <thead>
+                <tr className="text-[11px] text-gray-400 text-left border-b border-gray-100">
+                  <th className="py-2 pr-2 font-bold">客戶</th>
+                  <th className="py-2 px-2 font-bold">分級</th>
+                  <th className="py-2 px-2 font-bold text-center">次數</th>
+                  <th className="py-2 px-2 font-bold text-center">已完成</th>
+                  <th className="py-2 px-2 font-bold">最近接觸</th>
+                  <th className="py-2 pl-2 font-bold">最近事項</th>
+                </tr>
+              </thead>
+              <tbody>
+                {reviewRows.rows.map(r => (
+                  <tr key={r.c.id} className="border-b border-gray-50">
+                    <td className="py-2 pr-2 font-bold text-gray-900 whitespace-nowrap">{r.c.name}</td>
+                    <td className="py-2 px-2"><GradeBadge grade={r.c.grade} /></td>
+                    <td className="py-2 px-2 text-center font-bold text-indigo-600">{r.count}</td>
+                    <td className="py-2 px-2 text-center text-gray-500">{r.done}</td>
+                    <td className="py-2 px-2 text-gray-600 whitespace-nowrap">{r.last}</td>
+                    <td className="py-2 pl-2 text-gray-500 truncate max-w-[200px]">{r.lastTitle}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </Card>
 
       {completingContact && (
         <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/50 backdrop-blur-sm p-4">
@@ -12572,6 +12805,7 @@ const DesktopCustomerBoard = ({ customers, list, records, search, setSearch, fil
           <Search size={17} className="text-white/50 shrink-0" />
           <input value={search} onChange={e => setSearch(e.target.value)} placeholder="搜尋姓名、電話、IG 帳號、標籤、備註…" className="flex-1 bg-transparent outline-none text-[14px] placeholder:text-white/35 min-w-0" />
         </div>
+        <select className={sel} value={filters.grade} onChange={e => setFilters({ ...filters, grade: e.target.value })}><option value="">全部分級</option><option value="_none">尚未分級</option>{[...GRADE_DEFS.lower, ...GRADE_DEFS.upper].map(g => <option key={g.key} value={g.key}>{g.key}｜{g.desc}</option>)}</select>
         <select className={sel} value={filters.tag} onChange={e => setFilters({ ...filters, tag: e.target.value })}><option value="">全部標籤</option>{tags.map(t => <option key={t} value={t}>{t}</option>)}</select>
         <select className={sel} value={filters.region} onChange={e => setFilters({ ...filters, region: e.target.value })}><option value="">全部地區</option>{regions.map(r => <option key={r} value={r}>{r}</option>)}</select>
         <select className={sel} value={filters.gender} onChange={e => setFilters({ ...filters, gender: e.target.value })}><option value="">全部性別</option>{genders.map(g => <option key={g} value={g}>{g}</option>)}</select>
@@ -12598,7 +12832,7 @@ const DesktopCustomerBoard = ({ customers, list, records, search, setSearch, fil
                       <button type="button" onClick={() => onOpenEdit(c)} className="w-10 h-10 rounded-full bg-gradient-to-br from-white/15 to-white/5 border border-white/15 flex items-center justify-center font-bold shrink-0">{String(c.name || '?').charAt(0)}</button>
                       <button type="button" onClick={() => onOpenEdit(c)} className="min-w-0 flex-1 text-left">
                         <p className="font-bold text-[14.5px] truncate">{c.name}</p>
-                        {chips.length > 0 && <div className="flex flex-wrap gap-1 mt-1">{chips.slice(0, 3).map(t => <span key={t} className={`text-[10px] rounded px-1.5 py-px border ${tagCls(t)}`}>{t}</span>)}</div>}
+                        {(chips.length > 0 || c.grade) && <div className="flex flex-wrap gap-1 mt-1">{c.grade && <span className="text-[10px] rounded px-1.5 py-px border border-white/30 bg-white/15 font-extrabold text-white">{c.grade}</span>}{chips.slice(0, 3).map(t => <span key={t} className={`text-[10px] rounded px-1.5 py-px border ${tagCls(t)}`}>{t}</span>)}</div>}
                         <p className="text-[11.5px] text-white/50 mt-1 truncate">{[c.region, c.age ? c.age + '歲' : '', c.incomeRange].filter(Boolean).join(' · ') || '—'}</p>
                       </button>
                       <div className="flex flex-col items-end gap-1 shrink-0">
@@ -12614,6 +12848,7 @@ const DesktopCustomerBoard = ({ customers, list, records, search, setSearch, fil
                         {c.phone ? <a href={`tel:${c.phone}`} className="w-7 h-7 rounded-full bg-white/[0.08] border border-white/10 flex items-center justify-center"><Phone size={13} /></a> : null}
                         {c.lineId ? <button type="button" onClick={() => onLine(c.lineId)} className="h-7 px-2 rounded-full bg-white/[0.08] border border-white/10 text-[9px] font-extrabold text-emerald-300">LINE</button> : null}
                         {c.igHandle ? <a href={getInstagramUrl(c.igHandle)} target="_blank" rel="noopener noreferrer" className="h-7 px-2 rounded-full bg-white/[0.08] border border-white/10 text-[10px] font-extrabold text-pink-300 flex items-center">IG</a> : null}
+                        {c.threadsHandle ? <a href={getThreadsUrl(c.threadsHandle)} target="_blank" rel="noopener noreferrer" className="h-7 px-2 rounded-full bg-white/[0.08] border border-white/10 text-[10px] font-extrabold text-white flex items-center">Threads</a> : null}
                       </span>
                     </div>
                     {isDue(c) && <p className="text-[11px] font-semibold text-amber-300 mt-1.5">⚠ 追蹤日期已到：{c.nextFollowUpDate}</p>}
@@ -12699,9 +12934,11 @@ const MobileCustomerList = ({ list, total, counts, quick, setQuick, search, setS
                 <button onClick={() => onOpenEdit(c)} className="min-w-0 flex-1 text-left">
                   <p className="font-bold text-[17px] truncate">{c.name}</p>
                   <div className="flex flex-wrap gap-1.5 mt-1.5">
+                    {c.grade && <span className="text-[11px] rounded-full px-2 py-0.5 border border-white/30 bg-white/15 font-extrabold text-white">{c.grade}</span>}
                     {tags.map(t => <span key={t} className={`text-[11px] rounded-full px-2.5 py-0.5 border ${tagCls(t)}`}>{t}</span>)}
                   </div>
                   {c.igHandle && <p className="text-[13px] text-pink-300/90 mt-1.5 truncate">IG: {c.igHandle}</p>}
+                  {c.threadsHandle && <p className="text-[13px] text-white/70 mt-1 truncate">Threads: {c.threadsHandle}</p>}
                   {(c.region || c.incomeRange) && <p className="text-[13px] text-white/50 mt-1 flex items-center gap-1 truncate"><MapPin size={12} className="shrink-0" />{[c.region, c.incomeRange].filter(Boolean).join('．')}</p>}
                 </button>
                 <div className="shrink-0 flex flex-col items-end gap-2.5">
@@ -12714,6 +12951,7 @@ const MobileCustomerList = ({ list, total, counts, quick, setQuick, search, setS
                     {c.phone ? <a href={`tel:${c.phone}`} aria-label="撥打電話" className={circ}><Phone size={16} /></a> : <span className={`${circ} opacity-30`}><Phone size={16} /></span>}
                     {c.lineId ? <button onClick={() => onLine(c.lineId)} aria-label="LINE" className={`${circ} text-[9px] font-extrabold text-emerald-300`}>LINE</button> : <span className={`${circ} opacity-30 text-[9px] font-extrabold`}>LINE</span>}
                     {c.igHandle ? <a href={getInstagramUrl(c.igHandle)} target="_blank" rel="noopener noreferrer" aria-label="IG" className={`${circ} text-[11px] font-extrabold text-pink-300`}>IG</a> : <span className={`${circ} opacity-30 text-[11px] font-extrabold`}>IG</span>}
+                    {c.threadsHandle ? <a href={getThreadsUrl(c.threadsHandle)} target="_blank" rel="noopener noreferrer" aria-label="Threads" className={`${circ} text-[11px] font-extrabold text-white`}>@</a> : null}
                     <button onClick={() => onOpenEdit(c)} aria-label="查看" className="text-white/35"><ChevronRight size={20} /></button>
                   </div>
                 </div>
@@ -14986,7 +15224,7 @@ const App = () => {
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
-        {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} />}
+        {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} />}
         {activeTab === 'warroom' && <SalesWarRoomPage loggedInUser={loggedInUser} team={team} customers={customers} records={enrichedRecords} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'announce' && <AnnouncementsPage loggedInUser={loggedInUser} announcements={announcements} canPost={isTeamScheduleViewer} onSeen={handleMarkAnnouncementsSeen} />}
         {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} isManagerViewer={isTeamScheduleViewer} />}
