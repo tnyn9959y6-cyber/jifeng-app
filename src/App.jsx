@@ -7672,70 +7672,119 @@ const RelationshipNetworkModal = ({ isOpen, onClose, focusId, setFocusId, custom
 };
 
 
-// --- 客戶分級：一次一張卡的快速分類頁 ---
-const GradeSorterModal = ({ isOpen, onClose, customers, records, loggedInUser }) => {
+// --- 客戶分級：一次一張卡的快速分類頁（銷售準客戶 / 增員準增員）---
+const SORTER_EDIT_FIELDS = ['name', 'phone', 'lineId', 'igHandle', 'threadsHandle', 'birthday', 'gender', 'region', 'incomeRange', 'address', 'nextFollowUpDate', 'notes'];
+const GradeSorterModal = ({ isOpen, onClose, customers, records, recruits, loggedInUser }) => {
+  const [kind, setKind] = useState('sales'); // sales | recruit
   const [mode, setMode] = useState('todo');
   const [ids, setIds] = useState([]);
   const [idx, setIdx] = useState(0);
   const [history, setHistory] = useState([]);
   const [dealMap, setDealMap] = useState({});
   const [busy, setBusy] = useState(false);
+  const [editing, setEditing] = useState(false);
+  const [editForm, setEditForm] = useState(null);
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
-  const buildQueue = (m) => customers.filter(c => m === 'all' || !c.grade).map(c => c.id);
+  const gradeField = kind === 'recruit' ? 'recruitGrade' : 'grade';
+  const today = getTodayDate();
+  // 已登錄（或已升任業務）的人，不再當準客戶／準增員
+  const registeredNames = useMemo(() => new Set((recruits || []).filter(r => r.isPromoted || (r.dates?.registeredDate && r.dates.registeredDate <= today)).map(r => (r.name || '').trim()).filter(Boolean)), [recruits, today]);
+  const eligible = (c, k) => {
+    if (registeredNames.has((c.name || '').trim())) return false;
+    const isRecruitTag = (c.tags || []).includes('準增員');
+    if (k === 'recruit') return isRecruitTag;
+    return !isRecruitTag || (c.tags || []).some(t => t === '準客戶' || t === '既有客戶');
+  };
+  const buildQueue = (k, m) => customers.filter(c => eligible(c, k) && (m === 'all' || !c[k === 'recruit' ? 'recruitGrade' : 'grade'])).map(c => c.id);
+
   useEffect(() => {
     if (!isOpen) return;
-    setMode('todo'); setIds(buildQueue('todo')); setIdx(0); setHistory([]); setDealMap({});
+    setKind('sales'); setMode('todo'); setIds(buildQueue('sales', 'todo')); setIdx(0); setHistory([]); setDealMap({}); setEditing(false); setConfirmDelete(false);
     // eslint-disable-next-line
   }, [isOpen]);
 
   if (!isOpen) return null;
-  const switchMode = (m) => { setMode(m); setIds(buildQueue(m)); setIdx(0); setHistory([]); };
+  const reset = (k, m) => { setKind(k); setMode(m); setIds(buildQueue(k, m)); setIdx(0); setHistory([]); setEditing(false); setConfirmDelete(false); };
   const cur = idx < ids.length ? customers.find(c => c.id === ids[idx]) : null;
   const myRecords = (name) => (records || []).filter(r => r.agentId === loggedInUser.id && (r.insuredName || '').trim() === (name || '').trim());
   const defaultDeal = (c) => c.grade ? c.grade === c.grade.toUpperCase() : (myRecords(c.name).length > 0 || (c.tags || []).includes('既有客戶'));
-  const isDeal = cur ? (dealMap[cur.id] !== undefined ? dealMap[cur.id] : defaultDeal(cur)) : false;
-  const options = isDeal ? GRADE_DEFS.upper : GRADE_DEFS.lower;
+  const isDeal = kind === 'sales' && cur ? (dealMap[cur.id] !== undefined ? dealMap[cur.id] : defaultDeal(cur)) : false;
+  const options = kind === 'recruit' ? GRADE_DEFS.lower : (isDeal ? GRADE_DEFS.upper : GRADE_DEFS.lower);
   const total = ids.length;
+  const curGrade = cur ? (cur[gradeField] || '') : '';
 
+  const goNext = () => { setEditing(false); setConfirmDelete(false); setIdx(i => i + 1); };
   const pick = async (key) => {
     if (!cur || busy) return;
     setBusy(true);
     try {
-      await updateDoc(doc(db, 'customers', cur.id), { grade: key });
-      setHistory(h => [...h, { id: cur.id, prev: cur.grade || '', idx }]);
-      setIdx(i => i + 1);
+      await updateDoc(doc(db, 'customers', cur.id), { [gradeField]: key });
+      setHistory(h => [...h, { id: cur.id, prev: curGrade, idx, field: gradeField }]);
+      goNext();
     } catch (e) { console.error(e); } finally { setBusy(false); }
   };
-  const skip = () => { if (cur) { setHistory(h => [...h, { id: cur.id, prev: null, idx }]); setIdx(i => i + 1); } };
+  const skip = () => { if (cur) { setHistory(h => [...h, { id: cur.id, prev: null, idx, field: gradeField }]); goNext(); } };
   const goBack = async () => {
     if (history.length === 0 || busy) return;
     const last = history[history.length - 1];
     setBusy(true);
     try {
-      if (last.prev !== null) await updateDoc(doc(db, 'customers', last.id), { grade: last.prev });
+      if (last.prev !== null) await updateDoc(doc(db, 'customers', last.id), { [last.field]: last.prev });
       setHistory(h => h.slice(0, -1));
-      setIdx(last.idx);
+      setIdx(last.idx); setEditing(false); setConfirmDelete(false);
+    } catch (e) { console.error(e); } finally { setBusy(false); }
+  };
+  const startEdit = () => {
+    const f = {}; SORTER_EDIT_FIELDS.forEach(k => { f[k] = cur[k] || ''; });
+    f.tags = (cur.tags && cur.tags.length) ? [...cur.tags] : [];
+    setEditForm(f); setEditing(true);
+  };
+  const saveEdit = async () => {
+    if (!cur || !editForm || !editForm.name.trim()) return;
+    setBusy(true);
+    try {
+      await updateDoc(doc(db, 'customers', cur.id), { ...editForm, name: editForm.name.trim() });
+      setEditing(false);
+    } catch (e) { console.error(e); } finally { setBusy(false); }
+  };
+  const doDelete = async () => {
+    if (!cur || busy) return;
+    setBusy(true);
+    try {
+      await deleteDoc(doc(db, 'customers', cur.id));
+      setIds(list => list.filter(x => x !== cur.id));
+      setHistory(h => h.filter(x => x.id !== cur.id));
+      setEditing(false); setConfirmDelete(false);
     } catch (e) { console.error(e); } finally { setBusy(false); }
   };
 
   const policies = cur ? myRecords(cur.name) : [];
-  const lastVisit = cur ? (cur.visitLog || []).reduce((m, v) => (v.date && v.date > m ? v.date : m), '') : '';
+  const visits = cur ? [...(cur.visitLog || [])].sort((a, b) => (b.date || '').localeCompare(a.date || '')) : [];
+  const age = cur ? calcAge(cur.birthday) : null;
+  const inp = 'w-full p-2 rounded-lg bg-black/30 border border-white/15 text-sm text-white outline-none';
+  const Row = ({ k, v }) => v ? <div className="flex gap-3 text-[13px]"><span className="w-16 shrink-0 text-white/40">{k}</span><span className="text-white/85 break-words min-w-0">{v}</span></div> : null;
 
   return (
     <div className="fixed inset-0 z-[120] bg-slate-950 text-white flex flex-col">
       <div className="flex items-center justify-between px-4 pt-4 pb-2 shrink-0">
         <button onClick={goBack} disabled={history.length === 0 || busy} className="flex items-center gap-1 text-sm font-bold px-3 py-2 rounded-full bg-white/10 disabled:opacity-30"><RotateCcw size={15} /> 返回上一張</button>
         <div className="text-center">
-          <p className="text-sm font-bold">客戶快速分類</p>
-          <p className="text-[11px] text-white/50">{total === 0 ? '沒有待分類客戶' : `${Math.min(idx + 1, total)} / ${total}`}</p>
+          <p className="text-sm font-bold">{kind === 'recruit' ? '增員準增員分類' : '銷售客戶分類'}</p>
+          <p className="text-[11px] text-white/50">{total === 0 ? '沒有待分類的人' : `${Math.min(idx + 1, total)} / ${total}`}</p>
         </div>
         <button onClick={onClose} className="p-2 rounded-full bg-white/10"><X size={18} /></button>
       </div>
-      <div className="px-4 shrink-0">
+      <div className="px-4 shrink-0 space-y-2">
         <div className="h-1 rounded-full bg-white/10 overflow-hidden"><div className="h-full bg-indigo-400 transition-all" style={{ width: total ? `${Math.min(idx, total) / total * 100}%` : '0%' }} /></div>
-        <div className="flex gap-2 mt-3 justify-center">
-          {[['todo', '只看尚未分級'], ['all', '全部客戶（可重新分類）']].map(([k, l]) => (
-            <button key={k} onClick={() => switchMode(k)} className={`text-xs font-bold px-3 py-1.5 rounded-full border ${mode === k ? 'bg-white text-slate-900 border-white' : 'border-white/20 text-white/70'}`}>{l}</button>
+        <div className="flex rounded-2xl bg-white/10 p-1 max-w-md mx-auto">
+          {[['sales', '銷售準客戶'], ['recruit', '增員準增員']].map(([k, l]) => (
+            <button key={k} onClick={() => reset(k, mode)} className={`flex-1 text-sm font-bold py-2 rounded-xl ${kind === k ? 'bg-white text-slate-900' : 'text-white/60'}`}>{l}</button>
+          ))}
+        </div>
+        <div className="flex gap-2 justify-center">
+          {[['todo', '只看尚未分級'], ['all', '全部（可重新分類）']].map(([k, l]) => (
+            <button key={k} onClick={() => reset(kind, k)} className={`text-xs font-bold px-3 py-1.5 rounded-full border ${mode === k ? 'bg-white text-slate-900 border-white' : 'border-white/20 text-white/70'}`}>{l}</button>
           ))}
         </div>
       </div>
@@ -7744,49 +7793,114 @@ const GradeSorterModal = ({ isOpen, onClose, customers, records, loggedInUser })
         {!cur ? (
           <div className="m-auto text-center space-y-3">
             <CheckCircle2 size={48} className="mx-auto text-emerald-400" />
-            <p className="text-lg font-bold">{total === 0 ? '所有客戶都分級完了' : '這一輪分類完成'}</p>
-            <p className="text-sm text-white/50">按右上角關閉，或按左上角返回修改上一張</p>
+            <p className="text-lg font-bold">{total === 0 ? '沒有需要分類的人' : '這一輪分類完成'}</p>
+            <p className="text-sm text-white/50">{kind === 'recruit' ? '已登錄的人不會出現在這裡' : '已登錄成業務的人不會出現在這裡'}。可按左上角返回修改上一張</p>
             <button onClick={onClose} className="mt-2 px-6 py-3 rounded-2xl bg-indigo-600 font-bold">完成</button>
           </div>
         ) : (
           <div className="w-full max-w-md space-y-4">
             <div className="rounded-3xl bg-white/[0.06] border border-white/10 p-5 space-y-3">
-              <div className="flex items-start justify-between gap-3">
-                <div className="min-w-0">
-                  <p className="text-2xl font-extrabold truncate">{cur.name}</p>
-                  <div className="flex flex-wrap gap-1.5 mt-2">
-                    {(cur.tags || []).map(t => <span key={t} className="text-[11px] rounded-full px-2.5 py-0.5 border border-white/20 text-white/80">{t}</span>)}
+              {!editing ? (
+                <>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="text-2xl font-extrabold break-words">{cur.name}</p>
+                      <div className="flex flex-wrap gap-1.5 mt-2">
+                        {(cur.tags || []).map(t => <span key={t} className="text-[11px] rounded-full px-2.5 py-0.5 border border-white/20 text-white/80">{t}</span>)}
+                        {cur.specialFocus && <span className="text-[11px] rounded-full px-2.5 py-0.5 border border-amber-400/50 text-amber-300">關注銷售</span>}
+                        {cur.specialFocusRecruit && <span className="text-[11px] rounded-full px-2.5 py-0.5 border border-teal-400/50 text-teal-300">關注增員</span>}
+                      </div>
+                    </div>
+                    <div className="shrink-0 text-right text-xs text-white/60 space-y-1">
+                      {cur.grade && <p>銷售：<b className="text-white text-base">{cur.grade}</b></p>}
+                      {cur.recruitGrade && <p>增員：<b className="text-white text-base">{cur.recruitGrade}</b></p>}
+                    </div>
+                  </div>
+                  <div className="space-y-1.5 pt-1">
+                    <Row k="電話" v={cur.phone} />
+                    <Row k="LINE" v={cur.lineId} />
+                    <Row k="IG" v={cur.igHandle && <a href={getInstagramUrl(cur.igHandle)} target="_blank" rel="noopener noreferrer" className="text-pink-300 underline">{cur.igHandle}</a>} />
+                    <Row k="Threads" v={cur.threadsHandle && <a href={getThreadsUrl(cur.threadsHandle)} target="_blank" rel="noopener noreferrer" className="underline">{cur.threadsHandle}</a>} />
+                    <Row k="生日" v={cur.birthday && `${cur.birthday}${age !== null ? `（${age} 歲）` : ''}`} />
+                    <Row k="性別" v={cur.gender} />
+                    <Row k="地區" v={cur.region} />
+                    <Row k="年收入" v={cur.incomeRange} />
+                    <Row k="地址" v={cur.address} />
+                    <Row k="緊急聯絡" v={cur.emergencyContactName} />
+                    <Row k="下次追蹤" v={cur.nextFollowUpDate} />
+                    <Row k="建檔來源" v={[cur.source, cur.createdAt ? cur.createdAt.slice(0, 10) : ''].filter(Boolean).join('・')} />
+                    <Row k="保單" v={policies.length > 0 ? `${policies.length} 張，實收 ${formatMoney(policies.reduce((a, r) => a + (r.premium || 0), 0))}` : ''} />
+                    <Row k="備註" v={cur.notes && <span className="whitespace-pre-wrap">{cur.notes}</span>} />
+                  </div>
+                  {visits.length > 0 && (
+                    <div className="pt-2 border-t border-white/10">
+                      <p className="text-[11px] text-white/40 mb-1">最近接觸（共 {visits.length} 次）</p>
+                      {visits.slice(0, 3).map((v, i) => <p key={i} className="text-[12px] text-white/70 truncate">{v.date}　{v.type}{v.note ? `：${v.note}` : ''}</p>)}
+                    </div>
+                  )}
+                  <button onClick={startEdit} className="w-full text-xs font-bold py-2 rounded-xl bg-white/10">編輯這位的資料</button>
+                </>
+              ) : (
+                <div className="space-y-2.5">
+                  <p className="text-sm font-bold">編輯客戶資料（儲存後客戶名單同步更新）</p>
+                  {[['name', '姓名'], ['phone', '電話'], ['lineId', 'LINE ID'], ['igHandle', 'IG 帳號'], ['threadsHandle', 'Threads ID'], ['address', '地址']].map(([k, l]) => (
+                    <div key={k}><label className="text-[11px] text-white/50 block mb-1">{l}</label><input className={inp} value={editForm[k]} onChange={e => setEditForm({ ...editForm, [k]: e.target.value })} /></div>
+                  ))}
+                  <div className="grid grid-cols-2 gap-2">
+                    <div><label className="text-[11px] text-white/50 block mb-1">生日</label><input type="date" className={inp} value={editForm.birthday} onChange={e => setEditForm({ ...editForm, birthday: e.target.value })} /></div>
+                    <div><label className="text-[11px] text-white/50 block mb-1">下次追蹤日期</label><input type="date" className={inp} value={editForm.nextFollowUpDate} onChange={e => setEditForm({ ...editForm, nextFollowUpDate: e.target.value })} /></div>
+                    <div><label className="text-[11px] text-white/50 block mb-1">性別</label><select className={inp} value={editForm.gender} onChange={e => setEditForm({ ...editForm, gender: e.target.value })}><option value="">未填寫</option>{GENDER_OPTIONS.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
+                    <div><label className="text-[11px] text-white/50 block mb-1">地區</label><select className={inp} value={editForm.region} onChange={e => setEditForm({ ...editForm, region: e.target.value })}><option value="">未填寫</option>{TAIWAN_REGIONS.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
+                  </div>
+                  <div><label className="text-[11px] text-white/50 block mb-1">年收入</label><select className={inp} value={editForm.incomeRange} onChange={e => setEditForm({ ...editForm, incomeRange: e.target.value })}><option value="">未填寫</option>{INCOME_RANGES.map(g => <option key={g} value={g}>{g}</option>)}</select></div>
+                  <div>
+                    <label className="text-[11px] text-white/50 block mb-1">標籤</label>
+                    <div className="flex flex-wrap gap-3">
+                      {CUSTOMER_TAGS.map(t => (
+                        <label key={t} className="flex items-center gap-1.5 text-sm"><input type="checkbox" checked={editForm.tags.includes(t)} onChange={e => setEditForm({ ...editForm, tags: e.target.checked ? [...editForm.tags, t] : editForm.tags.filter(x => x !== t) })} className="w-4 h-4" /> {t}</label>
+                      ))}
+                    </div>
+                  </div>
+                  <div><label className="text-[11px] text-white/50 block mb-1">備註</label><textarea className={`${inp} h-20 resize-none`} value={editForm.notes} onChange={e => setEditForm({ ...editForm, notes: e.target.value })} /></div>
+                  <div className="flex gap-2">
+                    <button onClick={() => setEditing(false)} className="flex-1 py-2.5 rounded-xl bg-white/10 text-sm font-bold">取消</button>
+                    <button onClick={saveEdit} disabled={busy || !editForm.name.trim()} className="flex-1 py-2.5 rounded-xl bg-indigo-600 text-sm font-bold disabled:opacity-50">儲存</button>
                   </div>
                 </div>
-                {cur.grade && <span className="shrink-0 text-xs text-white/60">目前：<b className="text-white text-lg">{cur.grade}</b></span>}
-              </div>
-              <div className="text-[13px] text-white/70 space-y-1">
-                {(cur.region || cur.incomeRange) && <p>{[cur.region, cur.incomeRange].filter(Boolean).join('．')}</p>}
-                <p>上次聯繫：{lastVisit || '無紀錄'}</p>
-                <p>保單：{policies.length > 0 ? `${policies.length} 張，實收 ${formatMoney(policies.reduce((a, r) => a + (r.premium || 0), 0))}` : '無'}</p>
-                {cur.notes && <p className="text-white/50 line-clamp-3">備註：{cur.notes}</p>}
-              </div>
-              {(cur.threadsHandle || cur.igHandle) && (
-                <div className="flex gap-2">
-                  {cur.igHandle && <a href={getInstagramUrl(cur.igHandle)} target="_blank" rel="noopener noreferrer" className="text-[11px] font-extrabold px-3 py-1.5 rounded-full bg-white/10 text-pink-300">IG</a>}
-                  {cur.threadsHandle && <a href={getThreadsUrl(cur.threadsHandle)} target="_blank" rel="noopener noreferrer" className="text-[11px] font-extrabold px-3 py-1.5 rounded-full bg-white/10">Threads</a>}
+              )}
+              {!editing && kind === 'sales' && (
+                <div className="flex rounded-2xl bg-black/30 p-1">
+                  {[[false, '尚未成交（小寫）'], [true, '已成交（大寫）']].map(([v, l]) => (
+                    <button key={String(v)} onClick={() => setDealMap(m => ({ ...m, [cur.id]: v }))} className={`flex-1 text-xs font-bold py-2 rounded-xl transition ${isDeal === v ? 'bg-indigo-600 text-white' : 'text-white/50'}`}>{l}</button>
+                  ))}
                 </div>
               )}
-              <div className="flex rounded-2xl bg-black/30 p-1">
-                {[[false, '尚未成交（小寫）'], [true, '已成交（大寫）']].map(([v, l]) => (
-                  <button key={String(v)} onClick={() => setDealMap(m => ({ ...m, [cur.id]: v }))} className={`flex-1 text-xs font-bold py-2 rounded-xl transition ${isDeal === v ? 'bg-indigo-600 text-white' : 'text-white/50'}`}>{l}</button>
-                ))}
-              </div>
             </div>
-            <div className="grid grid-cols-2 gap-3">
-              {options.map(g => (
-                <button key={g.key} disabled={busy} onClick={() => pick(g.key)} className="rounded-2xl bg-white/10 hover:bg-indigo-600 active:scale-95 transition p-4 text-left disabled:opacity-50">
-                  <p className="text-3xl font-extrabold leading-none">{g.title}</p>
-                  <p className="text-[12px] text-white/70 mt-2 leading-snug">{g.desc}</p>
-                </button>
-              ))}
-            </div>
-            <button onClick={skip} className="w-full text-sm font-bold text-white/50 py-2">先跳過這位</button>
+            {!editing && (
+              <>
+                <p className="text-center text-[11px] text-white/40">{kind === 'recruit' ? '增員分級' : '銷售分級'}{curGrade ? `（目前 ${curGrade}）` : ''}</p>
+                <div className="grid grid-cols-2 gap-3">
+                  {options.map(g => (
+                    <button key={g.key} disabled={busy} onClick={() => pick(g.key)} className={`rounded-2xl active:scale-95 transition p-4 text-left disabled:opacity-50 ${curGrade === g.key ? 'bg-indigo-600' : 'bg-white/10 hover:bg-indigo-600'}`}>
+                      <p className="text-3xl font-extrabold leading-none">{g.title}</p>
+                      <p className="text-[12px] text-white/70 mt-2 leading-snug">{g.desc}</p>
+                    </button>
+                  ))}
+                </div>
+                <button onClick={skip} className="w-full text-sm font-bold text-white/50 py-2">先跳過這位</button>
+                {!confirmDelete ? (
+                  <button onClick={() => setConfirmDelete(true)} className="w-full text-xs font-bold text-rose-300/80 py-2">刪除此人</button>
+                ) : (
+                  <div className="rounded-2xl border border-rose-400/40 bg-rose-500/10 p-3 space-y-2">
+                    <p className="text-sm text-rose-200">確定刪除「{cur.name}」？客戶名單裡也會一起刪除，無法復原。</p>
+                    <div className="flex gap-2">
+                      <button onClick={() => setConfirmDelete(false)} className="flex-1 py-2 rounded-xl bg-white/10 text-sm font-bold">取消</button>
+                      <button onClick={doDelete} disabled={busy} className="flex-1 py-2 rounded-xl bg-rose-600 text-sm font-bold disabled:opacity-50">確定刪除</button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         )}
       </div>
@@ -7794,7 +7908,7 @@ const GradeSorterModal = ({ isOpen, onClose, customers, records, loggedInUser })
   );
 };
 
-const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relationships }) => {
+const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relationships, recruits }) => {
   const [search, setSearch] = useState('');
   const [showFilter, setShowFilter] = useState(false);
   const [filters, setFilters] = useState({ ageMin: '', ageMax: '', gender: '', region: '', incomeRange: '', tag: '', grade: '', vipOnly: false, igOnly: false, salesWatchOnly: false, recruitWatchOnly: false });
@@ -7805,7 +7919,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   const [isNotionOpen, setIsNotionOpen] = useState(false);
   const [isSortOpen, setIsSortOpen] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
-  const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', threadsHandle: '', grade: '', birthday: '', gender: '', region: '', incomeRange: '', tags: ['準客戶'], notes: '', nextFollowUpDate: '', address: '', emergencyContactId: '', emergencyContactName: '' };
+  const emptyForm = { name: '', phone: '', lineId: '', igHandle: '', threadsHandle: '', grade: '', recruitGrade: '', birthday: '', gender: '', region: '', incomeRange: '', tags: ['準客戶'], notes: '', nextFollowUpDate: '', address: '', emergencyContactId: '', emergencyContactName: '' };
   const [form, setForm] = useState(emptyForm);
   const [saving, setSaving] = useState(false);
   const loaded = customersLoaded;
@@ -7865,7 +7979,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   const openAdd = () => { setForm(emptyForm); setIsAdding(true); };
   const openEdit = (c) => {
     setEditCustomer(c);
-    setForm({ name: c.name, phone: c.phone || '', lineId: c.lineId || '', igHandle: c.igHandle || '', threadsHandle: c.threadsHandle || '', grade: c.grade || '', birthday: c.birthday || '', gender: c.gender || '', region: c.region || '', incomeRange: c.incomeRange || '', tags: (c.tags && c.tags.length) ? c.tags : ['準客戶'], notes: c.notes || '', nextFollowUpDate: c.nextFollowUpDate || '', address: c.address || '', emergencyContactId: c.emergencyContactId || '', emergencyContactName: c.emergencyContactName || '' });
+    setForm({ name: c.name, phone: c.phone || '', lineId: c.lineId || '', igHandle: c.igHandle || '', threadsHandle: c.threadsHandle || '', grade: c.grade || '', recruitGrade: c.recruitGrade || '', birthday: c.birthday || '', gender: c.gender || '', region: c.region || '', incomeRange: c.incomeRange || '', tags: (c.tags && c.tags.length) ? c.tags : ['準客戶'], notes: c.notes || '', nextFollowUpDate: c.nextFollowUpDate || '', address: c.address || '', emergencyContactId: c.emergencyContactId || '', emergencyContactName: c.emergencyContactName || '' });
   };
 
   const handleSave = async () => {
@@ -8003,7 +8117,7 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
   return (
     <div className="max-w-6xl md:max-w-none md:h-full mx-auto space-y-6 md:space-y-0 animate-fade-in pb-12 md:pb-0">
       <ConfirmModal isOpen={!!deleteTarget} onClose={() => setDeleteTarget(null)} onConfirm={handleDeleteConfirm} title="刪除客戶" message="確定要刪除此客戶資料嗎？此動作無法復原。" />
-      <GradeSorterModal isOpen={isSortOpen} onClose={() => setIsSortOpen(false)} customers={customers} records={records} loggedInUser={loggedInUser} />
+      <GradeSorterModal isOpen={isSortOpen} onClose={() => setIsSortOpen(false)} customers={customers} records={records} recruits={recruits} loggedInUser={loggedInUser} />
       <IGImportModal isOpen={isIGOpen} onClose={() => setIsIGOpen(false)} loggedInUser={loggedInUser} existingNames={existingNames} onImported={() => {}} />
       <RelationshipNetworkModal isOpen={!!networkFocusId} onClose={() => setNetworkFocusId(null)} focusId={networkFocusId} setFocusId={setNetworkFocusId} customers={customers} relationships={relationships || []} loggedInUser={loggedInUser} />
       <NotionImportModal isOpen={isNotionOpen} onClose={() => setIsNotionOpen(false)} loggedInUser={loggedInUser} onImported={() => {}} />
@@ -8368,6 +8482,13 @@ const CustomerCRM = ({ loggedInUser, records, customers, customersLoaded, relati
                   <option value="">尚未分級</option>
                   <optgroup label="未成交">{GRADE_DEFS.lower.map(g => <option key={g.key} value={g.key}>{g.key}｜{g.desc}</option>)}</optgroup>
                   <optgroup label="已成交">{GRADE_DEFS.upper.map(g => <option key={g.key} value={g.key}>{g.key}｜{g.desc}</option>)}</optgroup>
+                </select>
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-500 block mb-1">增員分級（準增員用，a~d）</label>
+                <select className="w-full p-2 border border-gray-200 rounded-lg" value={form.recruitGrade} onChange={e => setForm({ ...form, recruitGrade: e.target.value })}>
+                  <option value="">尚未分級</option>
+                  {GRADE_DEFS.lower.map(g => <option key={g.key} value={g.key}>{g.key}｜{g.desc}</option>)}
                 </select>
               </div>
               <div>
@@ -12832,7 +12953,7 @@ const DesktopCustomerBoard = ({ customers, list, records, search, setSearch, fil
                       <button type="button" onClick={() => onOpenEdit(c)} className="w-10 h-10 rounded-full bg-gradient-to-br from-white/15 to-white/5 border border-white/15 flex items-center justify-center font-bold shrink-0">{String(c.name || '?').charAt(0)}</button>
                       <button type="button" onClick={() => onOpenEdit(c)} className="min-w-0 flex-1 text-left">
                         <p className="font-bold text-[14.5px] truncate">{c.name}</p>
-                        {(chips.length > 0 || c.grade) && <div className="flex flex-wrap gap-1 mt-1">{c.grade && <span className="text-[10px] rounded px-1.5 py-px border border-white/30 bg-white/15 font-extrabold text-white">{c.grade}</span>}{chips.slice(0, 3).map(t => <span key={t} className={`text-[10px] rounded px-1.5 py-px border ${tagCls(t)}`}>{t}</span>)}</div>}
+                        {(chips.length > 0 || c.grade || c.recruitGrade) && <div className="flex flex-wrap gap-1 mt-1">{c.grade && <span className="text-[10px] rounded px-1.5 py-px border border-white/30 bg-white/15 font-extrabold text-white">{c.grade}</span>}{c.recruitGrade && <span className="text-[10px] rounded px-1.5 py-px border border-violet-300/50 bg-violet-500/20 font-extrabold text-violet-200">增{c.recruitGrade}</span>}{chips.slice(0, 3).map(t => <span key={t} className={`text-[10px] rounded px-1.5 py-px border ${tagCls(t)}`}>{t}</span>)}</div>}
                         <p className="text-[11.5px] text-white/50 mt-1 truncate">{[c.region, c.age ? c.age + '歲' : '', c.incomeRange].filter(Boolean).join(' · ') || '—'}</p>
                       </button>
                       <div className="flex flex-col items-end gap-1 shrink-0">
@@ -12935,6 +13056,7 @@ const MobileCustomerList = ({ list, total, counts, quick, setQuick, search, setS
                   <p className="font-bold text-[17px] truncate">{c.name}</p>
                   <div className="flex flex-wrap gap-1.5 mt-1.5">
                     {c.grade && <span className="text-[11px] rounded-full px-2 py-0.5 border border-white/30 bg-white/15 font-extrabold text-white">{c.grade}</span>}
+                    {c.recruitGrade && <span className="text-[11px] rounded-full px-2 py-0.5 border border-violet-300/50 bg-violet-500/20 font-extrabold text-violet-200">增{c.recruitGrade}</span>}
                     {tags.map(t => <span key={t} className={`text-[11px] rounded-full px-2.5 py-0.5 border ${tagCls(t)}`}>{t}</span>)}
                   </div>
                   {c.igHandle && <p className="text-[13px] text-pink-300/90 mt-1.5 truncate">IG: {c.igHandle}</p>}
@@ -15223,7 +15345,7 @@ const App = () => {
         {activeTab === 'overview' && isTeamScheduleViewer && <OverviewPage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} season={season} rankTargets={rankTargets} />}
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
-        {activeTab === 'customers' && <CustomerCRM loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
+        {activeTab === 'customers' && <CustomerCRM recruits={recruits} loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} />}
         {activeTab === 'warroom' && <SalesWarRoomPage loggedInUser={loggedInUser} team={team} customers={customers} records={enrichedRecords} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'announce' && <AnnouncementsPage loggedInUser={loggedInUser} announcements={announcements} canPost={isTeamScheduleViewer} onSeen={handleMarkAnnouncementsSeen} />}
