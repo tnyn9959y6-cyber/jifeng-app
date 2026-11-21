@@ -506,7 +506,7 @@ const MobileDashboardView = ({ team, records, season, setSeason, activeTargets, 
     records.forEach(r => {
       if (!r.agentId || !ids.has(String(r.agentId)) || !r.date) return;
       const rm = r.date.substring(0, 7);
-      const w = r.weighted || 0, p = r.premium || 0;
+      const w = (r.weightedC ?? r.weighted) || 0, p = r.premium || 0;
       if (trendMap[rm]) { trendMap[rm].weighted += w; trendMap[rm].premium += p; trendMap[rm].cases += 1; }
       if (rm < currentStart || rm > viewMonth) return;
       weighted += w; premium += p; cases.a += 1;
@@ -926,9 +926,9 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
       const recMonthSimple = recMonthFull.split('-')[1];
       
       if (monthlyStats[recMonthSimple] && currentMonths.some(m => m.value === recMonthFull)) {
-        monthlyStats[recMonthSimple].totalWeighted += (record.weighted || 0);
+        monthlyStats[recMonthSimple].totalWeighted += ((record.weightedC ?? record.weighted) || 0);
         monthlyStats[recMonthSimple].cases += 1;
-        if (record.isAH) monthlyStats[recMonthSimple].ahWeighted += (record.weighted || 0);
+        if (record.isAH) monthlyStats[recMonthSimple].ahWeighted += ((record.weightedC ?? record.weighted) || 0);
       }
 
       const isAccumulated = recMonthFull >= currentStart && recMonthFull <= endMonth;
@@ -936,7 +936,7 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
 
       if (!isAccumulated) return; 
 
-      const weighted = record.weighted || 0;
+      const weighted = (record.weightedC ?? record.weighted) || 0;
       const premium = record.premium || 0;
       let idx = -1;
       if (record.agentId) idx = memberStats.findIndex(m => m.id === record.agentId);
@@ -1834,6 +1834,7 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
   const [mode, setMode] = useState('all');
   const [scope, setScope] = useState(embedded ? 'team' : String(initialScope || loggedInUser?.id || 'team'));
   const [span, setSpan] = useState(12);
+  const [metricKey, setMetricKey] = useState('');
   const weights = mode === 'sales' ? ACTIVITY_WEIGHTS : mode === 'recruit' ? RECRUIT_ACTIVITY_WEIGHTS : ALL_ACTIVITY_WEIGHTS;
   const defs = MEA_RATIO_DEFS[mode];
   // 可選人員：單位內任何人（嵌入時用傳入的成員，否則用登入者底下整條線）
@@ -1864,6 +1865,8 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
       return row;
     });
   }, [activities, ids, span, mode, weights, defs]);
+  const wKeys = Object.keys(weights);
+  const mk = wKeys.includes(metricKey) ? metricKey : wKeys[0];
   const curIdx = Math.max(0, rows.findIndex(r => r.month === focusMonth) >= 0 ? rows.findIndex(r => r.month === focusMonth) : rows.length - 1);
   const cur = rows[curIdx], prev = rows[curIdx - 1];
   const delta = prev && prev.points > 0 ? Math.round((cur.points - prev.points) / prev.points * 100) : null;
@@ -1878,7 +1881,7 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
         <button type="button" onClick={onBack} aria-label="返回" className="w-10 h-10 rounded-full bg-white/[0.07] border border-white/10 flex items-center justify-center active:scale-95"><ChevronLeft size={20} /></button>
         <div className="min-w-0">
           <h1 className="text-[24px] md:text-[28px] font-black leading-tight">每月活動量總覽</h1>
-          <p className="text-[12px] text-white/50">總分與各階段轉換率的每月變化</p>
+          <p className="text-[12px] text-white/50">總分、各項次數與各階段轉換率的每月變化</p>
         </div>
       </div>}
       <div className="flex flex-wrap gap-2">
@@ -1924,6 +1927,40 @@ const ActivityMonthlyOverview = ({ activities, team, loggedInUser, onBack, embed
           </ResponsiveContainer>
         </div>
       </div> : <p className="text-[12px] text-white/45 px-1">「合計活動量」＝銷售＋增員總分，與活動量主畫面的總分一致；要看轉換率請切換到「銷售活動量」或「增員活動量」。</p>}
+      <div className={`${glass} p-4`}>
+        <p className="font-bold text-[15px] mb-2">各項活動量每月變化（次數）</p>
+        <div className="flex flex-wrap gap-1.5 mb-2">{wKeys.map(k => <button key={k} type="button" onClick={() => setMetricKey(k)} className={`px-2.5 h-7 rounded-lg text-[12px] font-bold border ${mk === k ? 'bg-white/20 border-white/40 text-white' : 'border-white/15 text-white/60'}`}>{weights[k].label}</button>)}</div>
+        <div style={{ height: 200 }}>
+          <ResponsiveContainer width="100%" height="100%">
+            <ComposedChart data={rows.map(r => ({ label: r.label, v: r.counts[mk] }))} margin={{ top: 8, right: 6, left: -14, bottom: 0 }}>
+              <CartesianGrid strokeDasharray="3 3" stroke="rgba(255,255,255,.07)" vertical={false} />
+              <XAxis dataKey="label" tick={{ fill: 'rgba(255,255,255,.5)', fontSize: 11 }} axisLine={false} tickLine={false} />
+              <YAxis tick={{ fill: 'rgba(255,255,255,.4)', fontSize: 11 }} axisLine={false} tickLine={false} allowDecimals={false} />
+              <Tooltip contentStyle={tip} formatter={(v) => [`${v} 次`, weights[mk].label]} />
+              <Bar dataKey="v" fill="#60a5fa" radius={[6, 6, 0, 0]} />
+              <Line type="monotone" dataKey="v" stroke="#fbbf24" strokeWidth={2} dot={{ r: 3 }} tooltipType="none" />
+            </ComposedChart>
+          </ResponsiveContainer>
+        </div>
+        <div className="overflow-x-auto mt-3">
+          <table className="w-full text-[12.5px]" style={{ minWidth: 120 + wKeys.length * 62 }}>
+            <thead className="text-white/45 text-[11px]"><tr className="text-right"><th className="text-left font-normal pb-1.5">月份</th>{wKeys.map(k => <th key={k} className="font-normal pb-1.5 pl-2 whitespace-nowrap">{weights[k].label}</th>)}</tr></thead>
+            <tbody>
+              {[...rows].map((r, i) => ({ r, p: rows[i - 1] })).reverse().map(({ r, p }) => (
+                <tr key={r.month} className="border-t border-white/[0.07] text-right tabular-nums">
+                  <td className="py-1.5 text-left font-semibold">{r.month}</td>
+                  {wKeys.map(k => { const d = p ? r.counts[k] - p.counts[k] : null; return (
+                    <td key={k} className="pl-2">{r.counts[k]}{d !== null && d !== 0 && <span className={`block text-[10px] ${d > 0 ? 'text-emerald-300' : 'text-rose-300'}`}>{d > 0 ? '▲' : '▼'}{Math.abs(d)}</span>}</td>
+                  ); })}
+                </tr>
+              ))}
+              <tr className="border-t border-white/20 text-right tabular-nums font-bold"><td className="py-1.5 text-left">近 {span} 個月合計</td>{wKeys.map(k => <td key={k} className="pl-2">{rows.reduce((a, r) => a + r.counts[k], 0)}</td>)}</tr>
+              <tr className="text-right tabular-nums text-white/70"><td className="py-1.5 text-left">月平均</td>{wKeys.map(k => <td key={k} className="pl-2">{(rows.reduce((a, r) => a + r.counts[k], 0) / rows.length).toFixed(1)}</td>)}</tr>
+            </tbody>
+          </table>
+        </div>
+        <p className="text-[10.5px] text-white/35 mt-2">▲▼ 為與上個月相比的次數增減；選的人員／模式不同，欄位也會跟著變。</p>
+      </div>
       <div className={`${glass} p-3 overflow-x-auto`}>
         <table className="w-full text-[12.5px] min-w-[520px]">
           <thead className="text-white/45 text-[11px]"><tr className="text-right"><th className="text-left font-normal pb-1.5">月份</th><th className="font-normal pb-1.5">總分</th>{defs.map(d => <th key={d.k} className="font-normal pb-1.5 pl-2" style={{ color: d.color }}>{d.label}</th>)}</tr></thead>
@@ -2591,9 +2628,9 @@ const shadeHex = (hex, amt) => {
   return '#' + [r, g, b].map(v => v.toString(16).padStart(2, '0')).join('');
 };
 
-const OrgChart = ({ team, recruits }) => <OrgChartManage team={team} recruits={recruits} />;
+const OrgChart = ({ team, allTeam, recruits, records, activities }) => <OrgChartManage team={team} allTeam={allTeam || team} recruits={recruits} records={records || []} activities={activities || []} />;
 
-const OrgChartManage = ({ team, recruits }) => {
+const OrgChartManage = ({ team, allTeam, recruits, records, activities }) => {
   const [editMember, setEditMember] = useState(null);
   const [deleteInfo, setDeleteInfo] = useState(null);
   const [newMember, setNewMember] = useState({ name: '', role: '業務代表', parentId: '', type: '正式人員' });
@@ -2673,6 +2710,67 @@ const OrgChartManage = ({ team, recruits }) => {
     } catch (e) { console.error(e); }
   };
 
+  const [resignInfo, setResignInfo] = useState(null);
+  const [resigning, setResigning] = useState(false);
+  const [showRecover, setShowRecover] = useState(false);
+
+  const openResign = (member) => {
+    const parent = team.find(t => String(t.id) === String(member.parentId));
+    setResignInfo({ id: member.id, name: member.name, date: getTodayDate(), successorId: parent ? parent.id : '', moveCustomers: true });
+  };
+  const handleResign = async () => {
+    if (!resignInfo || !resignInfo.successorId) return;
+    setResigning(true);
+    try {
+      const { id, date, successorId, moveCustomers } = resignInfo;
+      const batch = writeBatch(db);
+      batch.update(doc(db, 'user', id), { status: 'resigned', resignedDate: date, successorId: String(successorId) });
+      team.filter(m => String(m.parentId) === String(id)).forEach(m => batch.update(doc(db, 'user', m.id), { parentId: successorId }));
+      recruits.filter(r => !r.isPromoted && String(r.recruiterId) === String(id)).forEach(r => batch.update(doc(db, 'temp_user', r.id), { recommender_id: successorId }));
+      await batch.commit();
+      if (moveCustomers) {
+        const snap = await getDocs(query(collection(db, 'customers'), where('ownerId', '==', id)));
+        for (let i = 0; i < snap.docs.length; i += 400) {
+          const b2 = writeBatch(db);
+          snap.docs.slice(i, i + 400).forEach(d => b2.update(d.ref, { ownerId: String(successorId), transferredFrom: id, transferredAt: new Date().toISOString() }));
+          await b2.commit();
+        }
+      }
+      setResignInfo(null);
+    } catch (e) { console.error(e); } finally { setResigning(false); }
+  };
+
+  // 找回已刪除成員：找出「有業績／活動紀錄／被掛為上線，但已經不在名單裡」的編號
+  const orphans = useMemo(() => {
+    const known = new Set(allTeam.map(t => String(t.id)));
+    const map = {};
+    const get = (id) => (map[id] = map[id] || { id, recs: [], acts: 0, children: [], recruits: [] });
+    const isBad = (id) => id && String(id) !== '0' && !known.has(String(id));
+    records.forEach(r => { if (isBad(r.agentId)) get(String(r.agentId)).recs.push(r); });
+    activities.forEach(a => { if (isBad(a.agentId)) get(String(a.agentId)).acts += 1; });
+    allTeam.forEach(m => { if (isBad(m.parentId)) get(String(m.parentId)).children.push(m); });
+    recruits.forEach(r => { if (isBad(r.recruiterId)) get(String(r.recruiterId)).recruits.push(r); });
+    return Object.values(map);
+  }, [allTeam, records, activities, recruits]);
+  const [recoverForm, setRecoverForm] = useState({});
+  const [recoverBusy, setRecoverBusy] = useState(null);
+  const handleRecover = async (o) => {
+    const f = recoverForm[o.id] || {};
+    if (!f.name || !f.successorId) return;
+    setRecoverBusy(o.id);
+    try {
+      await setDoc(doc(db, 'user', o.id), {
+        name: f.name.trim(), position: f.role || '業務代表', parentId: f.parentId || f.successorId,
+        promotionDates: { registered: f.registered || '', supervisor: '', asstManager: '', distManager: '', agencyManager: '' },
+        status: 'resigned', resignedDate: f.resignedDate || getTodayDate(), successorId: String(f.successorId)
+      });
+      const batch = writeBatch(db);
+      o.children.forEach(m => batch.update(doc(db, 'user', m.id), { parentId: f.successorId }));
+      o.recruits.filter(r => !r.isPromoted).forEach(r => batch.update(doc(db, 'temp_user', r.id), { recommender_id: f.successorId }));
+      await batch.commit();
+    } catch (e) { console.error(e); } finally { setRecoverBusy(null); }
+  };
+
   const renderTree = (parentId, depth = 0) => {
     const safeParentId = (parentId === null) ? 0 : parentId;
     
@@ -2710,7 +2808,7 @@ const OrgChartManage = ({ team, recruits }) => {
                  <Avatar name={member.name} size={48} className="mx-auto mb-3" />
                  <h4 className="font-bold text-white">{member.name}</h4>
                  <p className="text-xs text-indigo-200 bg-indigo-500/20 px-2 py-0.5 rounded-full inline-block mt-2 font-medium">{member.role}</p>
-                 <button onClick={(e) => { e.stopPropagation(); setDeleteInfo({ id: member.id, isRecruit: false }); }} className="absolute top-2 right-2 text-gray-300 hover:text-red-500 opacity-0 group-hover:opacity-100 transition"><Trash2 size={14} /></button>
+                 <button onClick={(e) => { e.stopPropagation(); openResign(member); }} title="標記離職（業績與增員併入承接主管）" className="absolute top-2 right-2 text-[10px] font-bold text-white/40 hover:text-amber-300 opacity-0 group-hover:opacity-100 transition">離職</button>
                </div>
                {renderTree(member.id, depth + 1)}
             </div>
@@ -2739,10 +2837,69 @@ const OrgChartManage = ({ team, recruits }) => {
         onClose={() => setDeleteInfo(null)} 
         onConfirm={handleDeleteConfirm} 
         title={`刪除${deleteInfo?.isRecruit ? '準增員' : '成員'}`} 
-        message={`確定要刪除此${deleteInfo?.isRecruit ? '準增員' : '成員'}嗎？如果該成員有下線，組織圖可能會斷開連結。`} 
+        message={`確定要刪除此${deleteInfo?.isRecruit ? '準增員' : '成員'}嗎？`} 
       />
+      {resignInfo && (
+        <ModalPortal>
+          <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-md rounded-3xl border border-white/15 bg-slate-900 text-white p-6 space-y-4">
+              <h3 className="text-lg font-bold">標記離職：{resignInfo.name}</h3>
+              <p className="text-[12px] text-white/60 leading-relaxed">帳號不會刪除。他過去的業績、增員人數都會自動算進承接主管；他底下的人會改掛到承接主管；歷史的人力數字仍保留他在職的那段期間。</p>
+              <div><label className="text-[11px] text-white/50 block mb-1">離職日</label><input type="date" value={resignInfo.date} onChange={e => setResignInfo({ ...resignInfo, date: e.target.value })} className="w-full p-2 rounded-lg bg-black/30 border border-white/15 text-sm" /></div>
+              <div><label className="text-[11px] text-white/50 block mb-1">承接主管</label>
+                <select value={resignInfo.successorId} onChange={e => setResignInfo({ ...resignInfo, successorId: e.target.value })} className="w-full p-2 rounded-lg bg-black/30 border border-white/15 text-sm">
+                  <option value="">請選擇</option>
+                  {team.filter(m => String(m.id) !== String(resignInfo.id)).map(m => <option key={m.id} value={m.id}>{m.name}（{m.role}）</option>)}
+                </select></div>
+              <label className="flex items-center gap-2 text-sm"><input type="checkbox" checked={resignInfo.moveCustomers} onChange={e => setResignInfo({ ...resignInfo, moveCustomers: e.target.checked })} className="w-4 h-4" /> 同時把他名下的客戶資料移轉給承接主管</label>
+              <div className="flex gap-2">
+                <button onClick={() => setResignInfo(null)} className="flex-1 py-2.5 rounded-xl bg-white/10 font-bold text-sm">取消</button>
+                <button onClick={handleResign} disabled={!resignInfo.successorId || resigning} className="flex-1 py-2.5 rounded-xl bg-amber-500 text-slate-900 font-bold text-sm disabled:opacity-50">{resigning ? '處理中…' : '確認離職'}</button>
+              </div>
+              <button onClick={() => { const id = resignInfo.id; setResignInfo(null); setDeleteInfo({ id, isRecruit: false }); }} className="w-full text-[11px] text-rose-300/70">其實要整筆刪除（不建議，業績會變成未知成員）</button>
+            </div>
+          </div>
+        </ModalPortal>
+      )}
+      {showRecover && (
+        <ModalPortal>
+          <div className="fixed inset-0 z-[300] flex items-center justify-center bg-black/60 p-4">
+            <div className="w-full max-w-2xl max-h-[88dvh] overflow-y-auto rounded-3xl border border-white/15 bg-slate-900 text-white p-6 space-y-4">
+              <div className="flex items-center justify-between"><h3 className="text-lg font-bold">找回已刪除的成員</h3><button onClick={() => setShowRecover(false)} className="p-1.5 rounded-full bg-white/10"><X size={16} /></button></div>
+              <p className="text-[12px] text-white/60 leading-relaxed">下面是「還有業績、活動紀錄或被當成上線，但名單裡已經找不到人」的編號。對照業績期間、被保險人名單、底下的人，認出是誰後填上資料，就會用原本的編號重建成「離職」成員，業績會自動接回並併入承接主管。</p>
+              {orphans.length === 0 && <p className="text-center text-white/50 py-8">沒有找到孤兒資料，代表沒有需要找回的人。</p>}
+              {orphans.map(o => {
+                const f = recoverForm[o.id] || {};
+                const set = (k, v) => setRecoverForm({ ...recoverForm, [o.id]: { ...f, [k]: v } });
+                const dates = o.recs.map(r => r.date).filter(Boolean).sort();
+                const names = [...new Set(o.recs.map(r => r.insuredName).filter(Boolean))].slice(0, 5);
+                return (
+                  <div key={o.id} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4 space-y-3">
+                    <div className="text-[12.5px] space-y-1 text-white/80">
+                      <p className="text-white/40 text-[10px]">編號 {o.id}</p>
+                      <p>業績 {o.recs.length} 件・{dates.length ? `${dates[0]} ～ ${dates[dates.length - 1]}` : '無'}・實收 {formatMoney(o.recs.reduce((a, r) => a + (r.premium || 0), 0))}・活動紀錄 {o.acts} 天</p>
+                      {names.length > 0 && <p>被保險人：{names.join('、')}</p>}
+                      {o.children.length > 0 && <p>底下的人：{o.children.map(m => m.name).join('、')}</p>}
+                      {o.recruits.length > 0 && <p>推薦的增員：{o.recruits.map(r => r.name).join('、')}</p>}
+                    </div>
+                    <div className="grid grid-cols-2 gap-2">
+                      <input placeholder="姓名" value={f.name || ''} onChange={e => set('name', e.target.value)} className="p-2 rounded-lg bg-black/30 border border-white/15 text-sm" />
+                      <select value={f.role || '業務代表'} onChange={e => set('role', e.target.value)} className="p-2 rounded-lg bg-black/30 border border-white/15 text-sm">{RANKS.map(r => <option key={r} value={r}>{r}</option>)}</select>
+                      <label className="text-[11px] text-white/50">登錄日<input type="date" value={f.registered || ''} onChange={e => set('registered', e.target.value)} className="w-full mt-1 p-2 rounded-lg bg-black/30 border border-white/15 text-sm text-white" /></label>
+                      <label className="text-[11px] text-white/50">離職日<input type="date" value={f.resignedDate || ''} onChange={e => set('resignedDate', e.target.value)} className="w-full mt-1 p-2 rounded-lg bg-black/30 border border-white/15 text-sm text-white" /></label>
+                      <select value={f.successorId || ''} onChange={e => set('successorId', e.target.value)} className="col-span-2 p-2 rounded-lg bg-black/30 border border-white/15 text-sm"><option value="">承接主管（必選）</option>{team.map(m => <option key={m.id} value={m.id}>{m.name}（{m.role}）</option>)}</select>
+                    </div>
+                    <button onClick={() => handleRecover(o)} disabled={!f.name || !f.successorId || recoverBusy === o.id} className="w-full py-2 rounded-xl bg-indigo-600 font-bold text-sm disabled:opacity-40">{recoverBusy === o.id ? '重建中…' : '重建為離職成員'}</button>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        </ModalPortal>
+      )}
       <div className="shrink-0 flex items-start justify-between gap-4 pt-1 flex-wrap">
         <div className="text-left"><h1 className="text-[26px] font-bold tracking-tight leading-none">組織架構</h1><p className="text-[12px] text-white/45 mt-1.5">團隊成員與準增員的上下線關係，點成員卡可編輯</p></div>
+        <button onClick={() => setShowRecover(true)} className="text-[12px] font-bold px-3 h-9 rounded-xl bg-white/10 border border-white/15 flex items-center gap-1.5">找回已刪除成員{orphans.length > 0 && <span className="px-1.5 rounded-full bg-amber-400 text-slate-900 text-[10px]">{orphans.length}</span>}</button>
       </div>
       <div className="shrink-0 flex flex-wrap items-end gap-3 rounded-3xl border border-white/10 bg-white/[0.045] backdrop-blur-xl p-4">
         <div className="w-32 text-left">
@@ -3396,9 +3553,11 @@ const ANNUAL_METRICS = [
   { key: 'mgrs', label: '主管人數', fmt: 'int', grp: '人力', proj: 'scale' },
   { key: 'headcount', label: '總人力', fmt: 'int', grp: '人力', proj: 'scale' },
   { key: 'actRate', label: '活動率', fmt: 'pct', grp: '人力', proj: 'keep' },
+  { key: 'resignedN', label: '離職人數', fmt: 'int', grp: '人力', proj: 'scale' },
+  { key: 'churn', label: '人力流失率（離職÷期初人力）', fmt: 'pct', grp: '人力', proj: 'keep' },
   { key: 'recruitN', label: '增員人數（登錄）', fmt: 'int', grp: '增員', proj: 'scale' },
   { key: 'netGrowth', label: '人力淨增加比率', fmt: 'pct', grp: '增員', proj: 'keep' },
-  { key: 'mgrRecruitRate', label: '主管增員活動率（手動）', fmt: 'pct', grp: '增員', proj: 'keep', manual: true },
+  { key: 'mgrRecruitRate', label: '主管增員活動率（年度有增員的主管 ÷ 所有主管）', fmt: 'pct', grp: '增員', proj: 'keep', yearOnly: true },
   { key: 'peakN', label: '高峰人數（上半年完成）', fmt: 'int', grp: '競賽', proj: 'scale', yearOnly: true, manual: true },
   { key: 'newPeakN', label: '新高峰人數（下半年完成）', fmt: 'int', grp: '競賽', proj: 'scale', yearOnly: true, manual: true },
 ];
@@ -3436,11 +3595,32 @@ const memberIsManagerAt = (m, endDate) => {
   return MANAGER_RANKS.includes(m.role);
 };
 const headcountAt = (members, endDate) => {
-  const present = members.filter(m => { const r = memberRegDate(m); return !r || r <= endDate; });
+  const present = members.filter(m => { const r = memberRegDate(m); return (!r || r <= endDate) && !(m.resignedDate && m.resignedDate <= endDate); });
   const mgrs = present.filter(m => memberIsManagerAt(m, endDate)).length;
   return { total: present.length, mgrs, reps: present.length - mgrs, ids: new Set(present.map(m => String(m.id))) };
 };
 const recordCat = (r) => r.typeCode === 'one_off' ? 'sp' : (r.isAH ? 'ah' : 'rp');
+
+// 個人組織（「單位」的定義）：
+// 業代＝自己；主任／襄理＝自己＋直轄業務代表；區／處經理＝自己＋直轄業代＋直轄主任、襄理及其底下所有主管與業代
+const SUPERVISOR_RANKS = ['業務主任', '新進業務主任', '業務襄理'];
+const getPersonalOrg = (team, m) => {
+  if (!m) return [];
+  const kids = (id) => (team || []).filter(x => x.parentId && String(x.parentId) === String(id));
+  const out = [m];
+  if (SUPERVISOR_RANKS.includes(m.role)) {
+    kids(m.id).forEach(k => { if (!MANAGER_RANKS.includes(k.role)) out.push(k); });
+  } else if (['區經理', '處經理'].includes(m.role)) {
+    const seen = new Set([String(m.id)]);
+    const walk = (id) => kids(id).forEach(k => { if (!seen.has(String(k.id))) { seen.add(String(k.id)); out.push(k); walk(k.id); } });
+    kids(m.id).forEach(k => {
+      if (seen.has(String(k.id))) return;
+      if (!MANAGER_RANKS.includes(k.role)) { seen.add(String(k.id)); out.push(k); }            // 直轄業代
+      else if (SUPERVISOR_RANKS.includes(k.role)) { seen.add(String(k.id)); out.push(k); walk(k.id); } // 直轄主任／襄理＋其底下全部
+    });
+  }
+  return out;
+};
 
 const contestCompleters = (members, team, records, rankTargets, year, half) => {
   if (year !== 2026) return null; // 目前只有 115 年的競賽標準
@@ -3451,7 +3631,7 @@ const contestCompleters = (members, team, records, rankTargets, year, half) => {
   const sum = (people) => {
     const ids = new Set(people.map(p => String(p.id)));
     const rr = recs.filter(r => ids.has(String(r.agentId)));
-    return { w: rr.reduce((s, r) => s + (r.weighted || 0), 0), ah: rr.filter(r => r.isAH).reduce((s, r) => s + (r.weighted || 0), 0), prem: rr.reduce((s, r) => s + (r.premium || 0), 0) };
+    return { w: rr.reduce((s, r) => s + ((r.weightedC ?? r.weighted) || 0), 0), ah: rr.filter(r => r.isAH).reduce((s, r) => s + ((r.weightedC ?? r.weighted) || 0), 0), prem: rr.reduce((s, r) => s + (r.premium || 0), 0) };
   };
   const roleOf = (m) => (half === 'H2' && H2_ROLE_MAPPING[m.name]) || m.role;
   const ok = (agg, role) => {
@@ -3471,12 +3651,17 @@ const contestCompleters = (members, team, records, rankTargets, year, half) => {
   return done.size;
 };
 
-const calcAnnualMetrics = ({ members, team, records, recruits, rankTargets, manual, gran, year, idx, today }) => {
+const calcAnnualMetrics = ({ members, headMembers, unitMembers, team, records, recruits, rankTargets, manual, gran, year, idx, today }) => {
+  const heads = headMembers || members;
+  const units = unitMembers || members; // 單位＝個人組織
   const months = annualEffMonths(gran, year, idx, today);
   const n = Math.max(1, months.length);
   const endDate = months.length ? monthEndDate(months[months.length - 1]) : monthEndDate(annualMonthsOf(gran, year, idx)[0]);
   const ids = new Set(members.map(m => String(m.id)));
-  const recs = records.filter(r => (r.status || '已發單') === '已發單' && months.includes((r.date || '').slice(0, 7)) && ids.has(String(r.agentId)));
+  const uids = new Set(units.map(m => String(m.id)));
+  const issuedInRange = records.filter(r => (r.status || '已發單') === '已發單' && months.includes((r.date || '').slice(0, 7)));
+  const recs = issuedInRange.filter(r => ids.has(String(r.agentId)));      // 個人
+  const urecs = issuedInRange.filter(r => uids.has(String(r.agentId)));    // 單位（個人組織）
   const sumBy = (cat, f) => recs.filter(r => recordCat(r) === cat).reduce((s, r) => s + f(r), 0);
   const o = {};
   o.rpPrem = sumBy('rp', r => r.premium || 0); o.ahPrem = sumBy('ah', r => r.premium || 0); o.spPrem = sumBy('sp', r => r.premium || 0);
@@ -3486,25 +3671,31 @@ const calcAnnualMetrics = ({ members, team, records, recruits, rankTargets, manu
   o.fyc = recs.reduce((s, r) => s + (r.premium || 0) * ((PRODUCT_MAPPING[r.typeCode] && PRODUCT_MAPPING[r.typeCode].commissionRate) || 0), 0);
   o.cases = recs.length;
   o.insured = new Set(recs.map(r => (r.insuredName || '').trim()).filter(Boolean)).size;
-  const hc = headcountAt(members, endDate);
-  const per = Math.max(1, hc.total);
+  const hc = headcountAt(heads, endDate);
+  const per = members.length > 1 ? Math.max(1, hc.total) : 1; // 全區合計時個人＝人均；單一成員＝本人
   o.headcount = hc.total; o.mgrs = hc.mgrs; o.reps = hc.reps;
-  o.unitCasesMo = o.cases / n; o.perCasesMo = o.cases / n / per;
-  o.unitFypCase = o.cases ? o.totW / o.cases : 0; o.perFypCase = o.unitFypCase;
-  o.unitFypMo = o.totW / n; o.perFypMo = o.totW / n / per;
+  const uW = urecs.reduce((a, r) => a + (r.weighted || 0), 0);
+  o.perCasesMo = o.cases / n / per; o.unitCasesMo = urecs.length / n;
+  o.perFypCase = o.cases ? o.totW / o.cases : 0; o.unitFypCase = urecs.length ? uW / urecs.length : 0;
+  o.perFypMo = o.totW / n / per; o.unitFypMo = uW / n;
   // 活動率：每月「有發單的人 ÷ 當月有效人數」，期間取平均
   const rates = months.map(m => {
-    const end = monthEndDate(m); const h = headcountAt(members, end);
-    const act = new Set(recs.filter(r => (r.date || '').slice(0, 7) === m).map(r => String(r.agentId)));
-    return h.total ? [...act].filter(id => h.ids.has(id)).length / h.total * 100 : 0;
-  });
+    const end = monthEndDate(m); const h = headcountAt(heads, end);
+    const act = new Set(urecs.filter(r => (r.date || '').slice(0, 7) === m).map(r => String(r.origAgentId || r.agentId)));
+    return h.total ? [...act].filter(id => h.ids.has(id)).length / h.total * 100 : null;
+  }).filter(v => v !== null); // 尚未到職的月份（有效人數 0）不納入平均
   o.actRate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : 0;
   const allMonths = annualMonthsOf(gran, year, idx);
   const start = `${allMonths[0]}-01`;
-  o.recruitN = (recruits || []).filter(r => ids.has(String(r.recruiterId)) && (r.isPromoted || (r.dates && r.dates.registeredDate && r.dates.registeredDate <= today)) && r.dates && r.dates.registeredDate && r.dates.registeredDate >= start && r.dates.registeredDate <= monthEndDate(allMonths[allMonths.length - 1])).length;
+  const winEndDate = monthEndDate(allMonths[allMonths.length - 1]);
+  const recruitsIn = (recruits || []).filter(r => (r.isPromoted || (r.dates && r.dates.registeredDate && r.dates.registeredDate <= today)) && r.dates && r.dates.registeredDate && r.dates.registeredDate >= start && r.dates.registeredDate <= winEndDate);
+  o.recruitN = recruitsIn.filter(r => uids.has(String(r.recruiterId))).length;
   const pv = annualPrev(gran, year, idx);
   const pvMonths = annualMonthsOf(gran, pv.year, pv.idx);
-  const pvHc = headcountAt(members, monthEndDate(pvMonths[pvMonths.length - 1]));
+  const pvHc = headcountAt(heads, monthEndDate(pvMonths[pvMonths.length - 1]));
+  const winStart = start; const winEnd = monthEndDate(allMonths[allMonths.length - 1]);
+  o.resignedN = heads.filter(m => m.resignedDate && m.resignedDate >= winStart && m.resignedDate <= winEnd).length;
+  o.churn = pvHc.total ? o.resignedN / pvHc.total * 100 : null;
   o.netGrowth = pvHc.total ? (hc.total - pvHc.total) / pvHc.total * 100 : null;
   if (gran === 'year') {
     const m = (manual && manual[String(year)]) || {};
@@ -3512,7 +3703,11 @@ const calcAnnualMetrics = ({ members, team, records, recruits, rankTargets, manu
     const auto2 = contestCompleters(members, team, records, rankTargets, year, 'H2');
     o.peakN = m.peakN !== undefined && m.peakN !== '' ? Number(m.peakN) : auto1;
     o.newPeakN = m.newPeakN !== undefined && m.newPeakN !== '' ? Number(m.newPeakN) : auto2;
-    o.mgrRecruitRate = m.mgrRecruitRate !== undefined && m.mgrRecruitRate !== '' ? Number(m.mgrRecruitRate) : null;
+    // 主管增員活動率＝年度有增員的主管 ÷ 所有主管數（以人力範圍內、期末在職的主管計）
+    const mgrList = heads.filter(h => { const rg = memberRegDate(h); return (!rg || rg <= endDate) && !(h.resignedDate && h.resignedDate <= endDate) && memberIsManagerAt(h, endDate); });
+    const mgrIdSet = new Set(mgrList.map(h => String(h.id)));
+    const recruiterSet = new Set(recruitsIn.filter(r => mgrIdSet.has(String(r.recruiterId))).map(r => String(r.recruiterId)));
+    o.mgrRecruitRate = mgrList.length ? recruiterSet.size / mgrList.length * 100 : null;
   } else { o.peakN = null; o.newPeakN = null; o.mgrRecruitRate = null; }
   o._months = months.length;
   return o;
@@ -3533,7 +3728,123 @@ const projectAnnual = (m, factor, base) => {
   return out;
 };
 
-const AnnualStatusSection = ({ team, records, recruits, rankTargets, members, loggedInUser }) => {
+// ===== 通訊處經理委任條件（南山人壽「通訊處經理合約委任辦法」，114/7/1 起）逐項試算 =====
+const AGENCY_PLANS = {
+  '1': { name: '辦法一', people: 70, quality: null, groups: 27, direct: 6, districtGroups: null, recruitRate: 30, fx: null, after6: { people: 60, groups: 23, w: 6100000 }, after12: { people: 70, groups: 27, w: 7000000 } },
+  '2': { name: '辦法二', people: 55, quality: 20, groups: 25, direct: 8, districtGroups: 8, recruitRate: 45, fx: 30, after6: { people: 47, groups: 22, w: 6100000 }, after12: { people: 55, groups: 25, w: 7000000 } },
+};
+const AgencyQualifyPanel = ({ team, allTeam, headAll, members, records, recruits, today, cfg, saveCfg, targetYear }) => {
+  const [plan, setPlan] = useState('2');
+  const P = AGENCY_PLANS[plan];
+  const man = (cfg.goal && cfg.goal.agencyManual) || {};
+  const setMan = (k, v) => saveCfg({ ...cfg, goal: { ...(cfg.goal || {}), agencyManual: { ...man, [k]: v } } });
+  const last = lastCompletedMonth(today);
+  const winMonths = useMemo(() => { const [y, m] = last.split('-').map(Number); return Array.from({ length: 6 }, (_, i) => { const d = new Date(y, m - 1 - (5 - i), 1); return ymStr(d.getFullYear(), d.getMonth() + 1); }); }, [last]);
+  const endDate = monthEndDate(last);
+  const startDate = `${winMonths[0]}-01`;
+  const calc = useMemo(() => {
+    const ids = new Set(members.map(m => String(m.id)));
+    const recs = records.filter(r => (r.status || '已發單') === '已發單' && winMonths.includes((r.date || '').slice(0, 7)) && ids.has(String(r.agentId)));
+    const monthlyW = winMonths.map(mo => recs.filter(r => (r.date || '').slice(0, 7) === mo).reduce((s, r) => s + (r.weighted || 0), 0));
+    const avgW = monthlyW.reduce((a, b) => a + b, 0) / 6;
+    const monthsOk = monthlyW.filter(v => v >= 4950000).length;
+    const hc = headcountAt(headAll, endDate);
+    const rates = winMonths.map(mo => { const h = headcountAt(headAll, monthEndDate(mo)); const act = new Set(recs.filter(r => (r.date || '').slice(0, 7) === mo).map(r => String(r.origAgentId || r.agentId))); return h.total ? [...act].filter(id => h.ids.has(id)).length / h.total * 100 : 0; });
+    const actRate = rates.reduce((a, b) => a + b, 0) / 6;
+    const mgrs = headAll.filter(m => { const r = memberRegDate(m); const present = (!r || r <= endDate) && !(m.resignedDate && m.resignedDate <= endDate); return present && memberIsManagerAt(m, endDate); });
+    const mgrIds = new Set(mgrs.map(m => String(m.id)));
+    const recruiters = new Set((recruits || []).filter(r => mgrIds.has(String(r.recruiterId)) && r.dates && r.dates.registeredDate && r.dates.registeredDate >= startDate && r.dates.registeredDate <= endDate && (r.isPromoted || r.dates.registeredDate <= today)).map(r => String(r.recruiterId)));
+    const recruitRate = mgrs.length ? recruiters.size / mgrs.length * 100 : 0;
+    const leader = team.find(m => m.name === '吳政翰');
+    const dm = leader && leader.promotionDates && leader.promotionDates.distManager;
+    const years = dm ? (new Date(today) - new Date(dm)) / (365.25 * 86400000) : null;
+    const [ey, em] = last.split('-').map(Number);
+    const quality = headAll.filter(m => { if (!m.qualityTalentStartMonth) return false; const [sy, sm] = m.qualityTalentStartMonth.split('-').map(Number); return (ey - sy) * 12 + (em - sm) >= 3 && !(m.resignedDate && m.resignedDate <= endDate); }).length;
+    return { avgW, monthsOk, monthlyW, hc, actRate, mgrs: mgrs.length, recruitRate, recruiters: recruiters.size, years, quality };
+  }, [members, headAll, records, recruits, winMonths, endDate, startDate, today]);
+
+  const num = (k) => (man[k] === undefined || man[k] === '' || man[k] === null) ? null : Number(man[k]);
+  const fmtW = (v) => `${Math.round(v / 10000).toLocaleString()} 萬`;
+  const rows = [];
+  const add = (r) => rows.push(r);
+  add({ k: 'age', label: '年齡 55 歲(含)以下', req: '≤ 55 歲', type: 'check' });
+  add({ k: 'edu', label: '學歷高中職以上', req: '高中職以上', type: 'check' });
+  add({ k: 'years', label: '任區經理年數', req: '≥ 2 年', now: calc.years === null ? '未填區經理委任日' : `${calc.years.toFixed(1)} 年`, ok: calc.years === null ? null : calc.years >= 2, auto: true });
+  add({ k: 'contest', label: '前 3 年曾獲高峰／新高峰會員資格', req: '需曾獲得', type: 'check' });
+  add({ k: 'people', label: '有效人數（區體系）', req: `≥ ${P.people} 人`, now: `${calc.hc.total} 人`, ok: calc.hc.total >= P.people, gap: P.people - calc.hc.total, auto: true, note: '以區內在職總人數近似，有效人數的認定（新人須參訓優培滿 3 個月或通過首次評量）請再自行核對' });
+  if (P.quality) add({ k: 'quality', label: '優培人數（第 2 階段以上或已結業）', req: `≥ ${P.quality} 人`, now: `${calc.quality} 人`, ok: calc.quality >= P.quality, gap: P.quality - calc.quality, auto: true });
+  add({ k: 'groups', label: '單位組織（組）', req: `≥ ${P.groups} 組`, now: `${calc.mgrs} 組`, ok: calc.mgrs >= P.groups, gap: P.groups - calc.mgrs, auto: true, note: '以區內主管人數近似組數' });
+  add({ k: 'direct', label: `直轄單位（不含本人）${P.direct} 組，由本人引薦的 A 級主管`, req: `≥ ${P.direct} 組`, now: num('direct') === null ? '待填' : `${num('direct')} 組`, ok: num('direct') === null ? null : num('direct') >= P.direct, gap: num('direct') === null ? null : P.direct - num('direct'), type: 'num' });
+  if (P.districtGroups) add({ k: 'dgroups', label: '區單位組數', req: `≥ ${P.districtGroups} 組`, now: num('dgroups') === null ? '待填' : `${num('dgroups')} 組`, ok: num('dgroups') === null ? null : num('dgroups') >= P.districtGroups, gap: num('dgroups') === null ? null : P.districtGroups - num('dgroups'), type: 'num' });
+  add({ k: 'recruitRate', label: '前 6 個月增員活動率（有增員的主管 ÷ 月底主管人數）', req: `≥ ${P.recruitRate}%`, now: `${calc.recruitRate.toFixed(0)}%（${calc.recruiters}/${calc.mgrs}）`, ok: calc.recruitRate >= P.recruitRate, gap: P.recruitRate - calc.recruitRate, auto: true });
+  add({ k: 'avgW', label: '前 6 個月月均加權保費', req: '≥ 700 萬', now: fmtW(calc.avgW), ok: calc.avgW >= 7000000, gap: 7000000 - calc.avgW, auto: true });
+  add({ k: 'monthsOk', label: '且至少 4 個月不低於 495 萬', req: '≥ 4 個月', now: `${calc.monthsOk} 個月`, ok: calc.monthsOk >= 4, auto: true });
+  add({ k: 'share', label: '區單位業績占整個體系比率（含第二代直轄區經理須達 40%）', req: '30%／40%', now: num('share') === null ? '待填' : `${num('share')}%`, ok: num('share') === null ? null : num('share') >= 30, type: 'num' });
+  add({ k: 'actRate', label: '前 6 個月平均活動率', req: '≥ 60%', now: `${calc.actRate.toFixed(0)}%`, ok: calc.actRate >= 60, gap: 60 - calc.actRate, auto: true });
+  add({ k: 'cont', label: '保單繼續率', req: '≥ 85%', now: num('cont') === null ? '待填' : `${num('cont')}%`, ok: num('cont') === null ? null : num('cont') >= 85, type: 'num' });
+  add({ k: 'train', label: '訓練課程：區經理訓練、儲備處經理訓練', req: '完成', type: 'check' });
+  add({ k: 'exam', label: '委任通訊處經理考試', req: '通過', type: 'check' });
+  if (P.fx) add({ k: 'fx', label: '取得外幣證照資格有效人數', req: `≥ ${P.fx} 人`, now: num('fx') === null ? '待填' : `${num('fx')} 人`, ok: num('fx') === null ? null : num('fx') >= P.fx, gap: num('fx') === null ? null : P.fx - num('fx'), type: 'num' });
+  add({ k: 'quality2', label: '作業品質：近兩年減分不高於 7 分', req: '未被減超過 7 分', type: 'check' });
+  rows.forEach(r => { if (r.type === 'check') { const v = man[r.k]; r.now = v ? '已符合' : '待確認'; r.ok = v ? true : null; } });
+  const okN = rows.filter(r => r.ok === true).length;
+  const gaps = rows.filter(r => r.ok === false);
+  const yrs = Math.max(1, (Number(targetYear) || (Number(today.slice(0, 4)) + 3)) - Number(today.slice(0, 4)));
+  const cardIn = 'rounded-xl bg-white/[0.05] border border-white/10';
+  const chip = (r) => r.ok === true ? <span className="px-2 py-0.5 rounded-md text-[11px] font-bold border text-emerald-300 border-emerald-400/50 bg-emerald-500/10">達標</span> : r.ok === false ? <span className="px-2 py-0.5 rounded-md text-[11px] font-bold border text-rose-300 border-rose-400/50 bg-rose-500/10">未達</span> : <span className="px-2 py-0.5 rounded-md text-[11px] border text-white/50 border-white/20">待確認</span>;
+  const inpS = 'h-8 w-20 rounded-md bg-black/30 border border-white/15 text-[12px] px-2 text-right text-white';
+  const gapText = (r) => {
+    if (r.k === 'avgW') return `月均要再增加 ${fmtW(r.gap)}（約 ${(r.gap / calc.avgW * 100 || 0).toFixed(0)}%），${yrs} 年內平均每年多 ${fmtW(r.gap / yrs)}`;
+    if (r.k === 'recruitRate') return `需要有增員的主管再多 ${Math.max(1, Math.ceil(r.gap / 100 * Math.max(1, calc.mgrs)))} 位（以現有主管數估算），並隨主管變多持續維持`;
+    if (r.k === 'actRate') return `活動率要再提高 ${r.gap.toFixed(0)} 個百分點，等於每月多 ${Math.ceil(r.gap / 100 * Math.max(1, calc.hc.total))} 人有發單`;
+    if (['people', 'quality', 'groups', 'direct', 'dgroups', 'fx'].includes(r.k)) return `還差 ${Math.ceil(r.gap)} ${r.k === 'groups' || r.k === 'direct' || r.k === 'dgroups' ? '組' : '人'}，${yrs} 年內平均每年要多 ${(Math.max(0, r.gap) / yrs).toFixed(1)}`;
+    return '';
+  };
+
+  return (
+    <div className="space-y-3">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex rounded-lg bg-white/10 p-0.5">{[['1', '辦法一（70 人 27 組）'], ['2', '辦法二（55 人 25 組）']].map(([k, l]) => <button key={k} onClick={() => setPlan(k)} className={`px-3 h-8 rounded-md text-[12px] font-bold ${plan === k ? 'bg-amber-500 text-slate-900' : 'text-white/60'}`}>{l}</button>)}</div>
+        <p className="text-[11.5px] text-white/50">計算期間：{winMonths[0]} ～ {winMonths[5]}（近 6 個月）・已達標 {okN} / {rows.length} 項</p>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12.5px] min-w-[640px]">
+          <thead><tr className="text-[11px] text-white/45 text-left"><th className="py-2 font-semibold">條件</th><th className="py-2 font-semibold text-right">門檻</th><th className="py-2 font-semibold text-right">目前</th><th className="py-2 font-semibold text-center w-20">狀態</th><th className="py-2 font-semibold text-right w-28">手動填寫</th></tr></thead>
+          <tbody>
+            {rows.map(r => (
+              <tr key={r.k} className="border-t border-white/[0.06] align-top">
+                <td className="py-1.5 pr-2">{r.label}{r.note && <span className="block text-[10.5px] text-white/35">{r.note}</span>}</td>
+                <td className="py-1.5 text-right whitespace-nowrap text-white/70">{r.req}</td>
+                <td className="py-1.5 text-right tabular-nums whitespace-nowrap font-semibold">{r.now}</td>
+                <td className="py-1.5 text-center">{chip(r)}</td>
+                <td className="py-1.5 text-right">
+                  {r.type === 'check' && <input type="checkbox" className="w-4 h-4" checked={!!man[r.k]} onChange={e => setMan(r.k, e.target.checked)} />}
+                  {r.type === 'num' && <input type="number" className={inpS} defaultValue={man[r.k] ?? ''} key={`${r.k}-${man[r.k] ?? ''}`} onBlur={e => setMan(r.k, e.target.value)} />}
+                  {r.auto && <span className="text-[10.5px] text-white/30">自動</span>}
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div className={`${cardIn} p-3`}>
+        <p className="text-[12px] font-bold text-amber-300 mb-1.5">成立後要維持的門檻（{P.name}）</p>
+        <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 text-[12.5px]">
+          <p>成立後 6 個月：有效人力 ≥ {P.after6.people} 人、{P.after6.groups} 組，月均加權 ≥ {fmtW(P.after6.w)}</p>
+          <p>成立後 1 年：有效人力 ≥ {P.after12.people} 人、{P.after12.groups} 組，月均加權 ≥ {fmtW(P.after12.w)}</p>
+        </div>
+      </div>
+      <div className={`${cardIn} p-3 space-y-1.5`}>
+        <p className="text-[12px] font-bold text-amber-300">離「{targetYear} 年成立」還有 {yrs} 年，每個缺口要做的事</p>
+        {gaps.length === 0 && <p className="text-[12.5px] text-white/70">目前能自動計算的項目都已達標，剩下待確認與手動填寫的項目補齊即可。</p>}
+        {gaps.map(r => <p key={r.k} className="text-[12.5px] text-white/85 leading-relaxed">・{r.label}：{r.now}（門檻 {r.req}）。{gapText(r)}</p>)}
+        <p className="text-[11px] text-white/40 pt-1">需附三年業績與人力目標的發展計劃，每年 5 月或 11 月由原通訊處經理或分公司推薦；5 月推薦的計算期間是前一年 11 月至當年 4 月，11 月推薦是當年 5～10 月。</p>
+      </div>
+    </div>
+  );
+};
+
+const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, members, loggedInUser }) => {
   const today = getTodayDate();
   const curYear = Number(today.slice(0, 4));
   const [gran, setGran] = useState('year');
@@ -3560,12 +3871,17 @@ const AnnualStatusSection = ({ team, records, recruits, rankTargets, members, lo
     return [...ys].sort((a, b) => b - a);
   }, [records, curYear]);
 
+  const headAll = useMemo(() => getDistrictMembers((allTeam && allTeam.length) ? allTeam : team, '吳政翰'), [allTeam, team]);
+  const orgPool = (allTeam && allTeam.length) ? allTeam : team;
+  const scopeOrg = useMemo(() => scopeId === 'all' ? null : getPersonalOrg(orgPool, orgPool.find(m => String(m.id) === String(scopeId)) || scopeMembers[0]), [scopeId, orgPool, scopeMembers]);
+  const headScope = scopeId === 'all' ? headAll : scopeOrg;   // 人力、活動率、增員：全區＝整區；單一成員＝個人組織
+  const unitScope = scopeId === 'all' ? members : scopeOrg;   // 單位＝個人組織
   const base = { team, records, recruits, rankTargets, manual: cfg.manual, today };
-  const calc = (mem, g, y, i) => calcAnnualMetrics({ ...base, members: mem, gran: g, year: y, idx: i });
-  const cur = useMemo(() => calc(scopeMembers, gran, year, idx), [scopeMembers, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
+  const calc = (mem, g, y, i, head, unit) => calcAnnualMetrics({ ...base, members: mem, headMembers: head || mem, unitMembers: unit || mem, gran: g, year: y, idx: i });
+  const cur = useMemo(() => calc(scopeMembers, gran, year, idx, headScope, unitScope), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
   const pv = annualPrev(gran, year, idx);
-  const prev = useMemo(() => calc(scopeMembers, gran, pv.year, pv.idx), [scopeMembers, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
-  const yoy = useMemo(() => gran === 'year' ? null : calc(scopeMembers, gran, year - 1, idx), [scopeMembers, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
+  const prev = useMemo(() => calc(scopeMembers, gran, pv.year, pv.idx, headScope, unitScope), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
+  const yoy = useMemo(() => gran === 'year' ? null : calc(scopeMembers, gran, year - 1, idx, headScope, unitScope), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
   const projected = useMemo(() => gran === 'year' && year === curYear ? projectAnnual(cur, 1 + growth / 100) : null, [cur, gran, year, growth, curYear]);
   const nextYearEst = useMemo(() => projected, [projected]);
 
@@ -3589,7 +3905,7 @@ const AnnualStatusSection = ({ team, records, recruits, rankTargets, members, lo
     if (gran === 'year') { for (let y = year - 3; y <= year; y++) pts.push({ l: String(y), y, i: 1 }); }
     else if (gran === 'quarter') { for (let q = 1; q <= 4; q++) pts.push({ l: `Q${q}`, y: year, i: q }); }
     else { for (let m = 1; m <= 12; m++) pts.push({ l: `${m}月`, y: year, i: m }); }
-    return pts.map(p => ({ ...p, v: calc(scopeMembers, gran, p.y, p.i)[trendKey], pv: gran === 'year' ? null : calc(scopeMembers, gran, p.y - 1, p.i)[trendKey] }));
+    return pts.map(p => ({ ...p, v: calc(scopeMembers, gran, p.y, p.i, headScope, unitScope)[trendKey], pv: gran === 'year' ? null : calc(scopeMembers, gran, p.y - 1, p.i, headScope, unitScope)[trendKey] }));
     // eslint-disable-next-line
   }, [scopeMembers, gran, year, trendKey, records, recruits, cfg.manual, rankTargets]);
   const tdef = ANNUAL_METRICS.find(d => d.key === trendKey);
@@ -3602,7 +3918,7 @@ const AnnualStatusSection = ({ team, records, recruits, rankTargets, members, lo
   const g = cfg.goal || {};
   const goal = g[goalMode] || {};
   const setGoal = (k, v) => saveCfg({ ...cfg, goal: { ...g, [goalMode]: { ...goal, [k]: v } } });
-  const baseYear = useMemo(() => calc(members, 'year', curYear, 1), [members, records, recruits, cfg.manual, rankTargets]);
+  const baseYear = useMemo(() => calc(members, 'year', curYear, 1, headAll), [members, headAll, records, recruits, cfg.manual, rankTargets]);
   const baseProj = useMemo(() => projectAnnual(baseYear, 1), [baseYear]);
   const yrsLeft = Math.max(1, (Number(g.targetYear) || curYear + 3) - curYear);
   const goalRows = [
@@ -3669,9 +3985,7 @@ const AnnualStatusSection = ({ team, records, recruits, rankTargets, members, lo
                       <td className={`py-1.5 pr-3 ${d.bold ? 'font-bold' : 'text-white/80'}`}>{d.label}</td>
                       {cols.map(c => (
                         <td key={c.h} className={`py-1.5 px-3 text-right tabular-nums ${c.strong ? 'font-bold' : c.est ? 'text-amber-200/90' : 'text-white/70'}`}>
-                          {(d.manual && d.key !== 'peakN' && d.key !== 'newPeakN' && c.strong && gran === 'year') ? (
-                            <input type="number" className={inp} placeholder="手動填" defaultValue={(cfg.manual[String(year)] || {})[d.key] ?? ''} onBlur={e => setManual(d.key, e.target.value)} />
-                          ) : (d.manual && c.strong && gran === 'year' && (d.key === 'peakN' || d.key === 'newPeakN')) ? (
+                          {(d.manual && c.strong && gran === 'year' && (d.key === 'peakN' || d.key === 'newPeakN')) ? (
                             <span className="inline-flex items-center gap-1.5">{annualFmt(c.get(d), d.fmt)}<input type="number" title="自動統計不準時可手動覆蓋" className={`${inp} w-14`} placeholder="覆蓋" defaultValue={(cfg.manual[String(year)] || {})[d.key] ?? ''} onBlur={e => setManual(d.key, e.target.value)} /></span>
                           ) : annualFmt(c.get(d), d.fmt)}
                         </td>
@@ -3684,7 +3998,7 @@ const AnnualStatusSection = ({ team, records, recruits, rankTargets, members, lo
             </tbody>
           </table>
         </div>
-        <p className="text-[11px] text-white/40 mt-3 leading-relaxed">口徑：只算已發單；FYP＝加權保費；業務獎金為「保費 × 商品佣金率」估算，不含行銷獎金；活動率＝當月有發單的人 ÷ 當月有效人數，期間取月平均；個人／單位數字在「全區合計」時，個人＝人均、單位＝全區。{year === curYear && gran === 'year' ? `年度只算到上月底；明年預估＝今年已結束月份年化後再 +${growth}%（人數類直接 +${growth}%，活動率與件均不調整）。` : ''}高峰／新高峰人數＝該半年「個績或組績任一達標」的人數，目前只有 115 年的標準，其他年份請手動填。</p>
+        <p className="text-[11px] text-white/40 mt-3 leading-relaxed">口徑：只算已發單；FYP＝加權保費；業務獎金為「保費 × 商品佣金率」估算，不含行銷獎金；活動率＝當月有發單的人 ÷ 當月有效人數，期間取月平均；加權保費不含 ESG 的 5%（ESG ×1.05 只用在競賽業績）。單位＝個人組織：業代＝自己；主任、襄理＝自己＋直轄業代；區經理＝自己＋直轄業代＋直轄主任襄理及其底下所有主管與業代。選單一成員時，人力、活動率、增員、單位欄位都以該成員的個人組織計；全區合計時，個人＝人均、單位＝全區。主管增員活動率＝年度有增員的主管 ÷ 所有主管數。{year === curYear && gran === 'year' ? `年度只算到上月底；明年預估＝今年已結束月份年化後再 +${growth}%（人數類直接 +${growth}%，活動率與件均不調整）。` : ''}高峰／新高峰人數＝該半年「個績或組績任一達標」的人數，目前只有 115 年的標準，其他年份請手動填。</p>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
@@ -3750,6 +4064,10 @@ const AnnualStatusSection = ({ team, records, recruits, rankTargets, members, lo
             <label className="text-[12px] text-white/60 flex items-center gap-1.5">目標年<input type="number" className={`${inp} w-20`} value={g.targetYear || curYear + 3} onChange={e => saveCfg({ ...cfg, goal: { ...g, targetYear: Number(e.target.value) || curYear + 3 } })} /></label>
           </div>
         </div>
+        {goalMode === 'agency' ? (
+          <AgencyQualifyPanel team={team} allTeam={allTeam} headAll={headAll} members={members} records={records} recruits={recruits} today={today} cfg={cfg} saveCfg={saveCfg} targetYear={g.targetYear || curYear + 3} />
+        ) : (
+          <>
         <div className="overflow-x-auto">
           <table className="w-full text-[13px] min-w-[520px]">
             <thead><tr className="text-[11px] text-white/45 text-left"><th className="py-2 font-semibold">{goalMode === 'agency' ? '通訊處' : '營業處'}成立門檻</th><th className="py-2 font-semibold text-right">今年（推估）</th><th className="py-2 font-semibold text-right">門檻（手動填）</th><th className="py-2 font-semibold text-right">差距</th><th className="py-2 font-semibold text-right">需年成長</th></tr></thead>
@@ -3770,13 +4088,25 @@ const AnnualStatusSection = ({ team, records, recruits, rankTargets, members, lo
           <p className="text-[12px] font-bold text-amber-300">要達標，帶領團隊需要做的事（依上面數字自動推算）</p>
           {actions.map((a, i) => <p key={i} className="text-[12.5px] text-white/80 leading-relaxed">・{a}</p>)}
         </div>
-        <p className="text-[11px] text-white/40 mt-2">公司的通訊處／營業處成立門檻我沒有文件可以引用，所以數字由你自己填；填了就會即時重算。</p>
+                  </>
+        )}
+        <p className="text-[11px] text-white/40 mt-2">通訊處依「通訊處經理合約委任辦法」逐項試算；營業處沒有文件可以引用，數字由你自己填。</p>
       </div>
     </div>
   );
 };
 
-const OverviewPage = ({ loggedInUser, team, records, activities, recruits, season, rankTargets }) => {
+const resolveSuccessorId = (id, allTeam) => {
+  let cur = allTeam.find(t => String(t.id) === String(id));
+  let guard = 0;
+  while (cur && cur.status === 'resigned' && guard++ < 10) {
+    const nextId = cur.successorId || cur.parentId;
+    cur = allTeam.find(t => String(t.id) === String(nextId));
+  }
+  return cur ? cur.id : null;
+};
+
+const OverviewPage = ({ loggedInUser, team, allTeam, records, activities, recruits, season, rankTargets }) => {
   const today = getTodayDate();
   const month = today.slice(0, 7);
   const [section, setSection] = useState('overview');
@@ -3866,7 +4196,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
     const roleFor = (m) => (season === 'H2' && H2_ROLE_MAPPING[m.name]) ? H2_ROLE_MAPPING[m.name] : m.role;
     const sumOf = (uids) => {
       let w = 0, p = 0, aw = 0;
-      distRecords.forEach(r => { if (uids.has(String(r.agentId)) && seasonMonths.includes((r.date || '').slice(0, 7))) { w += r.weighted || 0; p += r.premium || 0; if (r.isAH) aw += r.weighted || 0; } });
+      distRecords.forEach(r => { if (uids.has(String(r.agentId)) && seasonMonths.includes((r.date || '').slice(0, 7))) { const rw = (r.weightedC ?? r.weighted) || 0; w += rw; p += r.premium || 0; if (r.isAH) aw += rw; } });
       return { w, p, aw };
     };
     // 差額：H1 = 加權 + A&H 都要達標；H2 = 加權 或 實收 任一達標
@@ -4502,7 +4832,7 @@ const OverviewPage = ({ loggedInUser, team, records, activities, recruits, seaso
             </div>
           </div>
         )}
-        {section === 'annual' && <AnnualStatusSection team={team} records={records} recruits={recruits} rankTargets={rankTargets} members={members} loggedInUser={loggedInUser} />}
+        {section === 'annual' && <AnnualStatusSection team={team} allTeam={allTeam} records={records} recruits={recruits} rankTargets={rankTargets} members={members} loggedInUser={loggedInUser} />}
         {section === 'recruit' && (
           <div className="grid grid-cols-[1fr_300px] gap-3 flex-1 min-h-0">
             <div className="flex flex-col gap-3 min-h-0">
@@ -4838,6 +5168,56 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
 
   const memberBars = (() => { const mx = Math.max(1, ...team.map(m => sumP(inMonth.filter(r => r.agentId === m.id)))); return team.map(m => { const l = inMonth.filter(r => r.agentId === m.id); const p = sumP(l); return { id: m.id, name: m.name, p, n: l.length, pct: Math.round(p / mx * 100) }; }).sort((x, y) => y.p - x.p); })();
 
+  // ---- 全年度報件列表：每人每月報件數（受理中＋已發單都算報件）----
+  const [yearSel, setYearSel] = useState(thisMonth.slice(0, 4));
+  const yearOptions = useMemo(() => { const st = new Set(records.map(r => (r.date || '').slice(0, 4)).filter(Boolean)); st.add(thisMonth.slice(0, 4)); return Array.from(st).sort().reverse(); }, [records, thisMonth]);
+  const yearRows = useMemo(() => {
+    const rows = team.map(m => ({ id: m.id, name: m.name, mo: Array(12).fill(0), n: 0, issued: 0, p: 0 }));
+    const byId = Object.fromEntries(rows.map(r => [String(r.id), r]));
+    records.forEach(r => {
+      if (!(r.date || '').startsWith(yearSel)) return;
+      const row = byId[String(r.agentId)]; if (!row) return;
+      const mi = Number(r.date.slice(5, 7)) - 1; if (mi < 0 || mi > 11) return;
+      row.mo[mi] += 1; row.n += 1; if ((r.status || '已發單') === '已發單') row.issued += 1; row.p += r.premium || 0;
+    });
+    return rows.sort((a, b) => b.n - a.n);
+  }, [records, team, yearSel]);
+  const yearTotal = useMemo(() => ({ mo: Array.from({ length: 12 }, (_, i) => yearRows.reduce((a, r) => a + r.mo[i], 0)), n: yearRows.reduce((a, r) => a + r.n, 0), issued: yearRows.reduce((a, r) => a + r.issued, 0), p: yearRows.reduce((a, r) => a + r.p, 0) }), [yearRows]);
+  const yearCard = tab === 'year' ? (
+    <div className={`${glass} p-3.5 md:p-4 mb-3 md:mb-0 md:flex-1 md:min-h-0 md:overflow-auto`}>
+      <div className="flex items-center justify-between gap-2 mb-2.5 flex-wrap">
+        <p className="text-[15px] font-bold">全年度報件列表<span className="text-white/35 font-normal text-[12px] ml-2">每人每月報件數（受理中＋已發單）</span></p>
+        <select value={yearSel} onChange={e => setYearSel(e.target.value)} className="appearance-none rounded-full border border-white/10 bg-white/[0.08] px-3 py-1.5 text-[12px] font-bold text-white outline-none">
+          {yearOptions.map(y => <option key={y} value={y} className="text-gray-900">{y} 年</option>)}
+        </select>
+      </div>
+      <div className="overflow-x-auto">
+        <table className="w-full text-[12.5px] min-w-[900px] tabular-nums">
+          <thead className="text-[11px] text-white/45"><tr className="text-right">
+            <th className="text-left font-normal pb-1.5 sticky left-0 bg-[#0c1020] pr-3 z-10">同仁</th>
+            {Array.from({ length: 12 }, (_, i) => <th key={i} className="font-normal pb-1.5 px-1.5">{i + 1}月</th>)}
+            <th className="font-bold pb-1.5 pl-3 text-white/70">全年報件</th><th className="font-normal pb-1.5 pl-3">已發單</th><th className="font-normal pb-1.5 pl-3">全年保費</th>
+          </tr></thead>
+          <tbody>
+            {yearRows.map(r => (
+              <tr key={r.id} className="border-t border-white/[0.07] text-right">
+                <td className="py-1.5 text-left font-semibold whitespace-nowrap sticky left-0 bg-[#0c1020] pr-3">{r.name}</td>
+                {r.mo.map((v, i) => <td key={i} className={`px-1.5 ${v ? '' : 'text-white/25'}`}>{v || '–'}</td>)}
+                <td className="pl-3 font-bold text-blue-300">{r.n}</td><td className="pl-3 text-emerald-300">{r.issued}</td><td className="pl-3 text-white/80">{money(r.p)}</td>
+              </tr>
+            ))}
+            <tr className="border-t border-white/25 text-right font-bold">
+              <td className="py-1.5 text-left sticky left-0 bg-[#0c1020] pr-3">合計</td>
+              {yearTotal.mo.map((v, i) => <td key={i} className="px-1.5">{v || '–'}</td>)}
+              <td className="pl-3 text-blue-300">{yearTotal.n}</td><td className="pl-3 text-emerald-300">{yearTotal.issued}</td><td className="pl-3">{money(yearTotal.p)}</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <p className="text-[10.5px] text-white/35 mt-2">依成交日期的年份統計；離職同仁的案件已併入承接主管。</p>
+    </div>
+  ) : null;
+
   return (
     <>
     <div className="md:hidden text-white">
@@ -4865,7 +5245,7 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
 
       <div className="flex items-center gap-2 mb-3">
         <div className="flex-1 flex rounded-full border border-white/10 bg-white/[0.06] p-1">
-          {[['overview', '團隊總覽'], ['mine', '我的回報'], ['manage', '案件管理']].map(([k, l]) => (
+          {[['overview', '團隊總覽'], ['mine', '我的回報'], ['manage', '案件管理'], ['year', '全年']].map(([k, l]) => (
             <button key={k} onClick={() => { setTab(k); setChip('all'); }} className={`flex-1 py-2 text-[12px] font-bold rounded-full transition whitespace-nowrap ${tab === k ? 'bg-blue-500 shadow-md shadow-blue-500/30' : 'text-white/60'}`}>{l}</button>
           ))}
         </div>
@@ -4897,7 +5277,8 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
         </>
       )}
 
-      <div className={`${glass} p-3.5 mb-3`}>
+      {yearCard}
+      <div className={`${glass} p-3.5 mb-3 ${tab === 'year' ? 'hidden' : ''}`}>
         <div className="flex items-center justify-between mb-2.5 gap-2">
           <p className="text-[15px] font-bold">{tab === 'mine' ? '我的案件' : tab === 'manage' ? '待處理案件' : '團隊案件列表'}</p>
           <button onClick={() => setSortDesc(v => !v)} className="text-[11px] font-bold text-white/65 rounded-full border border-white/10 bg-white/[0.06] px-3 py-1.5 whitespace-nowrap">成交日 {sortDesc ? '新→舊' : '舊→新'}</button>
@@ -4944,7 +5325,7 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
           <div><h1 className="text-[26px] font-bold tracking-tight leading-none">業績回報</h1><p className="text-[12px] text-white/45 mt-1.5">快速記錄與追蹤團隊案件</p></div>
           <div className="flex items-center gap-2">
             <div className="flex rounded-full border border-white/10 bg-white/[0.06] p-1">
-              {[['overview', '團隊總覽'], ['mine', '我的回報'], ['manage', '案件管理']].map(([k, l]) => (
+              {[['overview', '團隊總覽'], ['mine', '我的回報'], ['manage', '案件管理'], ['year', '全年報件']].map(([k, l]) => (
                 <button key={k} onClick={() => { setTab(k); setChip('all'); }} className={`px-4 py-1.5 text-[13px] font-bold rounded-full transition whitespace-nowrap ${tab === k ? 'bg-blue-500 shadow-md shadow-blue-500/30' : 'text-white/60'}`}>{l}</button>
               ))}
             </div>
@@ -4959,7 +5340,7 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
             <button onClick={onAdd} className="px-5 py-2 rounded-xl bg-gradient-to-r from-blue-500 to-indigo-500 font-bold text-[13px] flex items-center gap-1.5 shadow-lg shadow-blue-500/25"><Plus size={15} />新增回報</button>
           </div>
         </div>
-        <div className="grid grid-cols-4 gap-3 shrink-0">
+        <div className={`grid grid-cols-4 gap-3 shrink-0 ${tab === 'year' ? 'hidden' : ''}`}>
           {tiles.map(t => { const Icon = t.icon; return (
             <div key={t.l} className={`${glass} px-4 py-3`}>
               <div className="flex items-center gap-2"><span className={`w-7 h-7 rounded-full flex items-center justify-center ${t.c}`}><Icon size={14} /></span><span className="text-[12px] text-white/65">{t.l}</span></div>
@@ -4969,7 +5350,8 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
             </div>
           ); })}
         </div>
-        <div className="flex-1 min-h-0 grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-3">
+        {yearCard}
+        <div className={`flex-1 min-h-0 grid grid-cols-[minmax(0,1.6fr)_minmax(0,1fr)] gap-3 ${tab === 'year' ? 'hidden' : ''}`}>
           <div className={`${glass} p-4 flex flex-col min-h-0`}>
             <div className="flex items-center justify-between mb-2 gap-2 shrink-0">
               <p className="text-[15px] font-bold">{tab === 'mine' ? '我的案件' : tab === 'manage' ? '待處理案件' : '團隊案件列表'}<span className="text-white/35 font-normal text-[12px] ml-2">{filtered.length} 筆</span></p>
@@ -5033,7 +5415,7 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
                 <span className={`text-[11px] font-bold px-2.5 py-1 rounded-full ${st.chip}`}>{st.label}</span>
               </div>
               <div className="rounded-2xl border border-white/10 bg-white/[0.05] divide-y divide-white/10 text-[13px]">
-                {[['商品', r.product || '—'], ['保單號碼', r.policyNumber || '—'], ['保費', formatMoney(r.premium || 0)], ['加權保費', formatMoney(r.weighted || 0)], ['ESG', r.isESG ? '是 (×1.05)' : '否']].map(([k, v]) => (
+                {[['商品', r.product || '—'], ['保單號碼', r.policyNumber || '—'], ['保費', formatMoney(r.premium || 0)], ['加權保費', formatMoney(r.weighted || 0)], ['ESG', r.isESG ? '是（僅競賽業績 ×1.05）' : '否']].map(([k, v]) => (
                   <div key={k} className="flex justify-between px-4 py-2.5"><span className="text-white/50">{k}</span><span className="font-bold text-right ml-3 truncate">{v}</span></div>
                 ))}
               </div>
@@ -5120,7 +5502,6 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
         await addDoc(collection(db, 'case_record'), { ...recordData, status: '受理中' });
         const typeInfo = PRODUCT_MAPPING[form.typeCode] || PRODUCT_MAPPING['ah_general'];
         let weighted = parseInt(form.premium) * typeInfo.rate;
-        if (form.isESG) weighted *= 1.05;
         setCelebration({ product: form.product, weighted: Math.round(weighted) });
       }
       setForm({ agentId: '', policyNumber: '', insuredName: '', product: '', typeCode: 'ah_general', premium: '', isESG: false, date: getTodayDate() });
@@ -5149,7 +5530,6 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
           });
           const typeInfo = PRODUCT_MAPPING[row.typeCode] || PRODUCT_MAPPING['ah_general'];
           let weighted = parseInt(row.premium) * typeInfo.rate;
-          if (row.isESG) weighted *= 1.05;
           totalWeighted += weighted;
        });
        await batch.commit();
@@ -5206,7 +5586,7 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
               <div><label className="text-[11px] text-white/50 block mb-1">商品名稱</label><input type="text" className={fld} value={form.product} onChange={e => setForm({ ...form, product: e.target.value })} required /></div>
               <div><label className="text-[11px] text-white/50 block mb-1">類型</label><select className={fld} value={form.typeCode} onChange={e => setForm({ ...form, typeCode: e.target.value })} required>{PRODUCT_TYPES_OPTIONS.map(t => <option key={t.code} value={t.code}>{t.label}</option>)}</select></div>
               <div><label className="text-[11px] text-white/50 block mb-1">保費</label><input type="number" inputMode="numeric" className={fld} value={form.premium} onChange={e => setForm({ ...form, premium: e.target.value })} required /></div>
-              <label className="flex items-center gap-3 rounded-2xl bg-emerald-500/10 border border-emerald-400/25 px-4 py-3"><Leaf size={16} className="text-emerald-300" /><span className="text-[13px] font-bold text-emerald-200">ESG 專案 (×1.05)</span><input type="checkbox" checked={form.isESG} onChange={e => setForm({ ...form, isESG: e.target.checked })} className="ml-auto w-5 h-5" /></label>
+              <label className="flex items-center gap-3 rounded-2xl bg-emerald-500/10 border border-emerald-400/25 px-4 py-3"><Leaf size={16} className="text-emerald-300" /><span className="text-[13px] font-bold text-emerald-200">ESG 專案（僅競賽業績 ×1.05）</span><input type="checkbox" checked={form.isESG} onChange={e => setForm({ ...form, isESG: e.target.checked })} className="ml-auto w-5 h-5" /></label>
             </div>
             <button type="submit" disabled={submitting} className="w-full mt-5 py-3.5 rounded-2xl bg-gradient-to-r from-blue-500 to-indigo-500 font-bold text-[15px] disabled:opacity-50">{submitting ? '儲存中…' : (editingId ? '更新' : '新增')}</button>
           </form>
@@ -5270,7 +5650,7 @@ const MobileSalesEntry = ({ team, records, loggedInUser, onAdd, onEdit, onDelete
            <div className="space-y-1"><label className="text-xs font-bold text-gray-500">商品名稱</label><input type="text" className="w-full p-3 bg-gray-50 rounded border outline-none" value={form.product} onChange={e=>setForm({...form, product: e.target.value})} required/></div>
            <div className="space-y-1"><label className="text-xs font-bold text-gray-500">類型</label><select className="w-full p-3 bg-gray-50 rounded border outline-none" value={form.typeCode} onChange={e=>setForm({...form, typeCode: e.target.value})} required>{PRODUCT_TYPES_OPTIONS.map((t)=><option key={t.code} value={t.code}>{t.label}</option>)}</select></div>
            <div className="space-y-1 md:col-span-2"><label className="text-xs font-bold text-gray-500">保費 (amount)</label><input type="number" className="w-full p-3 bg-gray-50 rounded border outline-none" value={form.premium} onChange={e=>setForm({...form, premium: e.target.value})} required/></div>
-           <div className="md:col-span-2 flex items-center gap-3 p-3 bg-green-50 rounded border border-green-100"><Leaf size={16} className="text-green-600"/><span className="text-xs font-bold text-green-700">ESG 專案 (x1.05)</span><input type="checkbox" checked={form.isESG} onChange={e=>setForm({...form, isESG: e.target.checked})} className="ml-auto w-5 h-5"/></div>
+           <div className="md:col-span-2 flex items-center gap-3 p-3 bg-green-50 rounded border border-green-100"><Leaf size={16} className="text-green-600"/><span className="text-xs font-bold text-green-700">ESG 專案（僅競賽業績 ×1.05）</span><input type="checkbox" checked={form.isESG} onChange={e=>setForm({...form, isESG: e.target.checked})} className="ml-auto w-5 h-5"/></div>
            <div className="md:col-span-2 pt-2"><button type="submit" disabled={submitting} className="w-full bg-indigo-600 text-white py-3 rounded font-bold hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed">{submitting?<Loader2 className="animate-spin mx-auto"/>:(editingId?'更新':'新增')}</button></div>
         </form>
       </Card>
@@ -15289,6 +15669,366 @@ const LoginScreen = ({ team, onLogin }) => {
   );
 };
 
+// ===== 制度一頁通：獎金一頁通＋委任一頁通 =====
+const BONUS_CADENCE = [
+  { k: '每月', color: 'blue', items: [
+    ['每月業務報酬 一、二', '依個人當月 FYC／件數達標發給；責任額每月 FYC 40,000', '看「業績儀表板」'],
+    ['每月獎金（二）', '依職級有上限：主任 9,000／襄理 12,000／區經理 20,000', '當月加權保費達標'],
+    ['組織津貼（特別／升級／輔導）', '下線主管組 FYC × 費率；區經理整條線月 FYC 需達 40,000 才全額', '單位追蹤→組織津貼'],
+    ['組織發展獎金', '輔導「首次新委任」襄理／區經理，其單位月 FYC 達 22,000／28,000 → 單位 FYC × 10%，連 12 個月', '新委任者要穩住單位'],
+  ] },
+  { k: '每季', color: 'emerald', items: [
+    ['每季加權保費成效獎金', '直轄單位季加權保費達成率 ≥60% 才有；目標 區200萬／襄120萬／主任80萬', '試算機①'],
+    ['區經理團隊成效獎金', '直轄單位有 ≥2 人領到每季成效獎金：每人 2,000～3,000', '試算機②'],
+    ['增員培育獎金', '目標新人每季 FYC 合計 ≥30,000：10%～20%（1.5 倍計入條件見規則）', '試算機④'],
+  ] },
+  { k: '新人期間／一次性', color: 'amber', items: [
+    ['增員獎金', '新人合約後 6 個月 FYC ≥30,000：5%；≥50,000：10%，上限 25,000', '試算機③'],
+    ['優培（優質人才）', '分四階段達 FYC 與不同被保險人門檻，另有證照專業獎金', '組織架構頁'],
+    ['委任主任專業獎金', '四張證照（LIA/FCP/ILP/CIA）6,000；新制期限內 10,000', '個人頁勾選'],
+  ] },
+  { k: '半年／年度', color: 'violet', items: [
+    ['半年加發（特別／升級）', '主任組或襄理組半年 FYC ≥180,000 → 加發 2.625%～5.25%', '試算機⑤'],
+    ['四星會／職級評量', '依半年或年度加權保費與人力評量', '單位追蹤'],
+    ['高峰／新高峰', '上、下半年個績或組績擇一完成', '年度現況'],
+  ] },
+];
+const QR_TABLE = [[2.4, .49, .436, .404], [1.9, .465, .401, .354], [1.5, .44, .366, .304], [1.2, .415, .331, .254], [.9, .39, .296, .204], [.6, .195, .148, .102]];
+const QR_TARGET = { '區經理': 2000000, '業務襄理': 1200000, '業務主任': 800000 };
+const ALLOW_LINES = {
+  '區經理': [['轄屬業務主任組', 7.875], ['轄屬業務襄理組', 6.3], ['襄理底下的主任組', 3.15], ['襄理底下的襄理組（24個月內）', 3.15], ['主任底下的主任組（24個月內）', 5.25], ['改簽區經理的新區經理組（升級）', 6.3], ['新區經理轄下單位（輔導）', 1.575], ['第三代區經理組（輔導）', 1.05]],
+  '業務襄理': [['轄屬業務主任組', 6.3], ['襄理底下的襄理組／主任組', 2.1], ['主任底下的主任組（24個月內）', 3.15], ['轄屬主任改簽的新襄理組（升級）', 5.25]],
+  '業務主任': [['轄屬業務代表改簽的新主任組（升級）', 5.25], ['第三代主任組', 3.15]],
+};
+const UnitInput = ({ label, value, onChange, unit, hint }) => (
+  <label className="block">
+    <span className="text-[11px] font-bold text-gray-500">{label}</span>
+    <div className="flex items-center gap-1 mt-1">
+      <input type="number" inputMode="decimal" value={value} onChange={e => onChange(e.target.value)} className="w-full px-3 py-2 rounded-lg border border-gray-200 text-sm font-bold focus:outline-none focus:ring-2 focus:ring-blue-300" />
+      <span className="text-xs text-gray-400 whitespace-nowrap">{unit}</span>
+    </div>
+    {hint && <span className="text-[10px] text-gray-400">{hint}</span>}
+  </label>
+);
+const ResultBox = ({ label, value, sub, tone = 'blue' }) => (
+  <div className={`rounded-xl p-3 border ${tone === 'green' ? 'bg-emerald-50 border-emerald-100' : 'bg-blue-50 border-blue-100'}`}>
+    <div className="text-[11px] font-bold text-gray-500">{label}</div>
+    <div className={`text-xl font-black ${tone === 'green' ? 'text-emerald-600' : 'text-blue-600'}`}>{value}</div>
+    {sub && <div className="text-[11px] text-gray-500 mt-0.5">{sub}</div>}
+  </div>
+);
+
+const BonusOnePager = ({ loggedInUser, team, records }) => {
+  const [calc, setCalc] = useState('qr');
+  const fmt = (n) => Math.round(n || 0).toLocaleString();
+  const role = MANAGER_RANKS.includes(loggedInUser?.role) ? (loggedInUser.role === '新進業務主任' ? '業務主任' : loggedInUser.role === '處經理' ? '區經理' : loggedInUser.role) : '業務主任';
+  const [qrRole, setQrRole] = useState(role);
+  const quarterMonths = useMemo(() => { const m = Number(getCurrentMonth().slice(5)); const y = getCurrentMonth().slice(0, 4); const s = Math.floor((m - 1) / 3) * 3; return [1, 2, 3].map(i => `${y}-${String(s + i).padStart(2, '0')}`); }, []);
+  const myUnitW = useMemo(() => {
+    const me = (team || []).find(m => String(m.id) === String(loggedInUser?.id)); if (!me) return 0;
+    const ids = new Set(getDistrictMembers(team, me.name).map(m => String(m.id)));
+    return (records || []).filter(r => isIssuedRecord(r) && ids.has(String(r.agentId)) && quarterMonths.includes((r.date || '').slice(0, 7))).reduce((s, r) => s + (r.weighted || 0), 0);
+  }, [team, records, loggedInUser, quarterMonths]);
+  const [qrW, setQrW] = useState('');
+  const w = Number(qrW) * 10000;
+  const rate = (() => { if (!w) return 0; const pct = w / QR_TARGET[qrRole] * 100; const row = QR_TABLE.find(r => pct >= r[0] * 100 - 1e-9 + (r[0] === 2.4 ? 0 : 0)); const idx = { '區經理': 1, '業務襄理': 2, '業務主任': 3 }[qrRole]; const hit = [[240, 0], [190, 1], [150, 2], [120, 3], [90, 4], [60, 5]].find(([p]) => pct >= p); return hit ? QR_TABLE[hit[1]][idx] : 0; })();
+  const pct = w ? w / QR_TARGET[qrRole] * 100 : 0;
+  const [tmG, setTmG] = useState('4'); const [tmR, setTmR] = useState('3');
+  const tmAmt = (() => { const g = Number(tmG), r = Number(tmR); if (r < 2) return 0; return g >= 5 && r > g * 0.5 ? r * 3000 : r * 2000; })();
+  const [rbF, setRbF] = useState('');
+  const [nuF, setNuF] = useState('');
+  const [alRole, setAlRole] = useState(role);
+  const [alVals, setAlVals] = useState({});
+  const [alLine, setAlLine] = useState('40000');
+  const alLines = ALLOW_LINES[alRole] || [];
+  const alBase = alLines.reduce((s, [l, r]) => s + (Number(alVals[alRole + l]) || 0) * r / 100, 0);
+  const alFactor = alRole === '區經理' ? Math.min(1, (Number(alLine) || 0) / 40000) : 1;
+  const [hf, setHf] = useState('');
+  const [odKind, setOdKind] = useState('襄理');
+  const [odF, setOdF] = useState('');
+  const odOk = Number(odF) >= (odKind === '襄理' ? 22000 : 28000);
+  const tabs = [['qr', '①每季成效'], ['tm', '②團隊成效'], ['rb', '③增員獎金'], ['nu', '④培育獎金'], ['al', '⑤組織津貼'], ['od', '⑥組織發展']];
+  const toneCls = { blue: 'bg-blue-50 text-blue-700 border-blue-200', emerald: 'bg-emerald-50 text-emerald-700 border-emerald-200', amber: 'bg-amber-50 text-amber-700 border-amber-200', violet: 'bg-violet-50 text-violet-700 border-violet-200' };
+  return (
+    <div className="space-y-5">
+      <Card className="p-5 border-t-4 border-t-blue-400">
+        <h3 className="font-bold text-gray-800 text-sm mb-1 flex items-center gap-2"><DollarSign size={16} className="text-blue-500" /> 獎金一頁通（115年7~12月）</h3>
+        <p className="text-xs text-gray-500 mb-4">先看「什麼時候領什麼」，下面有試算機，輸入數字就知道金額。正式金額以公司發放為準。</p>
+        <div className="grid md:grid-cols-2 gap-4">
+          {BONUS_CADENCE.map(g => (
+            <div key={g.k} className="rounded-xl border border-gray-100 p-3">
+              <span className={`inline-block px-2.5 py-0.5 rounded-full text-xs font-bold border ${toneCls[g.color]}`}>{g.k}</span>
+              <ul className="mt-2 space-y-2">
+                {g.items.map(([t, d, where]) => (
+                  <li key={t} className="text-xs">
+                    <div className="font-bold text-gray-800">{t}</div>
+                    <div className="text-gray-500 leading-relaxed">{d}</div>
+                    <div className="text-[10px] text-gray-400">→ {where}</div>
+                  </li>
+                ))}
+              </ul>
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      <Card className="p-5 border-t-4 border-t-emerald-400">
+        <h3 className="font-bold text-gray-800 text-sm mb-3 flex items-center gap-2"><Target size={16} className="text-emerald-500" /> 獎金試算機</h3>
+        <div className="inline-flex flex-wrap gap-1 p-1 rounded-2xl bg-gray-100 mb-4">
+          {tabs.map(([k, l]) => <button key={k} onClick={() => setCalc(k)} className={`px-3 py-1.5 rounded-full text-xs font-bold ${calc === k ? 'bg-emerald-600 text-white' : 'text-gray-500'}`}>{l}</button>)}
+        </div>
+        {calc === 'qr' && (
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-2">{Object.keys(QR_TARGET).map(r => <button key={r} onClick={() => setQrRole(r)} className={`px-3 py-1 rounded-full text-xs font-bold border ${qrRole === r ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-200'}`}>{r}（目標 {QR_TARGET[r] / 10000} 萬）</button>)}</div>
+            <div className="grid grid-cols-2 gap-3">
+              <UnitInput label="本季直轄單位加權保費" value={qrW} onChange={setQrW} unit="萬" hint={`本季你的單位目前：${(myUnitW / 10000).toFixed(1)} 萬`} />
+              <div className="flex items-end"><button onClick={() => setQrW(String(Math.round(myUnitW / 100) / 100))} className="px-3 py-2 rounded-lg bg-gray-100 text-xs font-bold text-gray-600">帶入目前累計</button></div>
+            </div>
+            <div className="grid grid-cols-3 gap-3">
+              <ResultBox label="達成率" value={`${pct.toFixed(0)}%`} />
+              <ResultBox label="給付率" value={`${rate}%`} sub={pct < 60 ? '未達 60% 無獎金' : ''} />
+              <ResultBox label="預估獎金" value={`${fmt(w * rate / 100)} 元`} tone="green" />
+            </div>
+            {pct > 0 && pct < 240 && (() => { const nx = [60, 90, 120, 150, 190, 240].find(p => pct < p); const need = QR_TARGET[qrRole] * nx / 100 - w; return <p className="text-xs text-amber-600">再補 {(need / 10000).toFixed(1)} 萬加權保費可升到 {nx}% 級距。</p>; })()}
+          </div>
+        )}
+        {calc === 'tm' && (
+          <div className="space-y-3">
+            <div className="grid grid-cols-2 gap-3">
+              <UnitInput label="區單位組數" value={tmG} onChange={setTmG} unit="組" />
+              <UnitInput label="本季領到成效獎金的主管數" value={tmR} onChange={setTmR} unit="人" hint="不含區經理本人，需 ≥2 人" />
+            </div>
+            <ResultBox label="團隊成效獎金" value={`${fmt(tmAmt)} 元`} sub={Number(tmR) < 2 ? '未滿 2 人，無獎金' : (Number(tmG) >= 5 && Number(tmR) > Number(tmG) * .5 ? '5組以上且領取人數過半：每人 3,000' : '每人 2,000')} tone="green" />
+          </div>
+        )}
+        {calc === 'rb' && (
+          <div className="space-y-3">
+            <UnitInput label="新人合約後 6 個月壽險＋意外險 FYC" value={rbF} onChange={setRbF} unit="元" />
+            <div className="grid grid-cols-2 gap-3">
+              <ResultBox label="增員獎金" value={`${fmt(recruitBonusAmount(Number(rbF)))} 元`} tone="green" />
+              <ResultBox label="離下一級" value={Number(rbF) < 30000 ? `差 ${fmt(30000 - Number(rbF))}（5%）` : Number(rbF) < 50000 ? `差 ${fmt(50000 - Number(rbF))}（升 10%）` : '已最高級距'} />
+            </div>
+          </div>
+        )}
+        {calc === 'nu' && (
+          <div className="space-y-3">
+            <UnitInput label="本季轄屬目標新人合計 FYC（已含 1.5 倍者請先換算）" value={nuF} onChange={setNuF} unit="元" />
+            <div className="grid grid-cols-2 gap-3">
+              <ResultBox label="給付比例" value={`${nurtureRate(Number(nuF)) * 100}%`} />
+              <ResultBox label="增員培育獎金" value={`${fmt(Number(nuF) * nurtureRate(Number(nuF)))} 元`} tone="green" />
+            </div>
+            <p className="text-[11px] text-gray-400">級距：3萬10%／6萬12%／10萬14%／15萬16%／21萬18%／30萬20%。每位新人每月平均需達 10,000 才算目標新人。</p>
+          </div>
+        )}
+        {calc === 'al' && (
+          <div className="space-y-3">
+            <div className="flex flex-wrap gap-2">{Object.keys(ALLOW_LINES).map(r => <button key={r} onClick={() => setAlRole(r)} className={`px-3 py-1 rounded-full text-xs font-bold border ${alRole === r ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-200'}`}>{r}</button>)}</div>
+            <div className="grid sm:grid-cols-2 gap-3">
+              {alLines.map(([l, r]) => <UnitInput key={l} label={`${l}（${r}%）月 FYC`} value={alVals[alRole + l] || ''} onChange={v => setAlVals({ ...alVals, [alRole + l]: v })} unit="元" />)}
+            </div>
+            {alRole === '區經理' && <UnitInput label="整條線當月 FYC（責任額 40,000）" value={alLine} onChange={setAlLine} unit="元" hint="不足 40,000 依比例發" />}
+            <div className="grid grid-cols-2 gap-3">
+              <ResultBox label="每月組織津貼" value={`${fmt(alBase * alFactor)} 元`} tone="green" sub={alFactor < 1 ? `責任額係數 ${(alFactor * 100).toFixed(0)}%` : ''} />
+              <ResultBox label="年化（×12）" value={`${fmt(alBase * alFactor * 12)} 元`} />
+            </div>
+            <div className="grid grid-cols-2 gap-3 pt-2 border-t border-gray-100">
+              <UnitInput label="半年加發：某組半年 FYC" value={hf} onChange={setHf} unit="元" hint="≥180,000 才有；主任組 5.25%（區）／襄理組 2.625%" />
+              <ResultBox label="半年加發（主任組、區經理）" value={`${fmt(Number(hf) >= 180000 ? Number(hf) * 0.0525 : 0)} 元`} />
+            </div>
+          </div>
+        )}
+        {calc === 'od' && (
+          <div className="space-y-3">
+            <div className="flex gap-2">{['襄理', '區經理'].map(k => <button key={k} onClick={() => setOdKind(k)} className={`px-3 py-1 rounded-full text-xs font-bold border ${odKind === k ? 'bg-blue-600 text-white border-blue-600' : 'bg-white text-gray-500 border-gray-200'}`}>新委任{k}</button>)}</div>
+            <UnitInput label="新委任者直轄單位當月 FYC" value={odF} onChange={setOdF} unit="元" hint={`門檻 ${odKind === '襄理' ? '22,000' : '28,000'}`} />
+            <ResultBox label="組織發展獎金（直屬主管，每月）" value={`${fmt(odOk ? Number(odF) * 0.1 : 0)} 元`} sub={odOk ? '連續 12 個月' : '未達門檻'} tone="green" />
+          </div>
+        )}
+      </Card>
+    </div>
+  );
+};
+
+const APPT_LEVELS = {
+  sup3: { name: '業務主任（3個月快速）', from: ['業務代表', '新進業代'], months: 3, w: 2650000, fyc: 320000, insured: 12, newM: 3, unit: false },
+  sup6: { name: '業務主任（6個月）', from: ['業務代表', '新進業代'], months: 6, w: 2900000, fyc: 350000, insured: 18, newM: 5, unit: false },
+  sup9: { name: '業務主任（9個月）', from: ['業務代表', '新進業代'], months: 9, w: 2200000, fyc: 270000, insured: 18, newM: 8, unit: false },
+  asst: { name: '業務襄理（12個月）', from: ['業務主任', '新進業務主任'], months: 12, w: 3950000, fyc: 480000, insured: 32, unit: true, act: 60, extra: ['單位活動率 ≥60%', '標準業代 2位＋1位主任（或標準業代4位）', '繼續率(13個月) ≥85%', '個人壽險保額 ≥50萬、兩項測驗、主任基礎/成長/進階訓練'] },
+  dist: { name: '區經理（15個月）', from: ['業務襄理'], months: 15, w: 6150000, fyc: 750000, insured: 48, unit: true, act: 60, extra: ['單位活動率 ≥60%', '標準業代 3位，且主任／襄理合計 ≥3位', '繼續率(13個月) ≥85%', '兩項測驗、襄理基礎/成長/進階訓練，委任後半年內完成區經理基礎訓練'] },
+  agency: { name: '通訊處經理', from: ['區經理', '處經理'], months: 6, unit: true, extra: ['辦法一／二的人力、組數、增員活動率、月均加權保費等門檻，請看「總覽→年度現況」的通訊處門檻面板'] },
+};
+const suggestLevel = (role) => (role === '業務代表' || role === '新進業代') ? 'sup6' : (role === '業務主任' || role === '新進業務主任') ? 'asst' : role === '業務襄理' ? 'dist' : 'agency';
+const monthsBetween = (a, b) => { const [ay, am] = a.split('-').map(Number), [by, bm] = b.split('-').map(Number); return (by - ay) * 12 + (bm - am); };
+
+const AppointmentOnePager = ({ loggedInUser, team, records }) => {
+  const today = getTodayDate(); const curMonth = today.slice(0, 7);
+  const [plans, setPlans] = useState({});
+  useEffect(() => { const u = onSnapshot(doc(db, 'settings', 'appoint_plans'), s => setPlans(s.exists() ? (s.data().plans || {}) : {})); return () => u(); }, []);
+  const savePlan = async (id, patch) => { const next = { ...(plans[id] || {}), ...patch }; setPlans({ ...plans, [id]: next }); try { await setDoc(doc(db, 'settings', 'appoint_plans'), { plans: { [id]: next } }, { merge: true }); } catch (e) { console.error(e); } };
+  const isMgr = MANAGER_RANKS.includes(loggedInUser?.role) || loggedInUser?.role === 'admin';
+  const me = (team || []).find(m => String(m.id) === String(loggedInUser?.id)) || loggedInUser;
+  const scope = useMemo(() => (isMgr && me ? getDistrictMembers(team, me.name) : [me]).filter(Boolean), [team, me, isMgr]);
+  const [selId, setSelId] = useState(String(me?.id || ''));
+  const sel = scope.find(m => String(m.id) === selId) || me;
+  const plan = plans[sel?.id] || {};
+  const levelKey = plan.level || suggestLevel(sel?.role);
+  const L = APPT_LEVELS[levelKey];
+  const targetDate = plan.date || '';
+  const fmt = (n) => Math.round(n || 0).toLocaleString();
+  const wan = (n) => `${(n / 10000).toFixed(n >= 1000000 ? 0 : 1)} 萬`;
+
+  const descendantIds = (id) => { const s = new Set([String(id)]); let ch = true; while (ch) { ch = false; (team || []).forEach(m => { if (m.parentId && s.has(String(m.parentId)) && !s.has(String(m.id))) { s.add(String(m.id)); ch = true; } }); } return s; };
+  const calc = useMemo(() => {
+    if (!sel || !L || levelKey === 'agency') return null;
+    const ids = L.unit ? descendantIds(sel.id) : new Set([String(sel.id)]);
+    const issued = (records || []).filter(r => isIssuedRecord(r) && ids.has(String(r.agentId)));
+    const endYm = targetDate ? targetDate.slice(0, 7) : null;
+    const lastYm = endYm ? ymAdd(endYm, -1) : curMonth;
+    const startYm = ymAdd(lastYm, -(L.months - 1));
+    const winMonths = Array.from({ length: L.months }, (_, i) => ymAdd(startYm, i));
+    const rows = winMonths.map(mo => { const rs = issued.filter(r => (r.date || '').slice(0, 7) === mo); return { mo, w: rs.reduce((s, r) => s + (r.weighted || 0), 0), fyc: rs.reduce((s, r) => s + fycOfRecord(r), 0), ins: rs.map(r => (r.insuredName || '').trim()).filter(Boolean), future: mo > curMonth, cur: mo === curMonth }; });
+    const sumW = rows.reduce((s, r) => s + r.w, 0), sumF = rows.reduce((s, r) => s + r.fyc, 0);
+    const insSet = new Set(rows.flatMap(r => r.ins));
+    const newM = rows.filter(r => r.w > 0).length;
+    const passed = rows.filter(r => !r.future && !r.cur).length;
+    const remain = rows.filter(r => r.future || r.cur).length;
+    const useW = sumW / L.w >= sumF / L.fyc;
+    const need = useW ? L.w : L.fyc; const got = useW ? sumW : sumF;
+    const perMonthNeed = remain > 0 ? Math.max(0, need - got) / remain : 0;
+    const memberCount = L.unit ? [...ids].length - 1 : 0;
+    const actRates = L.unit ? rows.filter(r => !r.future).map(r => memberCount ? new Set(issued.filter(x => (x.date || '').slice(0, 7) === r.mo && String(x.agentId) !== String(sel.id)).map(x => String(x.agentId))).size / memberCount * 100 : 0) : [];
+    const actAvg = actRates.length ? actRates.reduce((a, b) => a + b, 0) / actRates.length : 0;
+    return { winMonths, rows, sumW, sumF, ins: insSet.size, newM, passed, remain, useW, need, got, perMonthNeed, startYm, lastYm, memberCount, actAvg };
+  }, [sel, levelKey, targetDate, records, team]);
+
+  const earliest = useMemo(() => {
+    if (!sel || !L || levelKey === 'agency') return '';
+    const pd = sel.promotionDates || {};
+    const base = L.from.includes('業務代表') ? pd.registered : levelKey === 'asst' ? pd.supervisor : levelKey === 'dist' ? pd.asstManager : '';
+    return base ? ymAdd(base.slice(0, 7), L.months) : '';
+  }, [sel, levelKey]);
+
+  const monthTasks = (c, i) => {
+    const r = c.rows[i]; const t = [];
+    const left = c.rows.slice(i).length;
+    if (r.future) t.push(`預排：本月目標 ${L.unit ? '單位' : '個人'}${c.useW ? '加權保費' : 'FYC'} ${wan(c.perMonthNeed)}`);
+    else { const gap = (c.useW ? L.w : L.fyc) / L.months - (c.useW ? r.w : r.fyc); t.push(r.cur ? `本月目標 ${wan(c.perMonthNeed)}；目前已 ${wan(c.useW ? r.w : r.fyc)}${gap > 0 ? `，月均線還差 ${wan(gap)}` : '，已超過月均線'}` : `該月 ${wan(c.useW ? r.w : r.fyc)}（月均線 ${wan((c.useW ? L.w : L.fyc) / L.months)}）${r.w > 0 ? '' : '　⚠ 當月無新業績'}`); }
+    if (r.cur || r.future) {
+      const needIns = Math.max(0, L.insured - c.ins); if (needIns > 0 && left > 0) t.push(`不同被保險人還差 ${needIns} 人 → 這個月至少要新增 ${Math.ceil(needIns / left)} 位被保人（同一人只算 1 次）`);
+      if (L.newM && c.newM + c.rows.slice(i).filter(x => !x.future || true).length - 0 > 0 && !r.w) t.push('本月一定要有新業績（需「有新業績月數」達標）');
+      if (L.unit) { t.push('帶領單位：本月安排每位業代至少 1 件新契約，活動率目標 ≥60%'); t.push('盤點標準業代與主任人數是否到位，不足就排增員面談'); if (levelKey !== 'asst') t.push('檢視直轄主任／襄理是否已取得委任或評量合格'); }
+      else t.push(`本月：約訪 ≥ ${Math.max(10, Math.ceil(c.perMonthNeed / 10000 * 1.2))} 通、面談 ≥ ${Math.max(4, Math.ceil(c.perMonthNeed / 40000))} 場，優先找尚未成交的準客戶（a/b 級）`);
+    }
+    if (i === c.rows.length - 1) t.push('最後一個月：確認保額 ≥50萬、訓練課程與測驗是否完成，備齊申請文件');
+    return t;
+  };
+
+  const direction = (m) => {
+    const p = plans[m.id] || {}; const lk = p.level || suggestLevel(m.role); const l = APPT_LEVELS[lk];
+    if (lk === 'agency') return { lk, text: '通訊處門檻：看年度現況→通訊處門檻面板', st: '—' };
+    const pd = m.promotionDates || {};
+    const base = l.from.includes('業務代表') ? pd.registered : lk === 'asst' ? pd.supervisor : lk === 'dist' ? pd.asstManager : '';
+    const ear = base ? ymAdd(base.slice(0, 7), l.months) : '';
+    if (!p.date) return { lk, text: ear ? (ear > curMonth ? `最早 ${ear} 可申請，先設定目標日期` : '已滿年資，請設定目標委任日') : '請設定目標委任日', st: '未設定' };
+    const left = monthsBetween(curMonth, p.date.slice(0, 7));
+    return { lk, text: `目標 ${p.date.slice(0, 7)}，剩 ${left} 個月`, st: left <= 0 ? '已到期' : left <= 3 ? '衝刺' : '準備' };
+  };
+
+  return (
+    <div className="space-y-5">
+      <Card className="p-5 border-t-4 border-t-violet-400">
+        <h3 className="font-bold text-gray-800 text-sm mb-1 flex items-center gap-2"><TrendingUp size={16} className="text-violet-500" /> 委任一頁通</h3>
+        <p className="text-xs text-gray-500 mb-4">選人、選要委任的職級、設定目標委任日 → 系統自動排出「委任前每個月」要做的事，並用已發單資料即時追蹤。</p>
+        <div className="grid sm:grid-cols-3 gap-3 mb-4">
+          {isMgr && <label className="block"><span className="text-[11px] font-bold text-gray-500">對象</span>
+            <select value={selId} onChange={e => setSelId(e.target.value)} className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-200 text-sm font-bold">{scope.map(m => <option key={m.id} value={String(m.id)}>{m.name}（{m.role}）</option>)}</select></label>}
+          <label className="block"><span className="text-[11px] font-bold text-gray-500">目標職級</span>
+            <select value={levelKey} onChange={e => savePlan(sel.id, { level: e.target.value })} className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-200 text-sm font-bold">{Object.entries(APPT_LEVELS).map(([k, v]) => <option key={k} value={k}>{v.name}</option>)}</select></label>
+          <label className="block"><span className="text-[11px] font-bold text-gray-500">目標委任日（生效月）</span>
+            <input type="date" value={targetDate} onChange={e => savePlan(sel.id, { date: e.target.value })} className="w-full mt-1 px-3 py-2 rounded-lg border border-gray-200 text-sm font-bold" /></label>
+        </div>
+        <div className="grid sm:grid-cols-2 md:grid-cols-4 gap-2 text-xs">
+          {Object.entries(APPT_LEVELS).filter(([k]) => k !== 'sup3' && k !== 'sup9').map(([k, v]) => (
+            <div key={k} className={`rounded-lg border p-2.5 ${k === levelKey || (levelKey.startsWith('sup') && k === 'sup6') ? 'border-violet-300 bg-violet-50' : 'border-gray-100'}`}>
+              <div className="font-bold text-gray-800">{k === 'sup6' ? '業代→主任' : v.name}</div>
+              {k === 'sup6' ? <div className="text-gray-500 leading-relaxed">3個月 265萬/32萬/12人<br />6個月 290萬/35萬/18人<br />9個月 220萬/27萬/18人</div>
+                : k === 'agency' ? <div className="text-gray-500">依辦法一／二</div>
+                : <div className="text-gray-500 leading-relaxed">{v.months}個月 {wan(v.w)}／FYC {wan(v.fyc)}<br />不同被保險人 {v.insured} 人</div>}
+            </div>
+          ))}
+        </div>
+      </Card>
+
+      {levelKey === 'agency' ? (
+        <Card className="p-5"><p className="text-sm text-gray-600">通訊處經理的條件含人力、組數、增員活動率與月均加權保費等多項，已在「總覽 → 年度現況 → 通訊處門檻」逐項計算並給出缺口與行動建議，請由該處追蹤。這裡可設定目標日期作為規劃參考。</p>
+          <ul className="mt-2 text-xs text-gray-500 list-disc pl-5">{L.extra.map(x => <li key={x}>{x}</li>)}</ul></Card>
+      ) : calc && (
+        <>
+          <Card className="p-5">
+            <div className="flex flex-wrap items-center gap-2 mb-3">
+              <h4 className="font-bold text-sm text-gray-800">{sel?.name} → {L.name}</h4>
+              {earliest && <span className="text-[11px] px-2 py-0.5 rounded-full bg-gray-100 text-gray-500">依年資最早 {earliest} 可申請</span>}
+              {!targetDate && <span className="text-[11px] px-2 py-0.5 rounded-full bg-amber-50 text-amber-600 border border-amber-200">尚未設定目標日，先以「最近 {L.months} 個月」追蹤</span>}
+            </div>
+            <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+              {[[`${calc.useW ? '加權保費' : 'FYC'}（${calc.useW ? '加權' : 'FYC'}擇優）`, `${wan(calc.got)} / ${wan(calc.need)}`, calc.got / calc.need],
+                ['不同被保險人', `${calc.ins} / ${L.insured} 人`, calc.ins / L.insured],
+                ...(L.newM ? [['有新業績月數', `${calc.newM} / ${L.newM} 個月`, calc.newM / L.newM]] : [['單位活動率（月均）', `${calc.actAvg.toFixed(0)}% / ${L.act}%`, calc.actAvg / L.act]]),
+                ['剩餘月數', `${calc.remain} 個月`, 1 - calc.remain / L.months]].map(([l, v, p]) => (
+                <div key={l} className="rounded-xl border border-gray-100 p-3">
+                  <div className="text-[11px] font-bold text-gray-500">{l}</div>
+                  <div className="text-base font-black text-gray-800">{v}</div>
+                  <div className="h-1.5 bg-gray-100 rounded-full mt-1.5 overflow-hidden"><div className={`h-full ${p >= 1 ? 'bg-emerald-500' : 'bg-violet-500'}`} style={{ width: `${Math.min(100, Math.max(0, p * 100))}%` }} /></div>
+                </div>
+              ))}
+            </div>
+            {L.extra && <ul className="mt-3 text-xs text-gray-500 list-disc pl-5 space-y-0.5">{L.extra.map(x => <li key={x}>{x}</li>)}<li>標準業代人數、繼續率等需人工確認，APP 不自動判定</li></ul>}
+          </Card>
+          <Card className="p-5">
+            <h4 className="font-bold text-sm text-gray-800 mb-3">每月該做的事（自動排程）</h4>
+            <div className="space-y-3">
+              {calc.rows.map((r, i) => (
+                <div key={r.mo} className={`rounded-xl border p-3 ${r.cur ? 'border-violet-300 bg-violet-50' : 'border-gray-100'}`}>
+                  <div className="flex items-center gap-2 mb-1"><span className="font-black text-sm text-gray-800">{r.mo}</span>
+                    <span className="text-[10px] px-2 py-0.5 rounded-full bg-white border border-gray-200 text-gray-500">第 {i + 1}/{L.months} 個月{r.cur ? '・本月' : r.future ? '・未來' : '・已過'}</span></div>
+                  <ul className="text-xs text-gray-600 space-y-0.5 list-disc pl-5">{monthTasks(calc, i).map((t, j) => <li key={j}>{t}</li>)}</ul>
+                </div>
+              ))}
+            </div>
+          </Card>
+        </>
+      )}
+
+      {isMgr && scope.length > 1 && (
+        <Card className="p-5">
+          <h4 className="font-bold text-sm text-gray-800 mb-3">全員方向總表</h4>
+          <div className="overflow-x-auto">
+            <table className="w-full text-xs">
+              <thead><tr className="text-left text-gray-400"><th className="py-1.5 pr-3">成員</th><th className="pr-3">現職</th><th className="pr-3">目標職級</th><th className="pr-3">狀態</th><th>方向</th></tr></thead>
+              <tbody>{scope.map(m => { const d = direction(m); return (
+                <tr key={m.id} className="border-t border-gray-100 cursor-pointer hover:bg-gray-50" onClick={() => setSelId(String(m.id))}>
+                  <td className="py-1.5 pr-3 font-bold text-gray-800 whitespace-nowrap">{m.name}</td><td className="pr-3 whitespace-nowrap text-gray-500">{m.role}</td>
+                  <td className="pr-3 whitespace-nowrap">{APPT_LEVELS[d.lk].name}</td><td className="pr-3 whitespace-nowrap"><span className={`px-2 py-0.5 rounded-full ${d.st === '衝刺' ? 'bg-rose-50 text-rose-600' : d.st === '準備' ? 'bg-emerald-50 text-emerald-600' : 'bg-gray-100 text-gray-500'}`}>{d.st}</span></td><td className="text-gray-600">{d.text}</td></tr>); })}</tbody>
+            </table>
+          </div>
+        </Card>
+      )}
+    </div>
+  );
+};
+
+const SystemGuidePage = ({ loggedInUser, team, records }) => {
+  const [tab, setTab] = useState('bonus');
+  return (
+    <div className="max-w-4xl mx-auto py-4 space-y-4">
+      <div className="inline-flex p-1 rounded-full bg-gray-100">
+        {[['bonus', '獎金一頁通'], ['appt', '委任一頁通']].map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={`px-5 py-2 rounded-full text-sm font-bold ${tab === k ? 'bg-blue-600 text-white' : 'text-gray-500'}`}>{l}</button>)}
+      </div>
+      {tab === 'bonus' ? <BonusOnePager loggedInUser={loggedInUser} team={team} records={records} /> : <AppointmentOnePager loggedInUser={loggedInUser} team={team} records={records} />}
+    </div>
+  );
+};
+
 // --- Main App ---
 const FIT_TABS = ['overview', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'todo', 'recruitment', 'team'];
 const App = () => {
@@ -15322,6 +16062,7 @@ const App = () => {
   const [showMoreSheet, setShowMoreSheet] = useState(false);
   const [season, setSeason] = useState('H2'); 
   const [team, setTeam] = useState([]);
+  const [allTeam, setAllTeam] = useState([]);
   const [records, setRecords] = useState([]);
   const [recruits, setRecruits] = useState([]);
   const [activities, setActivities] = useState([]); 
@@ -15533,8 +16274,8 @@ const App = () => {
          const typeCode = data.product_type || 'ah_general';
          const typeInfo = PRODUCT_MAPPING[typeCode] || PRODUCT_MAPPING['ah_general'];
          const premium = Number(data.amount || 0);
-         let weighted = premium * typeInfo.rate;
-         if (data.is_esg) weighted *= 1.05;
+         const weighted = premium * typeInfo.rate;
+         const weightedC = data.is_esg ? weighted * 1.05 : weighted; // 競賽業績才計入 ESG ×1.05
          let dateStr = '';
          if (data.transaction_date && data.transaction_date.toDate) {
             dateStr = data.transaction_date.toDate().toISOString().split('T')[0];
@@ -15550,6 +16291,7 @@ const App = () => {
             isAH: typeInfo.isAH,
             premium: premium,
             weighted: Math.round(weighted),
+            weightedC: Math.round(weightedC),
             isESG: data.is_esg,
             date: dateStr,
             status: data.status || '已發單',
@@ -15585,10 +16327,15 @@ const App = () => {
           lastSeenCelebration: data.lastSeenCelebration || '',
           defaultScheduleView: data.defaultScheduleView || '',
           lastSeenAnnouncements: data.lastSeenAnnouncements || '',
-          qualityTalentStartMonth: data.qualityTalentStartMonth || ''
+          qualityTalentStartMonth: data.qualityTalentStartMonth || '',
+          status: data.status || '',
+          resignedDate: data.resignedDate || '',
+          successorId: data.successorId || ''
         };
       });
-      setTeam(adaptedTeam.sort((a,b)=>a.id.localeCompare(b.id)));
+      const sortedTeam = adaptedTeam.sort((a,b)=>a.id.localeCompare(b.id));
+      setAllTeam(sortedTeam);
+      setTeam(sortedTeam.filter(m => m.status !== 'resigned'));
       setTeamLoaded(true);
     });
 
@@ -15619,12 +16366,22 @@ const App = () => {
     return () => { unsubRecords(); unsubTeam(); unsubRecruits(); unsubActivities(); };
   }, [user]);
 
+  // 離職成員的業績與增員，自動併入承接主管（原始資料不動，只在顯示時換算）
   const enrichedRecords = useMemo(() => {
     return records.map(r => {
-      const agent = team.find(t => t.id === r.agentId);
+      const agent = allTeam.find(t => t.id === r.agentId) || team.find(t => t.id === r.agentId);
+      if (agent && agent.status === 'resigned') {
+        const to = resolveSuccessorId(r.agentId, allTeam);
+        if (to) return { ...r, agentId: to, origAgentId: r.agentId, fromResigned: true, agentName: `${agent.name}（離職）` };
+      }
       return { ...r, agentName: agent ? agent.name : '未知成員' };
     });
-  }, [records, team]);
+  }, [records, team, allTeam]);
+  const recruitsEff = useMemo(() => recruits.map(r => {
+    const rec = allTeam.find(t => String(t.id) === String(r.recruiterId));
+    if (rec && rec.status === 'resigned') { const to = resolveSuccessorId(rec.id, allTeam); if (to) return { ...r, recruiterId: to, origRecruiterId: r.recruiterId }; }
+    return r;
+  }), [recruits, allTeam]);
 
   // 恭賀彈跳視窗：登入時檢查「上次看過之後」有沒有新的報件 (含自己)，有的話一次列出來
   useEffect(() => {
@@ -15666,6 +16423,7 @@ const App = () => {
     { id: 'customers', label: '客戶管理', icon: Phone },
     { id: 'watchlist', label: '關注名單', icon: Star },
     { id: 'warroom', label: '業務戰情室', icon: ClipboardList },
+    { id: 'guide', label: '制度一頁通', icon: Award },
     { id: 'announce', label: '公文佈達', icon: Megaphone, badge: unreadAnnouncementCount },
     { id: 'dashboard', label: '業績儀表板', icon: LayoutDashboard },
     { id: 'activity', label: 'MEA 活動量', icon: Activity },
@@ -15746,18 +16504,19 @@ const App = () => {
       <CelebrationPosterModal isOpen={showCelebration} onClose={handleDismissCelebration} celebrations={newCelebrations} />
 
       <main className={`relative z-10 max-w-7xl md:max-w-none mx-auto px-4 md:px-5 ${FIT_TABS.includes(activeTab) ? 'md:h-[calc(100vh-64px)] md:overflow-y-auto no-scrollbar md:!pt-3 md:pb-3' : ''} ${['todo', 'calendar', 'customers', 'activity', 'dashboard', 'warroom', 'entry', 'recruitment'].includes(activeTab) ? 'pt-[calc(env(safe-area-inset-top,0px)+14px)]' : 'pt-4'} md:pt-6`}>
-        {activeTab === 'overview' && isTeamScheduleViewer && <OverviewPage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} season={season} rankTargets={rankTargets} />}
+        {activeTab === 'overview' && isTeamScheduleViewer && <OverviewPage loggedInUser={loggedInUser} team={team} allTeam={allTeam} records={enrichedRecords} activities={activities} recruits={recruitsEff} season={season} rankTargets={rankTargets} />}
         {activeTab === 'todo' && <TodoSchedulePage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} records={enrichedRecords} activities={activities} team={team} onGo={setActiveTab} isTeamScheduleViewer={isTeamScheduleViewer} recurringRules={recurringRules} bellCount={unreadAnnouncementCount} />}
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM recruits={recruits} loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} />}
+        {activeTab === 'guide' && <SystemGuidePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} />}
         {activeTab === 'warroom' && <SalesWarRoomPage loggedInUser={loggedInUser} team={team} customers={customers} records={enrichedRecords} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'announce' && <AnnouncementsPage loggedInUser={loggedInUser} announcements={announcements} canPost={isTeamScheduleViewer} onSeen={handleMarkAnnouncementsSeen} />}
-        {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruits} isManagerViewer={isTeamScheduleViewer} />}
+        {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruitsEff} isManagerViewer={isTeamScheduleViewer} />}
         {activeTab === 'dashboard' && <Dashboard team={team} records={enrichedRecords} season={season} setSeason={setSeason} rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} loggedInUser={loggedInUser} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'activity' && <ActivityDashboard team={team} activities={activities} records={enrichedRecords} user={user} season={season} loggedInUser={loggedInUser} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'entry' && <SalesEntry team={team} records={enrichedRecords} setRecords={setRecords} user={user} loggedInUser={loggedInUser} onSearch={() => setShowGlobalSearch(true)} />}
-        {activeTab === 'team' && <OrgChart team={team} recruits={recruits} />}
+        {activeTab === 'team' && <OrgChart team={team} allTeam={allTeam} recruits={recruits} records={records} activities={activities} />}
         {activeTab === 'recruitment' && <RecruitmentDashboard recruits={recruits} team={team} user={user} />}
         {activeTab === 'interviews' && isTeamScheduleViewer && <InterviewTrackerPage loggedInUser={loggedInUser} />}
         {activeTab === 'wiki' && <KnowledgeBase loggedInUser={loggedInUser} isManagerViewer={isTeamScheduleViewer} />}
