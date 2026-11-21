@@ -542,7 +542,7 @@ const MobileDashboardView = ({ team, records, season, setSeason, activeTargets, 
   // 達成進度（甜甜圈）
   const prog = progTab === 'act' && hasAct
     ? { got: d.premium, goal: d.tgt.peakAct, label: '實收保費' }
-    : { got: d.weighted, goal: d.tgt.peak, label: '加權保費 FYP' };
+    : { got: d.weighted, goal: d.tgt.peak, label: '加權保費' };
   const R = 52, C = 2 * Math.PI * R;
   const progPct = prog.goal ? Math.min(100, (prog.got / prog.goal) * 100) : 0;
 
@@ -552,7 +552,7 @@ const MobileDashboardView = ({ team, records, season, setSeason, activeTargets, 
     { l: 'RP 期繳', v: d.rp, c: 'bg-blue-400' },
     { l: 'SP 躉繳', v: d.sp, c: 'bg-amber-400' },
   ];
-  const trendCfg = { weighted: { label: 'FYP', color: '#60a5fa' }, premium: { label: '實收', color: '#34d399' }, cases: { label: '件數', color: '#fbbf24' } };
+  const trendCfg = { weighted: { label: '加權', color: '#60a5fa' }, premium: { label: '實收', color: '#34d399' }, cases: { label: '件數', color: '#fbbf24' } };
 
   return (
     <div className="md:hidden text-white pb-6 -mx-1">
@@ -588,11 +588,11 @@ const MobileDashboardView = ({ team, records, season, setSeason, activeTargets, 
         </div>
       </div>
 
-      {/* UNIT FYP 主卡 */}
+      {/* UNIT 加權 主卡 */}
       <div className={`${glass} p-5 mb-3 relative overflow-hidden`}>
         <div className="absolute -top-20 -left-10 w-56 h-56 rounded-full bg-blue-500/25 blur-3xl pointer-events-none"></div>
         <div className="relative">
-          <p className="text-[11px] tracking-[0.18em] text-white/45 font-bold">{curOpt.key === 'self' ? 'MY FYP' : 'UNIT FYP'}</p>
+          <p className="text-[11px] tracking-[0.18em] text-white/45 font-bold">{curOpt.key === 'self' ? 'MY 加權' : 'UNIT 加權'}</p>
           <p className="text-[36px] font-bold tracking-tight leading-tight tabular-nums mt-1">{formatMoney(d.weighted)}</p>
           <div className="flex items-center justify-between text-[12px] text-white/55 mt-1">
             <span>高峰目標 {d.tgt.peak ? formatMoney(d.tgt.peak) : '—'}</span>
@@ -627,7 +627,7 @@ const MobileDashboardView = ({ team, records, season, setSeason, activeTargets, 
         <div className="flex items-center justify-between mb-3">
           <p className="text-[15px] font-bold">達成進度</p>
           <div className="flex rounded-full bg-white/[0.07] p-0.5">
-            {[['fyp', 'FYP'], ...(hasAct ? [['act', '實收']] : [])].map(([k, l]) => (
+            {[['fyp', '加權'], ...(hasAct ? [['act', '實收']] : [])].map(([k, l]) => (
               <button key={k} onClick={() => setProgTab(k)} className={`px-3 py-1 text-[11px] font-bold rounded-full ${progTab === k || (k === 'fyp' && !hasAct) ? 'bg-white text-gray-900' : 'text-white/55'}`}>{l}</button>
             ))}
           </div>
@@ -689,7 +689,7 @@ const MobileDashboardView = ({ team, records, season, setSeason, activeTargets, 
       {members.length > 1 && (
         <div className={`${glass} p-4`}>
           <button onClick={() => setShowMembers(v => !v)} className="w-full flex items-center justify-between">
-            <p className="text-[15px] font-bold">成員表現 <span className="text-[11px] text-white/35 font-medium">累積 FYP</span></p>
+            <p className="text-[15px] font-bold">成員表現 <span className="text-[11px] text-white/35 font-medium">累積加權</span></p>
             <span className="text-[12px] text-white/50">{showMembers ? '收合 ▴' : `展開 ${members.length} 人 ▾`}</span>
           </button>
           {showMembers && (
@@ -748,7 +748,7 @@ const DesktopDashboardView = ({ stats, season, setSeason, viewMonth, setViewMont
 
       <div className="grid grid-cols-4 gap-3 shrink-0">
         <div className={`${glass} p-4 bg-gradient-to-br from-blue-500/25 to-indigo-500/10`}>
-          <p className="text-[11px] text-white/50 font-bold tracking-wider">組績 UNIT FYP</p>
+          <p className="text-[11px] text-white/50 font-bold tracking-wider">組績 UNIT 加權</p>
           <p className="text-[28px] font-bold tabular-nums leading-tight mt-1">{formatMoney(stats.unitTotalWeighted)}</p>
           <p className="text-[11px] text-white/45">實收 {formatMoney(stats.unitTotalPremium)}　·　高峰目標 {stats.unitTarget ? stats.unitTarget.peak.total / 10000 : 0} 萬</p>
         </div>
@@ -764,7 +764,7 @@ const DesktopDashboardView = ({ stats, season, setSeason, viewMonth, setViewMont
           <div className="h-[96px] w-[96px] shrink-0 relative"><div className="absolute top-1/2 left-1/2 scale-[0.55] -translate-x-1/2 -translate-y-1/2"><DoubleRadialProgress peakPercent={stats.unitPeakProgress} summitPercent={stats.unitSummitProgress} /></div></div>
         </div>
         <div className={`${glass} p-4`}>
-          <p className="text-[11px] text-white/50 font-bold tracking-wider">全體總績 FYP</p>
+          <p className="text-[11px] text-white/50 font-bold tracking-wider">全體總績 加權</p>
           <div className="flex justify-between items-end mt-2">
             <div><p className="text-[11px] text-white/40">{viewMonth} 當月</p><p className="text-[22px] font-bold tabular-nums">{formatMoney(stats.grandTotalWeightedMonth)}</p></div>
             <div className="text-right"><p className="text-[11px] text-white/40">累積</p><p className="text-[22px] font-bold tabular-nums text-emerald-400">{formatMoney(stats.grandTotalWeighted)}</p></div>
@@ -787,7 +787,7 @@ const DesktopDashboardView = ({ stats, season, setSeason, viewMonth, setViewMont
             <span className="text-[11px] text-white/40">{season === 'H2' ? '加權／實收任一達標即合格' : '加權＋A&H 達標'}</span>
           </div>
           <div className="grid grid-cols-[28px_minmax(130px,1.1fr)_64px_92px_minmax(0,1.5fr)_minmax(0,1.5fr)] gap-3 px-2 pb-1.5 text-[10px] font-bold text-white/35 shrink-0">
-            <span className="text-center">#</span><span>同仁</span><span className="text-center">件數 月/累</span><span className="text-right">當月 FYP</span><span>高峰進度</span><span>極峰進度</span>
+            <span className="text-center">#</span><span>同仁</span><span className="text-center">件數 月/累</span><span className="text-right">當月加權</span><span>高峰進度</span><span>極峰進度</span>
           </div>
           <div className="flex-1 min-h-0 overflow-y-auto no-scrollbar divide-y divide-white/[0.06]">
             {stats.memberStats.map((member, index) => {
@@ -1040,7 +1040,7 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
         <div className="bg-gradient-to-br from-indigo-600 to-blue-700 rounded-2xl p-6 text-white shadow-lg relative overflow-hidden group">
           <div className="flex justify-between items-start relative z-10">
-            <div><p className="text-blue-200 font-bold text-xs uppercase tracking-wider mb-1">Unit FYP (組績)</p><h2 className="text-3xl font-bold tracking-tight">{formatMoney(stats.unitTotalWeighted)}</h2><p className="text-xs text-blue-200 mt-1">總實收保費 {formatMoney(stats.unitTotalPremium)}</p></div>
+            <div><p className="text-blue-200 font-bold text-xs uppercase tracking-wider mb-1">Unit 加權 (組績)</p><h2 className="text-3xl font-bold tracking-tight">{formatMoney(stats.unitTotalWeighted)}</h2><p className="text-xs text-blue-200 mt-1">總實收保費 {formatMoney(stats.unitTotalPremium)}</p></div>
             <div className="bg-white/10 backdrop-blur-md rounded-lg p-1">
               <select className="bg-transparent text-xs font-bold text-white outline-none cursor-pointer appearance-none pr-4" value={selectedManagerId} onChange={(e) => setSelectedManagerId(e.target.value)}>
                 {managers.map(m => <option key={m.id} value={m.id} className="text-gray-900">{m.name} 組</option>)}
@@ -1064,7 +1064,7 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
            <div className="scale-75 origin-right"><DoubleRadialProgress peakPercent={stats.unitPeakProgress} summitPercent={stats.unitSummitProgress} /></div>
         </div>
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col justify-between">
-           <div className="flex items-center gap-2 mb-2"><div className="p-2 bg-emerald-100 text-emerald-600 rounded-lg"><TrendingUp size={18}/></div><p className="text-gray-400 font-bold text-xs uppercase tracking-wider">全體總績 (FYP)</p></div>
+           <div className="flex items-center gap-2 mb-2"><div className="p-2 bg-emerald-100 text-emerald-600 rounded-lg"><TrendingUp size={18}/></div><p className="text-gray-400 font-bold text-xs uppercase tracking-wider">全體總績 (加權)</p></div>
            <div className="flex justify-between items-end"><div><p className="text-xs text-gray-400 mb-1">{viewMonth}月</p><h3 className="text-xl font-bold text-gray-900">{formatMoney(stats.grandTotalWeightedMonth)}</h3></div><div className="text-right"><p className="text-xs text-gray-400 mb-1">累積至當月</p><h3 className="text-xl font-bold text-emerald-600">{formatMoney(stats.grandTotalWeighted)}</h3></div></div>
         </div>
         <div className="bg-white rounded-2xl p-6 shadow-sm border border-gray-100 flex flex-col justify-between">
@@ -1100,8 +1100,8 @@ const Dashboard = ({ team, records, season, setSeason, rankTargets, doubleAwardT
                 <th className="px-6 py-4 w-16 text-center">排名</th>
                 <th className="px-6 py-4">業務同仁</th>
                 <th className="px-6 py-4 text-center border-l border-gray-100">件數 (當月/累積)</th>
-                <th className="px-6 py-4 text-right border-l border-gray-100">當月 FYP</th>
-                <th className="px-6 py-4 text-right border-l border-gray-100">累積 FYP (總/AH/實收)</th>
+                <th className="px-6 py-4 text-right border-l border-gray-100">當月加權</th>
+                <th className="px-6 py-4 text-right border-l border-gray-100">累積加權 (總/AH/實收)</th>
                 <th className="px-6 py-4 w-1/4 border-l border-gray-100">高峰進度</th>
                 <th className="px-6 py-4 w-1/4">極峰進度</th>
               </tr>
@@ -3540,15 +3540,19 @@ const ANNUAL_METRICS = [
   { key: 'ahW', label: 'A&H 加權', fmt: 'money', grp: '業績', proj: 'scale' },
   { key: 'spW', label: '躉繳加權', fmt: 'money', grp: '業績', proj: 'scale' },
   { key: 'totW', label: '加權保費合計', fmt: 'money', grp: '業績', proj: 'scale', bold: true },
+  { key: 'fyp', label: 'FYP 合計（躉繳實收×10%＋其他實收）', fmt: 'money', grp: '業績', proj: 'scale', bold: true },
   { key: 'fyc', label: '業務獎金合計（FYC 估算）', fmt: 'money', grp: '業績', proj: 'scale', bold: true },
   { key: 'cases', label: '件數', fmt: 'int', grp: '業績', proj: 'scale' },
   { key: 'insured', label: '被保險人數', fmt: 'int', grp: '業績', proj: 'scale' },
   { key: 'perCasesMo', label: '個人件數／月', fmt: 'dec', grp: '效率', proj: 'scale' },
-  { key: 'unitCasesMo', label: '單位件數／月', fmt: 'dec', grp: '效率', proj: 'scale' },
+  { key: 'groupCasesMo', label: '組單位件數／月', fmt: 'dec', grp: '效率', proj: 'scale' },
+  { key: 'distCasesMo', label: '區單位件數／月', fmt: 'dec', grp: '效率', proj: 'scale' },
   { key: 'perFypCase', label: '個人 FYP／件', fmt: 'money', grp: '效率', proj: 'keep' },
-  { key: 'unitFypCase', label: '單位 FYP／件', fmt: 'money', grp: '效率', proj: 'keep' },
+  { key: 'groupFypCase', label: '組單位 FYP／件', fmt: 'money', grp: '效率', proj: 'keep' },
+  { key: 'distFypCase', label: '區單位 FYP／件', fmt: 'money', grp: '效率', proj: 'keep' },
   { key: 'perFypMo', label: '個人 FYP／月', fmt: 'money', grp: '效率', proj: 'scale' },
-  { key: 'unitFypMo', label: '單位 FYP／月', fmt: 'money', grp: '效率', proj: 'scale' },
+  { key: 'groupFypMo', label: '組單位 FYP／月', fmt: 'money', grp: '效率', proj: 'scale' },
+  { key: 'distFypMo', label: '區單位 FYP／月', fmt: 'money', grp: '效率', proj: 'scale' },
   { key: 'reps', label: '業代人數', fmt: 'int', grp: '人力', proj: 'scale' },
   { key: 'mgrs', label: '主管人數', fmt: 'int', grp: '人力', proj: 'scale' },
   { key: 'headcount', label: '總人力', fmt: 'int', grp: '人力', proj: 'scale' },
@@ -3600,26 +3604,50 @@ const headcountAt = (members, endDate) => {
   return { total: present.length, mgrs, reps: present.length - mgrs, ids: new Set(present.map(m => String(m.id))) };
 };
 const recordCat = (r) => r.typeCode === 'one_off' ? 'sp' : (r.isAH ? 'ah' : 'rp');
+// FYP（與加權保費是兩回事）：躉繳＝實收保費 × 10%，其他商品＝實收保費
+const fypOf = (r) => (r.premium || 0) * (r.typeCode === 'one_off' ? 0.1 : 1);
 
-// 個人組織（「單位」的定義）：
-// 業代＝自己；主任／襄理＝自己＋直轄業務代表；區／處經理＝自己＋直轄業代＋直轄主任、襄理及其底下所有主管與業代
+// 依升級日期判斷「當時」的職級：rep＝業代、supervisor＝主任／襄理、district＝區／處經理
+// 沒填任何升級日期的人，用組織圖上目前的職級
 const SUPERVISOR_RANKS = ['業務主任', '新進業務主任', '業務襄理'];
-const getPersonalOrg = (team, m) => {
-  if (!m) return [];
-  const kids = (id) => (team || []).filter(x => x.parentId && String(x.parentId) === String(id));
-  const out = [m];
-  if (SUPERVISOR_RANKS.includes(m.role)) {
-    kids(m.id).forEach(k => { if (!MANAGER_RANKS.includes(k.role)) out.push(k); });
-  } else if (['區經理', '處經理'].includes(m.role)) {
-    const seen = new Set([String(m.id)]);
-    const walk = (id) => kids(id).forEach(k => { if (!seen.has(String(k.id))) { seen.add(String(k.id)); out.push(k); walk(k.id); } });
-    kids(m.id).forEach(k => {
-      if (seen.has(String(k.id))) return;
-      if (!MANAGER_RANKS.includes(k.role)) { seen.add(String(k.id)); out.push(k); }            // 直轄業代
-      else if (SUPERVISOR_RANKS.includes(k.role)) { seen.add(String(k.id)); out.push(k); walk(k.id); } // 直轄主任／襄理＋其底下全部
-    });
+const rankKindAt = (m, date) => {
+  const pd = m.promotionDates || {};
+  if (['supervisor', 'asstManager', 'distManager', 'agencyManager'].some(k => pd[k])) {
+    if ((pd.distManager && pd.distManager <= date) || (pd.agencyManager && pd.agencyManager <= date)) return 'district';
+    if ((pd.supervisor && pd.supervisor <= date) || (pd.asstManager && pd.asstManager <= date)) return 'supervisor';
+    return 'rep';
   }
-  return out;
+  if (['區經理', '處經理'].includes(m.role)) return 'district';
+  if (SUPERVISOR_RANKS.includes(m.role)) return 'supervisor';
+  return 'rep';
+};
+// 組單位＝自己＋直轄業務代表（直轄者升任主管後就不再算在這一組）
+// 區單位＝自己＋直轄業代＋直轄主任、襄理及其底下所有主管與業代（直轄的區經理那一支不算）；若當時還不是區經理，區單位＝組單位
+const makeUnitResolver = (orgTeam, leader) => {
+  const byId = new Map((orgTeam || []).map(m => [String(m.id), m]));
+  const lid = String(leader.id);
+  const cache = new Map();
+  const chain = (id) => { // 該成員往上到 leader 的路徑（含兩端）；不在 leader 底下回傳 null
+    const k = String(id);
+    if (cache.has(k)) return cache.get(k);
+    const path = []; let cur = byId.get(k); let guard = 0; let res = null;
+    while (cur && guard++ < 30) { path.push(cur); if (String(cur.id) === lid) { res = path; break; } cur = cur.parentId ? byId.get(String(cur.parentId)) : null; }
+    cache.set(k, res);
+    return res;
+  };
+  const inGroup = (aid, date) => {
+    if (String(aid) === lid) return true;
+    const p = chain(aid);
+    return !!p && p.length === 2 && rankKindAt(p[0], date) === 'rep';
+  };
+  const inDist = (aid, date) => {
+    if (String(aid) === lid) return true;
+    if (rankKindAt(leader, date) !== 'district') return inGroup(aid, date);
+    const p = chain(aid); if (!p) return false;
+    return rankKindAt(p[p.length - 2], date) !== 'district'; // 直轄的區經理那一支不算，其餘整條線都算
+  };
+  const pool = (orgTeam || []).filter(m => chain(m.id));
+  return { inGroup, inDist, pool };
 };
 
 const contestCompleters = (members, team, records, rankTargets, year, half) => {
@@ -3651,17 +3679,18 @@ const contestCompleters = (members, team, records, rankTargets, year, half) => {
   return done.size;
 };
 
-const calcAnnualMetrics = ({ members, headMembers, unitMembers, team, records, recruits, rankTargets, manual, gran, year, idx, today }) => {
-  const heads = headMembers || members;
-  const units = unitMembers || members; // 單位＝個人組織
+const calcAnnualMetrics = ({ members, headMembers, leader, orgTeam, team, records, recruits, rankTargets, manual, gran, year, idx, today }) => {
+  const resolver = leader ? makeUnitResolver(orgTeam, leader) : null;
+  const headsAt = (date) => resolver ? resolver.pool.filter(a => resolver.inDist(a.id, date)) : (headMembers || members);
   const months = annualEffMonths(gran, year, idx, today);
   const n = Math.max(1, months.length);
   const endDate = months.length ? monthEndDate(months[months.length - 1]) : monthEndDate(annualMonthsOf(gran, year, idx)[0]);
   const ids = new Set(members.map(m => String(m.id)));
-  const uids = new Set(units.map(m => String(m.id)));
-  const issuedInRange = records.filter(r => (r.status || '已發單') === '已發單' && months.includes((r.date || '').slice(0, 7)));
-  const recs = issuedInRange.filter(r => ids.has(String(r.agentId)));      // 個人
-  const urecs = issuedInRange.filter(r => uids.has(String(r.agentId)));    // 單位（個人組織）
+  const inRange = records.filter(r => months.includes((r.date || '').slice(0, 7)));                  // 報件（受理中＋已發單）
+  const issuedInRange = inRange.filter(r => (r.status || '已發單') === '已發單');
+  const recs = issuedInRange.filter(r => ids.has(String(r.agentId)));                               // 個人
+  const groupRecs = resolver ? issuedInRange.filter(r => resolver.inGroup(r.agentId, r.date)) : null; // 組單位（依案件日期當時的職級）
+  const distRecs = resolver ? issuedInRange.filter(r => resolver.inDist(r.agentId, r.date)) : recs;   // 區單位（全區合計時＝全區）
   const sumBy = (cat, f) => recs.filter(r => recordCat(r) === cat).reduce((s, r) => s + f(r), 0);
   const o = {};
   o.rpPrem = sumBy('rp', r => r.premium || 0); o.ahPrem = sumBy('ah', r => r.premium || 0); o.spPrem = sumBy('sp', r => r.premium || 0);
@@ -3671,30 +3700,39 @@ const calcAnnualMetrics = ({ members, headMembers, unitMembers, team, records, r
   o.fyc = recs.reduce((s, r) => s + (r.premium || 0) * ((PRODUCT_MAPPING[r.typeCode] && PRODUCT_MAPPING[r.typeCode].commissionRate) || 0), 0);
   o.cases = recs.length;
   o.insured = new Set(recs.map(r => (r.insuredName || '').trim()).filter(Boolean)).size;
+  const heads = headsAt(endDate);
   const hc = headcountAt(heads, endDate);
   const per = members.length > 1 ? Math.max(1, hc.total) : 1; // 全區合計時個人＝人均；單一成員＝本人
   o.headcount = hc.total; o.mgrs = hc.mgrs; o.reps = hc.reps;
-  const uW = urecs.reduce((a, r) => a + (r.weighted || 0), 0);
-  o.perCasesMo = o.cases / n / per; o.unitCasesMo = urecs.length / n;
-  o.perFypCase = o.cases ? o.totW / o.cases : 0; o.unitFypCase = urecs.length ? uW / urecs.length : 0;
-  o.perFypMo = o.totW / n / per; o.unitFypMo = uW / n;
-  // 活動率：每月「有發單的人 ÷ 當月有效人數」，期間取平均
+  o.fyp = recs.reduce((a, r) => a + fypOf(r), 0);
+  o.perCasesMo = o.cases / n / per;
+  o.perFypCase = o.cases ? o.fyp / o.cases : 0;
+  o.perFypMo = o.fyp / n / per;
+  const unitStats = (list, pfx) => {
+    if (!list) { o[pfx + 'CasesMo'] = null; o[pfx + 'FypCase'] = null; o[pfx + 'FypMo'] = null; return; }
+    const f = list.reduce((a, r) => a + fypOf(r), 0);
+    o[pfx + 'CasesMo'] = list.length / n; o[pfx + 'FypCase'] = list.length ? f / list.length : 0; o[pfx + 'FypMo'] = f / n;
+  };
+  unitStats(groupRecs, 'group'); unitStats(distRecs, 'dist');
+  // 活動率：每月「有報件的人 ÷ 當月人數」，期間取平均；當月人數以登錄日、離職日算當月底在職的人
   const rates = months.map(m => {
-    const end = monthEndDate(m); const h = headcountAt(heads, end);
-    const act = new Set(urecs.filter(r => (r.date || '').slice(0, 7) === m).map(r => String(r.origAgentId || r.agentId)));
-    return h.total ? [...act].filter(id => h.ids.has(id)).length / h.total * 100 : null;
-  }).filter(v => v !== null); // 尚未到職的月份（有效人數 0）不納入平均
+    const end = monthEndDate(m); const h = headcountAt(headsAt(end), end);
+    const rep = new Set(inRange.filter(r => (r.date || '').slice(0, 7) === m).map(r => String(r.origAgentId || r.agentId)));
+    return h.total ? [...rep].filter(id => h.ids.has(id)).length / h.total * 100 : null;
+  }).filter(v => v !== null); // 尚未到職的月份（當月人數 0）不納入平均
   o.actRate = rates.length ? rates.reduce((a, b) => a + b, 0) / rates.length : 0;
   const allMonths = annualMonthsOf(gran, year, idx);
   const start = `${allMonths[0]}-01`;
   const winEndDate = monthEndDate(allMonths[allMonths.length - 1]);
   const recruitsIn = (recruits || []).filter(r => (r.isPromoted || (r.dates && r.dates.registeredDate && r.dates.registeredDate <= today)) && r.dates && r.dates.registeredDate && r.dates.registeredDate >= start && r.dates.registeredDate <= winEndDate);
-  o.recruitN = recruitsIn.filter(r => uids.has(String(r.recruiterId))).length;
+  const winHeads = headsAt(winEndDate);
+  const winIds = new Set(winHeads.map(m => String(m.id)));
+  o.recruitN = recruitsIn.filter(r => winIds.has(String(r.recruiterId))).length;
   const pv = annualPrev(gran, year, idx);
   const pvMonths = annualMonthsOf(gran, pv.year, pv.idx);
-  const pvHc = headcountAt(heads, monthEndDate(pvMonths[pvMonths.length - 1]));
-  const winStart = start; const winEnd = monthEndDate(allMonths[allMonths.length - 1]);
-  o.resignedN = heads.filter(m => m.resignedDate && m.resignedDate >= winStart && m.resignedDate <= winEnd).length;
+  const pvEnd = monthEndDate(pvMonths[pvMonths.length - 1]);
+  const pvHc = headcountAt(headsAt(pvEnd), pvEnd);
+  o.resignedN = winHeads.filter(m => m.resignedDate && m.resignedDate >= start && m.resignedDate <= winEndDate).length;
   o.churn = pvHc.total ? o.resignedN / pvHc.total * 100 : null;
   o.netGrowth = pvHc.total ? (hc.total - pvHc.total) / pvHc.total * 100 : null;
   if (gran === 'year') {
@@ -3703,7 +3741,7 @@ const calcAnnualMetrics = ({ members, headMembers, unitMembers, team, records, r
     const auto2 = contestCompleters(members, team, records, rankTargets, year, 'H2');
     o.peakN = m.peakN !== undefined && m.peakN !== '' ? Number(m.peakN) : auto1;
     o.newPeakN = m.newPeakN !== undefined && m.newPeakN !== '' ? Number(m.newPeakN) : auto2;
-    // 主管增員活動率＝年度有增員的主管 ÷ 所有主管數（以人力範圍內、期末在職的主管計）
+    // 主管增員活動率＝年度有增員的主管 ÷ 所有主管數（期末在職的主管）
     const mgrList = heads.filter(h => { const rg = memberRegDate(h); return (!rg || rg <= endDate) && !(h.resignedDate && h.resignedDate <= endDate) && memberIsManagerAt(h, endDate); });
     const mgrIdSet = new Set(mgrList.map(h => String(h.id)));
     const recruiterSet = new Set(recruitsIn.filter(r => mgrIdSet.has(String(r.recruiterId))).map(r => String(r.recruiterId)));
@@ -3722,7 +3760,7 @@ const projectAnnual = (m, factor, base) => {
     if (d.key === 'peakN' || d.key === 'newPeakN') { out[d.key] = Math.round(v * factor); return; }
     if (d.proj === 'keep') { out[d.key] = v; return; }
     // 月均類 (/月) 與人數類是「現況水準」，只乘成長率；累計類才需要年化
-    const isRate = ['perCasesMo', 'unitCasesMo', 'perFypMo', 'unitFypMo', 'reps', 'mgrs', 'headcount'].includes(d.key);
+    const isRate = ['perCasesMo', 'groupCasesMo', 'distCasesMo', 'perFypMo', 'groupFypMo', 'distFypMo', 'reps', 'mgrs', 'headcount'].includes(d.key);
     out[d.key] = isRate ? v * factor : v * scaleUp * factor;
   });
   return out;
@@ -3873,15 +3911,14 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
 
   const headAll = useMemo(() => getDistrictMembers((allTeam && allTeam.length) ? allTeam : team, '吳政翰'), [allTeam, team]);
   const orgPool = (allTeam && allTeam.length) ? allTeam : team;
-  const scopeOrg = useMemo(() => scopeId === 'all' ? null : getPersonalOrg(orgPool, orgPool.find(m => String(m.id) === String(scopeId)) || scopeMembers[0]), [scopeId, orgPool, scopeMembers]);
-  const headScope = scopeId === 'all' ? headAll : scopeOrg;   // 人力、活動率、增員：全區＝整區；單一成員＝個人組織
-  const unitScope = scopeId === 'all' ? members : scopeOrg;   // 單位＝個人組織
+  const scopeLeader = scopeId === 'all' ? null : (orgPool.find(m => String(m.id) === String(scopeId)) || scopeMembers[0] || null); // 組單位／區單位以他為中心
+  const headScope = scopeId === 'all' ? headAll : scopeMembers;
   const base = { team, records, recruits, rankTargets, manual: cfg.manual, today };
-  const calc = (mem, g, y, i, head, unit) => calcAnnualMetrics({ ...base, members: mem, headMembers: head || mem, unitMembers: unit || mem, gran: g, year: y, idx: i });
-  const cur = useMemo(() => calc(scopeMembers, gran, year, idx, headScope, unitScope), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
+  const calc = (mem, g, y, i, head, leader) => calcAnnualMetrics({ ...base, members: mem, headMembers: head || mem, leader, orgTeam: orgPool, gran: g, year: y, idx: i });
+  const cur = useMemo(() => calc(scopeMembers, gran, year, idx, headScope, scopeLeader), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
   const pv = annualPrev(gran, year, idx);
-  const prev = useMemo(() => calc(scopeMembers, gran, pv.year, pv.idx, headScope, unitScope), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
-  const yoy = useMemo(() => gran === 'year' ? null : calc(scopeMembers, gran, year - 1, idx, headScope, unitScope), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
+  const prev = useMemo(() => calc(scopeMembers, gran, pv.year, pv.idx, headScope, scopeLeader), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
+  const yoy = useMemo(() => gran === 'year' ? null : calc(scopeMembers, gran, year - 1, idx, headScope, scopeLeader), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
   const projected = useMemo(() => gran === 'year' && year === curYear ? projectAnnual(cur, 1 + growth / 100) : null, [cur, gran, year, growth, curYear]);
   const nextYearEst = useMemo(() => projected, [projected]);
 
@@ -3905,7 +3942,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
     if (gran === 'year') { for (let y = year - 3; y <= year; y++) pts.push({ l: String(y), y, i: 1 }); }
     else if (gran === 'quarter') { for (let q = 1; q <= 4; q++) pts.push({ l: `Q${q}`, y: year, i: q }); }
     else { for (let m = 1; m <= 12; m++) pts.push({ l: `${m}月`, y: year, i: m }); }
-    return pts.map(p => ({ ...p, v: calc(scopeMembers, gran, p.y, p.i, headScope, unitScope)[trendKey], pv: gran === 'year' ? null : calc(scopeMembers, gran, p.y - 1, p.i, headScope, unitScope)[trendKey] }));
+    return pts.map(p => ({ ...p, v: calc(scopeMembers, gran, p.y, p.i, headScope, scopeLeader)[trendKey], pv: gran === 'year' ? null : calc(scopeMembers, gran, p.y - 1, p.i, headScope, scopeLeader)[trendKey] }));
     // eslint-disable-next-line
   }, [scopeMembers, gran, year, trendKey, records, recruits, cfg.manual, rankTargets]);
   const tdef = ANNUAL_METRICS.find(d => d.key === trendKey);
@@ -3923,7 +3960,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   const yrsLeft = Math.max(1, (Number(g.targetYear) || curYear + 3) - curYear);
   const goalRows = [
     { k: 'people', label: '總人力（人）', now: baseYear.headcount, fmt: 'int', rate: true },
-    { k: 'fyp', label: '年加權保費（FYP）', now: baseProj.totW, fmt: 'money', rate: true },
+    { k: 'fyp', label: '年加權保費', now: baseProj.totW, fmt: 'money', rate: true },
     { k: 'recruit', label: '年增員登錄（人）', now: baseProj.recruitN, fmt: 'int', rate: true },
   ].map(r => {
     const t = Number(goal[r.k]);
@@ -3937,11 +3974,11 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
     actions.push(`人力：從 ${reqPeople.now} 人到 ${reqPeople.t} 人，${yrsLeft} 年內淨增 ${Math.max(0, reqPeople.gap)} 人，平均每年淨增 ${Math.max(0, Math.round(reqPeople.perYear * 10) / 10)} 人；考慮流失，實際每年要登錄的人會更多。`);
   }
   if (reqFyp.t) {
-    const perMonth = reqFyp.t / 12; const avg = baseYear.unitFypCase || 0;
-    actions.push(`業績：目標年 FYP ${Math.round(reqFyp.t).toLocaleString()}，等於每月 ${Math.round(perMonth).toLocaleString()}；以目前件均 ${Math.round(avg).toLocaleString()} 計，全單位每月約需 ${avg ? Math.round(perMonth / avg) : '—'} 件。${reqFyp.cagr !== null ? `相對今年推估每年需成長約 ${Math.round(reqFyp.cagr)}%。` : ''}`);
-    if (reqPeople.t && avg) actions.push(`人均：目標人力 ${reqPeople.t} 人時，人均每月需約 ${Math.round(perMonth / reqPeople.t / avg * 10) / 10} 件、人均 FYP 每月 ${Math.round(perMonth / reqPeople.t).toLocaleString()}。`);
+    const perMonth = reqFyp.t / 12; const avg = baseYear.cases ? baseYear.totW / baseYear.cases : 0; // 加權件均
+    actions.push(`業績：目標年加權保費 ${Math.round(reqFyp.t).toLocaleString()}，等於每月 ${Math.round(perMonth).toLocaleString()}；以目前加權件均 ${Math.round(avg).toLocaleString()} 計，全單位每月約需 ${avg ? Math.round(perMonth / avg) : '—'} 件。${reqFyp.cagr !== null ? `相對今年推估每年需成長約 ${Math.round(reqFyp.cagr)}%。` : ''}`);
+    if (reqPeople.t && avg) actions.push(`人均：目標人力 ${reqPeople.t} 人時，人均每月需約 ${Math.round(perMonth / reqPeople.t / avg * 10) / 10} 件、人均加權保費每月 ${Math.round(perMonth / reqPeople.t).toLocaleString()}。`);
   }
-  if (!reqPeople.t && !reqFyp.t) actions.push('先在上面填入成立門檻（人力、年 FYP、年增員），這裡就會算出每年要成長多少、每月要做多少。');
+  if (!reqPeople.t && !reqFyp.t) actions.push('先在上面填入成立門檻（人力、年加權保費、年增員），這裡就會算出每年要成長多少、每月要做多少。');
 
   const cardCls = 'rounded-2xl border border-white/10 bg-white/[0.05] backdrop-blur-xl';
   const sel = 'h-9 rounded-lg bg-white/10 border border-white/10 text-[13px] font-semibold px-2.5 text-white';
@@ -3998,7 +4035,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
             </tbody>
           </table>
         </div>
-        <p className="text-[11px] text-white/40 mt-3 leading-relaxed">口徑：只算已發單；FYP＝加權保費；業務獎金為「保費 × 商品佣金率」估算，不含行銷獎金；活動率＝當月有發單的人 ÷ 當月有效人數，期間取月平均；加權保費不含 ESG 的 5%（ESG ×1.05 只用在競賽業績）。單位＝個人組織：業代＝自己；主任、襄理＝自己＋直轄業代；區經理＝自己＋直轄業代＋直轄主任襄理及其底下所有主管與業代。選單一成員時，人力、活動率、增員、單位欄位都以該成員的個人組織計；全區合計時，個人＝人均、單位＝全區。主管增員活動率＝年度有增員的主管 ÷ 所有主管數。{year === curYear && gran === 'year' ? `年度只算到上月底；明年預估＝今年已結束月份年化後再 +${growth}%（人數類直接 +${growth}%，活動率與件均不調整）。` : ''}高峰／新高峰人數＝該半年「個績或組績任一達標」的人數，目前只有 115 年的標準，其他年份請手動填。</p>
+        <p className="text-[11px] text-white/40 mt-3 leading-relaxed">口徑：只算已發單；FYP＝躉繳實收保費×10％＋其他商品實收保費（與加權保費是兩個數字）；業務獎金為「保費 × 商品佣金率」估算，不含行銷獎金；加權保費不含 ESG 的 5%（ESG ×1.05 只用在競賽業績）。組單位＝自己＋直轄業務代表；區單位＝自己＋直轄業代＋直轄主任襄理及其底下所有主管與業代；成員升任後依升級日期，從當月起不再算在原本的組單位（仍算區單位）。選單一成員時，人力、活動率、增員以他的區單位計；全區合計時，個人＝人均、區單位＝全區、組單位不顯示。活動率＝當月有報件（受理中＋已發單）的人 ÷ 當月人數（依登錄日與離職日，抓當月底在職人數），期間取月平均。主管增員活動率＝年度有增員的主管 ÷ 所有主管數。{year === curYear && gran === 'year' ? `年度只算到上月底；明年預估＝今年已結束月份年化後再 +${growth}%（人數類直接 +${growth}%，活動率與件均不調整）。` : ''}高峰／新高峰人數＝該半年「個績或組績任一達標」的人數，目前只有 115 年的標準，其他年份請手動填。</p>
       </div>
 
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
@@ -4027,7 +4064,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
           <h3 className="font-bold text-[15px] mb-3">個別數字　<span className="text-white/50 font-normal text-[12px]">{label}（箭頭＝相較{gran === 'year' ? `${pv.year} 年` : '上期'}）</span></h3>
           <div className="overflow-x-auto">
             <table className="w-full text-[12.5px] min-w-[420px]">
-              <thead><tr className="text-[11px] text-white/45 text-left"><th className="py-1.5 font-semibold">同仁</th><th className="py-1.5 font-semibold text-right">實收</th><th className="py-1.5 font-semibold text-right">加權 FYP</th><th className="py-1.5 font-semibold text-right">變化</th><th className="py-1.5 font-semibold text-right">FYC 估</th><th className="py-1.5 font-semibold text-right">件</th><th className="py-1.5 font-semibold text-right">被保人</th></tr></thead>
+              <thead><tr className="text-[11px] text-white/45 text-left"><th className="py-1.5 font-semibold">同仁</th><th className="py-1.5 font-semibold text-right">實收</th><th className="py-1.5 font-semibold text-right">加權</th><th className="py-1.5 font-semibold text-right">變化</th><th className="py-1.5 font-semibold text-right">FYC 估</th><th className="py-1.5 font-semibold text-right">件</th><th className="py-1.5 font-semibold text-right">被保人</th></tr></thead>
               <tbody>
                 {rows.map(({ m, c, p }) => (
                   <tr key={m.id} className="border-t border-white/[0.06]">
@@ -7581,7 +7618,7 @@ const SalesWarRoomPage = ({ loggedInUser, team, customers, records, onSearch }) 
   );
 };
 
-const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
+const KnowledgeBase = ({ loggedInUser, isManagerViewer, team, records, initialMode }) => {
   const [articles, setArticles] = useState([]);
   const [loaded, setLoaded] = useState(false);
   const [search, setSearch] = useState('');
@@ -7593,7 +7630,7 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
   const [saving, setSaving] = useState(false);
   const emptyForm = { title: '', category: KB_CATEGORIES[0], content: '', managerOnly: false };
   const [form, setForm] = useState(emptyForm);
-  const [kbMode, setKbMode] = useState('articles');
+  const [kbMode, setKbMode] = useState(initialMode || 'articles');
   const [importing, setImporting] = useState(false);
   const [importMsg, setImportMsg] = useState('');
 
@@ -7682,11 +7719,23 @@ const KnowledgeBase = ({ loggedInUser, isManagerViewer }) => {
 
   const kbTabs = (
     <div className="inline-flex p-1 rounded-full bg-white/[0.06] border border-white/10 self-start">
-      {[['articles', '知識文章'], ['products', '商品大全']].map(([k, l]) => (
+      {[['articles', '知識文章'], ['guide', '制度一頁通'], ['products', '商品大全']].map(([k, l]) => (
         <button key={k} onClick={() => setKbMode(k)} className={`px-4 py-1.5 rounded-full text-xs sm:text-sm font-bold transition ${kbMode === k ? 'bg-white text-gray-900' : 'text-white/60 hover:text-white'}`}>{l}</button>
       ))}
     </div>
   );
+
+  if (kbMode === 'guide') {
+    return (
+      <div className="max-w-none mx-auto space-y-4 animate-fade-in pb-28 md:pb-12">
+        <div className="flex flex-wrap items-center gap-3">
+          <h2 className="hidden md:block text-2xl sm:text-3xl font-bold text-gray-900 mr-2">知識庫</h2>
+          {kbTabs}
+        </div>
+        <SystemGuidePage loggedInUser={loggedInUser} team={team || []} records={records || []} />
+      </div>
+    );
+  }
 
   if (kbMode === 'products') {
     return (
@@ -16423,7 +16472,6 @@ const App = () => {
     { id: 'customers', label: '客戶管理', icon: Phone },
     { id: 'watchlist', label: '關注名單', icon: Star },
     { id: 'warroom', label: '業務戰情室', icon: ClipboardList },
-    { id: 'guide', label: '制度一頁通', icon: Award },
     { id: 'announce', label: '公文佈達', icon: Megaphone, badge: unreadAnnouncementCount },
     { id: 'dashboard', label: '業績儀表板', icon: LayoutDashboard },
     { id: 'activity', label: 'MEA 活動量', icon: Activity },
@@ -16509,7 +16557,6 @@ const App = () => {
         {activeTab === 'calendar' && <CalendarPage onSearch={() => setShowGlobalSearch(true)} loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} team={team} recurringRules={recurringRules} teamScheduleEvents={teamScheduleEvents} isTeamScheduleViewer={isTeamScheduleViewer} />}
         {activeTab === 'customers' && <CustomerCRM recruits={recruits} loggedInUser={loggedInUser} records={enrichedRecords} customers={customers} customersLoaded={customersLoaded} relationships={relationships} />}
         {activeTab === 'watchlist' && <WatchlistPage loggedInUser={loggedInUser} customers={customers} scheduleEvents={scheduleEvents} />}
-        {activeTab === 'guide' && <SystemGuidePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} />}
         {activeTab === 'warroom' && <SalesWarRoomPage loggedInUser={loggedInUser} team={team} customers={customers} records={enrichedRecords} onSearch={() => setShowGlobalSearch(true)} />}
         {activeTab === 'announce' && <AnnouncementsPage loggedInUser={loggedInUser} announcements={announcements} canPost={isTeamScheduleViewer} onSeen={handleMarkAnnouncementsSeen} />}
         {activeTab === 'bingo' && <BingoChallengePage loggedInUser={loggedInUser} team={team} records={enrichedRecords} activities={activities} recruits={recruitsEff} isManagerViewer={isTeamScheduleViewer} />}
@@ -16519,7 +16566,7 @@ const App = () => {
         {activeTab === 'team' && <OrgChart team={team} allTeam={allTeam} recruits={recruits} records={records} activities={activities} />}
         {activeTab === 'recruitment' && <RecruitmentDashboard recruits={recruits} team={team} user={user} />}
         {activeTab === 'interviews' && isTeamScheduleViewer && <InterviewTrackerPage loggedInUser={loggedInUser} />}
-        {activeTab === 'wiki' && <KnowledgeBase loggedInUser={loggedInUser} isManagerViewer={isTeamScheduleViewer} />}
+        {(activeTab === 'wiki' || activeTab === 'guide') && <KnowledgeBase key={activeTab} initialMode={activeTab === 'guide' ? 'guide' : undefined} loggedInUser={loggedInUser} isManagerViewer={isTeamScheduleViewer} team={team} records={enrichedRecords} />}
         {activeTab === 'training' && <TrainingChecklistPage team={team} />}
         {activeTab === 'settings' && loggedInUser && MANAGER_RANKS.includes(loggedInUser.role) && <SettingsPage rankTargets={rankTargets} doubleAwardTargets={doubleAwardTargets} />}
       </main>
