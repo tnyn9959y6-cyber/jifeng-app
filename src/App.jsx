@@ -3564,7 +3564,45 @@ const ANNUAL_METRICS = [
   { key: 'mgrRecruitRate', label: '主管增員活動率（年度有增員的主管 ÷ 所有主管）', fmt: 'pct', grp: '增員', proj: 'keep', yearOnly: true },
   { key: 'peakN', label: '高峰人數（上半年完成）', fmt: 'int', grp: '競賽', proj: 'scale', yearOnly: true, manual: true },
   { key: 'newPeakN', label: '新高峰人數（下半年完成）', fmt: 'int', grp: '競賽', proj: 'scale', yearOnly: true, manual: true },
+  { key: 'incFirst', label: '首年度收入（FYC＋行銷獎金等）', fmt: 'money', grp: '收入（本人提供）', proj: 'keep', yearOnly: true, manual: true, hist: true },
+  { key: 'incRenew', label: '續年度收入', fmt: 'money', grp: '收入（本人提供）', proj: 'keep', yearOnly: true, manual: true, hist: true },
+  { key: 'incOrg', label: '組織津貼', fmt: 'money', grp: '收入（本人提供）', proj: 'keep', yearOnly: true, manual: true, hist: true },
+  { key: 'incOther', label: '其他收入', fmt: 'money', grp: '收入（本人提供）', proj: 'keep', yearOnly: true, manual: true, hist: true },
+  { key: 'incTotal', label: '總收入', fmt: 'money', grp: '收入（本人提供）', proj: 'keep', yearOnly: true, manual: true, hist: true, bold: true },
 ];
+// ===== 歷史數字（本人提供；APP 內沒有當年的已發單資料時使用，只套用在吳政翰個人／政翰組）=====
+// 2025：公司系統「核保業績」（實收、加權、核保活動率）逐月加總；FYP＝躉繳實收×10%＋其他實收
+// 收入：續年度＝續年度服務報酬；首年度＝業務代表各項收入扣掉續年度（第一保單年度業務獎金＋年終業績獎金＋行銷獎金）；組織津貼＝業務主管各項收入；其他＝總收入的「其他」
+const ANNUAL_HISTORY = {
+  2025: {
+    note: '2025 年數字來自公司系統「核保業績」（本人提供截圖），不是 APP 內的已發單資料。收入：續年度＝續年度服務報酬；首年度＝業務代表各項收入扣掉續年度（第一保單年度業務獎金 282,149＋年終業績獎金 31,180＋行銷獎金 173,935）；組織津貼＝業務主管各項收入；其他＝總收入的「其他」。政翰組 2025：實收 8,225,657、加權 9,820,445、件數 117、活動率 60.4%。2025 區單位、人力、離職與 FYC 沒有資料，顯示「—」。',
+    personal: { rpPrem: 643823, ahPrem: 403604, spPrem: 4000000, totPrem: 5047427, rpW: 1120044, ahW: 1210812, spW: 200000, totW: 2530856, fyp: 1447427, fyc: null, cases: 28, insured: null, perCasesMo: 28 / 12, perFypCase: 1447427 / 28, perFypMo: 1447427 / 12, actRate: 91.7, incFirst: 487264, incRenew: 443281, incOrg: 979495, incOther: 216775, incTotal: 2126815 },
+    unit: { groupCasesMo: 117 / 12, groupFypCase: 4313289 / 117, groupFypMo: 4313289 / 12, distCasesMo: null, distFypCase: null, distFypMo: null },
+  },
+  2026: {
+    note: '2026 收入為本人提供（約至 10 月）：首年度 723,943、續年度 471,351、組織津貼 1,223,572，總收入 2,724,042；其餘 305,176 歸「其他」。',
+    personal: { incFirst: 723943, incRenew: 471351, incOrg: 1223572, incOther: 305176, incTotal: 2724042 },
+  },
+};
+const withAnnualHistory = (o, mem, gran, year) => {
+  const H = ANNUAL_HISTORY[year];
+  if (!H || gran !== 'year' || !mem || mem.length !== 1 || mem[0].name !== '吳政翰') return o;
+  return { ...o, ...(H.personal || {}), ...(H.unit || {}) };
+};
+// ===== 2027 年目標（預填自各人的策劃會報／工作計劃表；只有吳政翰可修改）=====
+const PLAN_FIELDS = [
+  { k: 'rpPrem', l: '期繳實收', f: 'money' }, { k: 'ahPrem', l: 'A&H 實收', f: 'money' }, { k: 'spPrem', l: '躉繳實收', f: 'money' },
+  { k: 'rpW', l: '期繳加權', f: 'money' }, { k: 'ahW', l: 'A&H 加權', f: 'money' }, { k: 'spW', l: '躉繳加權', f: 'money' },
+  { k: 'income', l: '收入', f: 'money' }, { k: 'recruit', l: '增員（人）', f: 'int' },
+  { k: 'endTeams', l: '年底組數（組）', f: 'int' }, { k: 'endPeople', l: '年底人數（人）', f: 'int' }, { k: 'actRate', l: '活動率（%）', f: 'pct', avg: true },
+];
+const PLAN_SEED = {
+  '楊雅涵': { rpPrem: 800000, ahPrem: 800000, spPrem: 0, rpW: 1600000, ahW: 2400000, income: 1100000, recruit: 2, endTeams: 1, endPeople: 3, actRate: 100 },
+  '莊唯妮': { recruit: 4, endTeams: 2, endPeople: 5, actRate: 80 },
+  '李冠葒': { rpPrem: 2000000, ahPrem: 2200000, spPrem: 2000000, rpW: 2000000, ahW: 6600000, spW: 100000, income: 2000000, endTeams: 3, endPeople: 7, actRate: 100 },
+  '陳鈺雯': { rpPrem: 500000, ahPrem: 600000, spPrem: 0, rpW: 1500000, ahW: 1800000, spW: 0, endTeams: 1, endPeople: 5, actRate: 100 },
+  '蘇暐翔': { rpPrem: 800000, ahPrem: 800000, spPrem: 0, rpW: 2400000, ahW: 2400000, spW: 0, income: 1000000, recruit: 2, endTeams: 1, endPeople: 2, actRate: 100 },
+};
 const annualFmt = (v, fmt) => {
   if (v === null || v === undefined || Number.isNaN(v)) return '—';
   if (fmt === 'pct') return `${(Math.round(v * 10) / 10).toLocaleString()}%`;
@@ -3757,6 +3795,7 @@ const projectAnnual = (m, factor, base) => {
   ANNUAL_METRICS.forEach(d => {
     const v = m[d.key];
     if (v === null || v === undefined) { out[d.key] = null; return; }
+    if (d.hist) { out[d.key] = null; return; }
     if (d.key === 'peakN' || d.key === 'newPeakN') { out[d.key] = Math.round(v * factor); return; }
     if (d.proj === 'keep') { out[d.key] = v; return; }
     // 月均類 (/月) 與人數類是「現況水準」，只乘成長率；累計類才需要年化
@@ -3891,12 +3930,12 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   const [scopeId, setScopeId] = useState('all');
   const [trendKey, setTrendKey] = useState('totW');
   const [growth, setGrowth] = useState(20);
-  const [cfg, setCfg] = useState({ manual: {}, goal: { targetYear: curYear + 3, agency: {}, branch: {} } });
+  const [cfg, setCfg] = useState({ manual: {}, plan: {}, goal: { targetYear: curYear + 3, agency: {}, branch: {} } });
   const [goalMode, setGoalMode] = useState('agency');
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db, 'settings', 'annual_status'), (snap) => {
-      if (snap.exists()) { const d = snap.data(); setCfg({ manual: d.manual || {}, goal: { targetYear: curYear + 3, agency: {}, branch: {}, ...(d.goal || {}) } }); }
+      if (snap.exists()) { const d = snap.data(); setCfg({ manual: d.manual || {}, plan: d.plan || {}, goal: { targetYear: curYear + 3, agency: {}, branch: {}, ...(d.goal || {}) } }); }
     });
     return () => unsub();
   }, [curYear]);
@@ -3914,7 +3953,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   const scopeLeader = scopeId === 'all' ? null : (orgPool.find(m => String(m.id) === String(scopeId)) || scopeMembers[0] || null); // 組單位／區單位以他為中心
   const headScope = scopeId === 'all' ? headAll : scopeMembers;
   const base = { team, records, recruits, rankTargets, manual: cfg.manual, today };
-  const calc = (mem, g, y, i, head, leader) => calcAnnualMetrics({ ...base, members: mem, headMembers: head || mem, leader, orgTeam: orgPool, gran: g, year: y, idx: i });
+  const calc = (mem, g, y, i, head, leader) => withAnnualHistory(calcAnnualMetrics({ ...base, members: mem, headMembers: head || mem, leader, orgTeam: orgPool, gran: g, year: y, idx: i }), mem, g, y);
   const cur = useMemo(() => calc(scopeMembers, gran, year, idx, headScope, scopeLeader), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
   const pv = annualPrev(gran, year, idx);
   const prev = useMemo(() => calc(scopeMembers, gran, pv.year, pv.idx, headScope, scopeLeader), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
@@ -3934,6 +3973,16 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   const setManual = (key, val) => {
     const y = String(year); const m = { ...(cfg.manual || {}) }; m[y] = { ...(m[y] || {}), [key]: val };
     saveCfg({ ...cfg, manual: m });
+  };
+
+  // 2027 年目標：只有吳政翰可改；空白 → 沿用預填值（來自策劃會報／工作計劃表）
+  const canEditPlan = !!loggedInUser && loggedInUser.name === '吳政翰';
+  const planYear = String(curYear + 1);
+  const planVal = (m, k) => { const v = ((cfg.plan || {})[planYear] || {})[String(m.id)]; const x = v ? v[k] : undefined; if (x !== undefined) return x === '' ? null : Number(x); const sd = (PLAN_SEED[m.name] || {})[k]; return sd === undefined ? null : sd; };
+  const setPlan = (m, k, val) => {
+    const pl = { ...(cfg.plan || {}) }; const yy = { ...(pl[planYear] || {}) };
+    yy[String(m.id)] = { ...(yy[String(m.id)] || {}), [k]: val === '' ? '' : Number(val) };
+    pl[planYear] = yy; saveCfg({ ...cfg, plan: pl });
   };
 
   // 趨勢：月 → 當年 12 個月；季 → 4 季；年 → 近 4 年
@@ -4038,6 +4087,10 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
         <p className="text-[11px] text-white/40 mt-3 leading-relaxed">口徑：只算已發單；FYP＝躉繳實收保費×10％＋其他商品實收保費（與加權保費是兩個數字）；業務獎金為「保費 × 商品佣金率」估算，不含行銷獎金；加權保費不含 ESG 的 5%（ESG ×1.05 只用在競賽業績）。組單位＝自己＋直轄業務代表；區單位＝自己＋直轄業代＋直轄主任襄理及其底下所有主管與業代；成員升任後依升級日期，從當月起不再算在原本的組單位（仍算區單位）。選單一成員時，人力、活動率、增員以他的區單位計；全區合計時，個人＝人均、區單位＝全區、組單位不顯示。活動率＝當月有報件（受理中＋已發單）的人 ÷ 當月人數（依登錄日與離職日，抓當月底在職人數），期間取月平均。主管增員活動率＝年度有增員的主管 ÷ 所有主管數。{year === curYear && gran === 'year' ? `年度只算到上月底；明年預估＝今年已結束月份年化後再 +${growth}%（人數類直接 +${growth}%，活動率與件均不調整）。` : ''}高峰／新高峰人數＝該半年「個績或組績任一達標」的人數，目前只有 115 年的標準，其他年份請手動填。</p>
       </div>
 
+      {gran === 'year' && ANNUAL_HISTORY[year] && scopeMembers.length === 1 && scopeMembers[0].name === '吳政翰' && (
+        <p className="text-[11px] text-amber-200/80 leading-relaxed px-1">{ANNUAL_HISTORY[year].note}</p>
+      )}
+
       <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
         <div className={`${cardCls} p-4`}>
           <div className="flex items-center justify-between gap-2 mb-3">
@@ -4091,6 +4144,50 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
           </div>
           <p className="text-[10.5px] text-white/35 mt-2">全區的被保險人數是去重後的人數，不等於各人相加。</p>
         </div>
+      </div>
+
+      <div className={`${cardCls} p-4`}>
+        <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
+          <h3 className="font-bold text-[15px]">{planYear} 年目標（策劃會報）　<span className="text-white/50 font-normal text-[12px]">{canEditPlan ? '可直接修改，離開欄位即儲存' : '僅吳政翰可修改'}</span></h3>
+          <span className="text-[11px] text-white/40">預填自各人的策劃會報／工作計劃表，空白＝原稿沒寫</span>
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full text-[12.5px] min-w-[620px]">
+            <thead><tr className="text-[11px] text-white/45 text-left"><th className="py-1.5 pr-3 font-semibold">項目</th>{members.map(m => <th key={m.id} className="py-1.5 px-2 font-semibold text-right whitespace-nowrap">{m.name}</th>)}<th className="py-1.5 pl-2 font-semibold text-right whitespace-nowrap">合計</th></tr></thead>
+            <tbody>
+              {PLAN_FIELDS.map(fd => {
+                const vals = members.map(m => planVal(m, fd.k));
+                const got = vals.filter(v => v !== null && !Number.isNaN(v));
+                const tot = got.length ? (fd.avg ? got.reduce((a, b) => a + b, 0) / got.length : got.reduce((a, b) => a + b, 0)) : null;
+                return (
+                  <tr key={fd.k} className="border-t border-white/[0.06]">
+                    <td className="py-1.5 pr-3 text-white/80 whitespace-nowrap">{fd.l}</td>
+                    {members.map((m, i) => (
+                      <td key={m.id} className="py-1.5 px-2 text-right tabular-nums">
+                        {canEditPlan
+                          ? <input type="number" className={`${inp} w-24`} defaultValue={vals[i] ?? ''} key={`${planYear}-${m.id}-${fd.k}-${vals[i] ?? ''}`} onBlur={e => { if (String(e.target.value) !== String(vals[i] ?? '')) setPlan(m, fd.k, e.target.value); }} />
+                          : (vals[i] === null ? <span className="text-white/30">—</span> : annualFmt(vals[i], fd.f))}
+                      </td>
+                    ))}
+                    <td className="py-1.5 pl-2 text-right tabular-nums font-semibold">{tot === null ? <span className="text-white/30">—</span> : annualFmt(tot, fd.f)}</td>
+                  </tr>
+                );
+              })}
+              {[['實收合計', ['rpPrem', 'ahPrem', 'spPrem']], ['加權合計', ['rpW', 'ahW', 'spW']]].map(([lb, ks]) => {
+                const vals = members.map(m => { const xs = ks.map(k => planVal(m, k)); return xs.every(x => x === null) ? null : xs.reduce((a, b) => a + (b || 0), 0); });
+                const got = vals.filter(v => v !== null);
+                return (
+                  <tr key={lb} className="border-t border-white/20 font-bold">
+                    <td className="py-1.5 pr-3 whitespace-nowrap">{lb}</td>
+                    {vals.map((v, i) => <td key={i} className="py-1.5 px-2 text-right tabular-nums">{v === null ? <span className="text-white/30">—</span> : annualFmt(v, 'money')}</td>)}
+                    <td className="py-1.5 pl-2 text-right tabular-nums">{got.length ? annualFmt(got.reduce((a, b) => a + b, 0), 'money') : '—'}</td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+        <p className="text-[11px] text-white/40 mt-2 leading-relaxed">合計欄：金額與人數相加，活動率取平均。各人策劃會報與工作計劃表數字不一致的（例如陳鈺雯增員、李冠葒組織），請你確認後在這裡改成最後版本。</p>
       </div>
 
       <div className={`${cardCls} p-4`}>
