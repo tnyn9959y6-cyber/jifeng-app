@@ -3595,15 +3595,18 @@ const withAnnualHistory = (o, mem, gran, year) => {
 const PLAN_FIELDS = [
   { k: 'rpPrem', l: '期繳實收', f: 'money' }, { k: 'ahPrem', l: 'A&H 實收', f: 'money' }, { k: 'spPrem', l: '躉繳實收', f: 'money' },
   { k: 'rpW', l: '期繳加權', f: 'money' }, { k: 'ahW', l: 'A&H 加權', f: 'money' }, { k: 'spW', l: '躉繳加權', f: 'money' },
-  { k: 'income', l: '收入', f: 'money' }, { k: 'recruit', l: '增員（人）', f: 'int' },
+  { k: 'cases', l: '件數', f: 'int' }, { k: 'insured', l: '被保險人數', f: 'int' }, { k: 'income', l: '收入', f: 'money' }, { k: 'recruit', l: '增員（人）', f: 'int' },
   { k: 'endTeams', l: '年底組數（組）', f: 'int' }, { k: 'endPeople', l: '年底人數（人）', f: 'int' }, { k: 'actRate', l: '活動率（%）', f: 'pct', avg: true },
 ];
+// 區單位目標（月均，吳政翰訂）：區加權 300 萬／月、區 FYP 100 萬／月
+const PLAN_DIST_SEED = { totWMo: 3000000, fypMo: 1000000 };
 const PLAN_SEED = {
+  '吳政翰': { cases: 72, income: 3500000 },
   '楊雅涵': { rpPrem: 800000, ahPrem: 800000, spPrem: 0, rpW: 1600000, ahW: 2400000, income: 1100000, recruit: 2, endTeams: 1, endPeople: 3, actRate: 100 },
   '莊唯妮': { recruit: 4, endTeams: 2, endPeople: 5, actRate: 80 },
-  '李冠葒': { rpPrem: 2000000, ahPrem: 2200000, spPrem: 2000000, rpW: 2000000, ahW: 6600000, spW: 100000, income: 2000000, recruit: 8, endTeams: 3, endPeople: 7, actRate: 100 },
-  '陳鈺雯': { rpPrem: 500000, ahPrem: 600000, spPrem: 0, rpW: 1500000, ahW: 1800000, spW: 0, income: 2000000, recruit: 10, endTeams: 1, endPeople: 5, actRate: 100 },
-  '蘇暐翔': { rpPrem: 800000, ahPrem: 800000, spPrem: 0, rpW: 2400000, ahW: 2400000, spW: 0, income: 1000000, recruit: 2, endTeams: 1, endPeople: 2, actRate: 100 },
+  '李冠葒': { cases: 90, insured: 70, rpPrem: 2000000, ahPrem: 2200000, spPrem: 2000000, rpW: 2000000, ahW: 6600000, spW: 100000, income: 2000000, recruit: 8, endTeams: 3, endPeople: 7, actRate: 100 },
+  '陳鈺雯': { cases: 50, insured: 30, rpPrem: 500000, ahPrem: 600000, spPrem: 0, rpW: 1500000, ahW: 1800000, spW: 0, income: 2000000, recruit: 10, endTeams: 1, endPeople: 5, actRate: 100 },
+  '蘇暐翔': { cases: 53, insured: 50, rpPrem: 800000, ahPrem: 800000, spPrem: 0, rpW: 2400000, ahW: 2400000, spW: 0, income: 1000000, recruit: 2, endTeams: 1, endPeople: 2, actRate: 100 },
 };
 
 // ===== 各人策劃會報內容（預填自策劃會報與工作計劃表；只有吳政翰可修改；空白＝原稿沒寫）=====
@@ -4104,6 +4107,133 @@ const AgencyQualifyPanel = ({ team, allTeam, headAll, members, records, recruits
   );
 };
 
+// ===== 年度現況：儀表板（卡片可點，跳到「數字」分頁）=====
+const PLAN_CONFLICTS = [
+  { who: '李冠葒', lv: 'warn', text: '2027 A&H 實收：目前狀況表 200 萬、工作計畫 220 萬（採大者）；116 年底 3 組 7 人對工作計畫 2 組 4 業；2026 實收合計差 6,000' },
+  { who: '陳鈺雯', lv: 'warn', text: '增員：策劃會報 10 人，工作計劃表 1 人（採大者）' },
+  { who: '蘇暐翔', lv: 'bad', text: '活動率 225%（超過 100%）；2027 實收合計 100 萬，但期繳＋A&H 是 160 萬' },
+  { who: '楊雅涵', lv: 'warn', text: '2027 收入：工作計劃 120 萬、策劃會報 110 萬（採大者）' },
+];
+const AnnualDashboard = ({ cur, projected, monthsN, trendAll, gran, rows, members, planVal, scopeLabel, onGo }) => {
+  const fmtW = (v) => (v === null || v === undefined || Number.isNaN(v)) ? '—' : (Math.abs(v) >= 10000 ? `${Math.round(v / 10000).toLocaleString()} 萬` : Math.round(v).toLocaleString());
+  const kpis = [
+    { label: '月均加權', val: monthsN ? cur.totW / monthsN : null, tgt: projected && projected.totW ? projected.totW / 12 : null, f: fmtW, color: '#3987e5' },
+    { label: '總人力', val: cur.headcount, tgt: projected ? projected.headcount : null, f: (v) => `${annualFmt(v, 'int')} 人`, color: '#1baf7a' },
+    { label: '增員登錄', val: cur.recruitN, tgt: projected ? projected.recruitN : null, f: (v) => `${annualFmt(v, 'int')} 人`, color: '#eda100' },
+    { label: '活動率', val: cur.actRate, tgt: projected ? projected.actRate : null, f: (v) => annualFmt(v, 'pct'), color: '#e87ba4' },
+  ];
+  const sub = 'rounded-xl bg-white/[0.04] p-3';
+  // 人力曲線（保留率 60%、每人每年增員 1.5 人 → 每年 ×1.9）
+  const h0 = cur.headcount;
+  const hs = (h0 === null || h0 === undefined) ? null : (() => { const h1 = projected && projected.headcount ? projected.headcount : Math.round(h0 * 1.9); const h2 = Math.round(h1 * 1.9); const h3 = Math.round(h2 * 1.9); return [h0, h1, h2, h3]; })();
+  const yr = new Date().getFullYear();
+  const hl = ['現在', `${yr + 1} 底`, `${yr + 2} 底`, `${yr + 3} 底`];
+  const hmax = Math.max(55, ...(hs || [0]));
+  // 收入結構
+  const incPts = gran === 'year' ? trendAll.filter(p => p.m.incTotal > 0).slice(-3) : [];
+  const incTgt = projected && projected.incTotal ? projected.incTotal : null;
+  const imax = Math.max(1, incTgt || 0, ...incPts.map(p => p.m.incTotal));
+  const incSegs = [['incFirst', '首年度', '#3987e5'], ['incRenew', '續年度', '#1baf7a'], ['incOrg', '組織津貼', '#9085e9'], ['incOther', '其他', '#898781']];
+  // 成員對照
+  const mrows = rows.map(({ m, c }) => { const ks = ['rpW', 'ahW', 'spW'].map(k => planVal(m, k)); const tgt = ks.every(x => x === null) ? null : ks.reduce((a, b) => a + (b || 0), 0); return { m, act: c.totW || 0, tgt }; });
+  const mmax = Math.max(1, ...mrows.map(r => Math.max(r.act, r.tgt || 0)));
+  const auto = mrows.filter(r => r.tgt && r.act > 0 && r.tgt / r.act >= 4).map(r => ({ who: r.m.name, lv: 'warn', text: `2027 加權目標是目前實績的 ${Math.round(r.tgt / r.act * 10) / 10} 倍` }));
+  const alerts = [...PLAN_CONFLICTS.filter(a => members.some(m => m.name === a.who)), ...auto];
+  const dot = (lv) => <span className={`w-2 h-2 rounded-full mt-1.5 shrink-0 ${lv === 'bad' ? 'bg-rose-400' : 'bg-amber-400'}`} />;
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
+        {kpis.map(k => {
+          const pct = k.tgt && k.val !== null && k.val !== undefined ? Math.min(100, Math.round(k.val / k.tgt * 100)) : null;
+          return (
+            <button key={k.label} onClick={() => onGo('num')} className="text-left rounded-xl border border-white/10 bg-white/[0.05] p-3 hover:bg-white/[0.08] transition">
+              <p className="text-[11px] text-white/50">{k.label}</p>
+              <p className="text-[22px] font-bold tabular-nums mt-0.5">{k.f(k.val)}</p>
+              <div className="h-1 rounded bg-white/10 mt-2"><div className="h-1 rounded" style={{ width: `${pct || 0}%`, background: k.color }} /></div>
+              <p className="text-[11px] text-white/55 mt-1.5">{k.tgt ? `目標 ${k.f(k.tgt)}・${pct}%` : '尚無目標'}</p>
+            </button>
+          );
+        })}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+        <div className={sub}>
+          <p className="text-[12px] text-white/60 mb-2">人力曲線與成立門檻（人）　<span className="text-white/35">保留率 60%、每人每年增員 1.5 人推算</span></p>
+          {hs ? (
+            <div>
+              <div className="relative h-[120px] flex items-end gap-3 pt-5">
+                <div className="absolute left-0 right-0 border-t border-dashed border-amber-400/70" style={{ bottom: `${55 / hmax * 100}px` }} />
+                {hs.map((v, i) => (
+                  <div key={i} className="flex-1 flex flex-col items-center justify-end">
+                    <span className="text-[12px] tabular-nums mb-0.5">{v}</span>
+                    <div className="w-full max-w-[44px] rounded-t" style={{ height: `${Math.max(3, v / hmax * 100)}px`, background: i === 0 ? '#3987e5' : 'rgba(42,120,214,0.55)' }} />
+                  </div>
+                ))}
+              </div>
+              <div className="flex gap-3 mt-1">{hl.map((t, i) => <span key={i} className="flex-1 text-center text-[11px] text-white/45 whitespace-nowrap">{t}</span>)}</div>
+            </div>
+          ) : <p className="text-[12px] text-white/40">沒有人力資料</p>}
+          <p className="text-[11px] text-amber-300/80 mt-1">虛線＝成立門檻 55 人</p>
+        </div>
+
+        <div className={sub}>
+          <p className="text-[12px] text-white/60 mb-2">收入結構（萬）　<span className="text-white/35">{scopeLabel}</span></p>
+          {incPts.length ? (
+            <div className="flex flex-col gap-2.5">
+              {incPts.map(p => (
+                <div key={p.l} className="flex items-center gap-2">
+                  <span className="text-[11px] text-white/45 w-9">{p.l}</span>
+                  <div className="flex-1 flex h-5 relative">
+                    {incSegs.map(([k, , c]) => (p.m[k] > 0 ? <div key={k} style={{ width: `${p.m[k] / imax * 100}%`, background: c }} /> : null))}
+                    {incTgt && <div className="absolute top-[-4px] bottom-[-4px] border-l border-dashed border-amber-400" style={{ left: `${incTgt / imax * 100}%` }} />}
+                  </div>
+                  <span className="text-[12px] tabular-nums w-10 text-right">{Math.round(p.m.incTotal / 10000)}</span>
+                </div>
+              ))}
+              <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-white/55">
+                {incSegs.map(([k, l, c]) => <span key={k}><span className="inline-block w-2 h-2 rounded-sm mr-1" style={{ background: c }} />{l}</span>)}
+                {incTgt && <span className="text-amber-300">虛線＝2027 目標 {Math.round(incTgt / 10000)} 萬</span>}
+              </div>
+            </div>
+          ) : <p className="text-[12px] text-white/40 leading-relaxed">收入資料是吳政翰本人提供的，請在上方範圍選「吳政翰」，並用「年」檢視。</p>}
+        </div>
+      </div>
+
+      <div className={sub}>
+        <div className="flex flex-wrap justify-between gap-2 mb-2">
+          <p className="text-[12px] text-white/60">成員加權：目前實績 與 2027 自訂目標</p>
+          <p className="text-[11px] text-white/45"><span className="inline-block w-2 h-2 rounded-sm bg-blue-500 mr-1" />實績　<span className="inline-block w-2 h-2 rounded-sm border border-blue-400 mr-1" />目標</p>
+        </div>
+        <div className="flex flex-col gap-2.5">
+          {mrows.map(r => {
+            const warn = r.tgt && r.act > 0 && r.tgt / r.act >= 4;
+            return (
+              <button key={r.m.id} onClick={() => onGo('goal')} className="grid grid-cols-[64px_1fr_96px] items-center gap-2 text-left hover:bg-white/[0.04] rounded">
+                <span className="text-[12.5px] truncate">{r.m.name}</span>
+                <div className="flex flex-col gap-1">
+                  <div className="h-[7px] rounded-sm bg-blue-500" style={{ width: `${r.act / mmax * 100}%` }} />
+                  {r.tgt ? <div className={`h-[7px] rounded-sm border ${warn ? 'border-amber-400' : 'border-blue-400'}`} style={{ width: `${r.tgt / mmax * 100}%` }} /> : <div className="h-[7px] rounded-sm border border-dashed border-white/20" style={{ width: '30%' }} />}
+                </div>
+                <span className={`text-[11.5px] tabular-nums text-right ${warn ? 'text-amber-300' : 'text-white/70'}`}>{fmtW(r.act)} → {r.tgt ? fmtW(r.tgt) : '未設定'}</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      <div className={sub}>
+        <p className="text-[12px] text-white/60 mb-2">出入提醒（兩份文件對不起來的地方）</p>
+        <div className="flex flex-col gap-1.5">
+          {alerts.length === 0 && <p className="text-[12px] text-white/40">目前沒有出入。</p>}
+          {alerts.map((a, i) => (
+            <div key={i} className="flex gap-2 text-[12.5px] leading-relaxed">{dot(a.lv)}<span><b className="font-semibold">{a.who}</b>　{a.text}</span></div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, members, loggedInUser }) => {
   const today = getTodayDate();
   const curYear = Number(today.slice(0, 4));
@@ -4114,6 +4244,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   const [trendKey, setTrendKey] = useState('totW');
   const [trendGroup, setTrendGroup] = useState('業績');
   const [repMember, setRepMember] = useState('');
+  const [tab, setTab] = useState('dash');
   const [cfg, setCfg] = useState({ manual: {}, plan: {}, report: {}, goal: { targetYear: curYear + 3, agency: {}, branch: {} } });
   const [goalMode, setGoalMode] = useState('agency');
 
@@ -4148,6 +4279,12 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
     pl[planYear] = yy; saveCfg({ ...cfg, plan: pl });
   };
 
+  const distVal = (k) => { const v = (((cfg.plan || {})[planYear] || {}).dist || {})[k]; if (v !== undefined) return v === '' ? null : Number(v); return PLAN_DIST_SEED[k] ?? null; };
+  const setDist = (k, val) => {
+    const pl = { ...(cfg.plan || {}) }; const yy = { ...(pl[planYear] || {}) };
+    yy.dist = { ...(yy.dist || {}), [k]: val === '' ? '' : Number(val) };
+    pl[planYear] = yy; saveCfg({ ...cfg, plan: pl });
+  };
   const repVal = (m, k) => { const v = ((cfg.report || {})[String(m.id)] || {})[k]; if (v !== undefined) return v; return (REPORT_SEED[m.name] || {})[k] || ''; };
   const setRep = (m, k, val) => { const r = { ...(cfg.report || {}) }; r[String(m.id)] = { ...(r[String(m.id)] || {}), [k]: val }; saveCfg({ ...cfg, report: r }); };
   const planTargets = useMemo(() => {
@@ -4158,11 +4295,29 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
     o.totPrem = add('rpPrem', 'ahPrem', 'spPrem'); o.totW = add('rpW', 'ahW', 'spW');
     o.fyp = (o.rpPrem === null && o.ahPrem === null && o.spPrem === null) ? null : (o.rpPrem || 0) + (o.ahPrem || 0) + (o.spPrem || 0) * 0.1;
     o.headcount = sum('endPeople'); o.recruitN = sum('recruit'); o.incTotal = sum('income');
+    // 效率：件數與 FYP 換算（個人＝有填的人均；區單位＝加總；組單位無法由個人目標拆出，不顯示）
+    o.cases = sum('cases'); o.insured = sum('insured');
+    const withCases = scopeMembers.filter(m => planVal(m, 'cases') > 0);
+    const fypOf = (m) => { const r = planVal(m, 'rpPrem'), a = planVal(m, 'ahPrem'), sp = planVal(m, 'spPrem'); return (r === null && a === null && sp === null) ? null : (r || 0) + (a || 0) + (sp || 0) * 0.1; };
+    const pairs = withCases.map(m => ({ c: planVal(m, 'cases'), f: fypOf(m) })).filter(x => x.f !== null);
+    const nC = withCases.length;
+    o.perCasesMo = nC ? o.cases / 12 / nC : null;
+    o.perFypCase = pairs.length ? pairs.reduce((a, x) => a + x.f, 0) / pairs.reduce((a, x) => a + x.c, 0) : null;
+    o.perFypMo = pairs.length ? pairs.reduce((a, x) => a + x.f, 0) / 12 / pairs.length : null;
+    o.distCasesMo = o.cases === null ? null : o.cases / 12;
+    o.distFypCase = o.perFypCase;
+    o.distFypMo = pairs.length ? pairs.reduce((a, x) => a + x.f, 0) / 12 : null;
+    if (scopeId === 'all') { // 全區：區單位目標與各人加總取大者
+      const dW = distVal('totWMo'), dF = distVal('fypMo');
+      if (dW !== null && dW * 12 > (o.totW || 0)) o.totW = dW * 12;
+      if (dF !== null && dF * 12 > (o.fyp || 0)) o.fyp = dF * 12;
+      if (o.fyp !== null) o.distFypMo = o.fyp / 12;
+    }
     const acts = scopeMembers.map(m => planVal(m, 'actRate')).filter(v => v !== null && !Number.isNaN(v));
     o.actRate = acts.length ? acts.reduce((a, b) => a + b, 0) / acts.length : null;
     return o;
     // eslint-disable-next-line
-  }, [scopeMembers, cfg.plan]);
+  }, [scopeMembers, scopeId, cfg.plan]);
   const cur = useMemo(() => calc(scopeMembers, gran, year, idx, headScope, scopeLeader), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
   const pv = annualPrev(gran, year, idx);
   const prev = useMemo(() => calc(scopeMembers, gran, pv.year, pv.idx, headScope, scopeLeader), [scopeMembers, headScope, gran, year, idx, records, recruits, cfg.manual, rankTargets]);
@@ -4258,7 +4413,12 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
           {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
         </select>
       </div>
+      <div className="flex flex-wrap gap-1">
+        {[['dash', '儀表板'], ['num', '數字'], ['goal', '目標與策劃會報'], ['trend', '變化']].map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={`px-4 h-9 rounded-lg text-[13px] font-bold ${tab === k ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/60'}`}>{l}</button>)}
+      </div>
 
+      {tab === 'num' && (<>
+      {tab === 'dash' && <AnnualDashboard cur={cur} projected={projected} monthsN={annualEffMonths(gran, year, idx, today).length} trendAll={trendAll} gran={gran} rows={rows} members={members} planVal={planVal} scopeLabel={scopeId === 'all' ? '全區合計' : (scopeMembers[0] ? scopeMembers[0].name : '')} onGo={setTab} />}
       <div className={`${cardCls} p-4`}>
         <div className="flex items-baseline justify-between mb-3">
           <h3 className="font-bold text-[15px]">目前現況指標　<span className="text-white/50 font-normal text-[12px]">{label}・{scopeId === 'all' ? '全區合計' : scopeMembers[0] ? scopeMembers[0].name : ''}</span></h3>
@@ -4294,8 +4454,10 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
       {gran === 'year' && ANNUAL_HISTORY[year] && scopeMembers.length === 1 && scopeMembers[0].name === '吳政翰' && (
         <p className="text-[11px] text-amber-200/80 leading-relaxed px-1">{ANNUAL_HISTORY[year].note}</p>
       )}
+      </>)}
 
-      <div className="grid grid-cols-1 xl:grid-cols-2 gap-3">
+      <>
+        {tab === 'trend' && (
         <div className={`${cardCls} p-4 xl:col-span-2`}>
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <h3 className="font-bold text-[15px]">{gran === 'year' ? '年度' : gran === 'quarter' ? '各季' : '各月'}變化　<span className="text-white/50 font-normal text-[12px]">點小圖可放大</span></h3>
@@ -4323,7 +4485,9 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
           <p className="text-[11px] text-white/45">{tdef ? tdef.label : ''}　<span className="inline-block w-2.5 h-2.5 rounded-sm bg-blue-400 align-middle" /> {gran === 'year' ? '各年' : '今年'}　{gran !== 'year' && <><span className="inline-block w-2.5 h-2.5 rounded-sm bg-white/25 align-middle" /> 去年同期</>}</p>
           </div>
         </div>
+        )}
 
+        {tab === 'num' && (
         <div className={`${cardCls} p-4`}>
           <h3 className="font-bold text-[15px] mb-3">個別數字　<span className="text-white/50 font-normal text-[12px]">{label}（箭頭＝相較{gran === 'year' ? `${pv.year} 年` : '上期'}）</span></h3>
           <div className="overflow-x-auto">
@@ -4355,8 +4519,10 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
           </div>
           <p className="text-[10.5px] text-white/35 mt-2">全區的被保險人數是去重後的人數，不等於各人相加。</p>
         </div>
-      </div>
+        )}
+      </>
 
+      {tab === 'goal' && (<>
       <div className={`${cardCls} p-4`}>
         <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
           <h3 className="font-bold text-[15px]">{planYear} 年目標（策劃會報）　<span className="text-white/50 font-normal text-[12px]">{canEditPlan ? '可直接修改，離開欄位即儲存' : '僅吳政翰可修改'}</span></h3>
@@ -4384,6 +4550,17 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
                   </tr>
                 );
               })}
+              {[['totWMo', '區月均加權（區單位目標）'], ['fypMo', '區月均 FYP（區單位目標）']].map(([k, lb]) => (
+                <tr key={k} className="border-t border-white/[0.06]">
+                  <td className="py-1.5 pr-3 text-white/80 whitespace-nowrap">{lb}</td>
+                  <td colSpan={members.length} className="py-1.5 px-2 text-right">
+                    {canEditPlan
+                      ? <input type="number" className={`${inp} w-28`} defaultValue={distVal(k) ?? ''} key={`${planYear}-dist-${k}-${distVal(k) ?? ''}`} onBlur={e => { if (String(e.target.value) !== String(distVal(k) ?? '')) setDist(k, e.target.value); }} />
+                      : (distVal(k) === null ? <span className="text-white/30">—</span> : <span className="tabular-nums">{annualFmt(distVal(k), 'money')}</span>)}
+                  </td>
+                  <td className="py-1.5 pl-2 text-right tabular-nums font-semibold">{distVal(k) === null ? <span className="text-white/30">—</span> : annualFmt(distVal(k), 'money')}</td>
+                </tr>
+              ))}
               {[['實收合計', ['rpPrem', 'ahPrem', 'spPrem']], ['加權合計', ['rpW', 'ahW', 'spW']]].map(([lb, ks]) => {
                 const vals = members.map(m => { const xs = ks.map(k => planVal(m, k)); return xs.every(x => x === null) ? null : xs.reduce((a, b) => a + (b || 0), 0); });
                 const got = vals.filter(v => v !== null);
@@ -4475,6 +4652,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
         )}
         <p className="text-[11px] text-white/40 mt-2">通訊處依「通訊處經理合約委任辦法」逐項試算；營業處沒有文件可以引用，數字由你自己填。</p>
       </div>
+      </>)}
     </div>
   );
 };
