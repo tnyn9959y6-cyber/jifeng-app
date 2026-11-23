@@ -47,6 +47,8 @@ import {
   DollarSign,
   MessageCircle,
   Layers,
+  Network,
+  GraduationCap,
   ShieldCheck,
   ClipboardCheck,
   ClipboardList,
@@ -4234,6 +4236,280 @@ const AnnualDashboard = ({ cur, projected, monthsN, trendAll, gran, rows, member
   );
 };
 
+// ===== 年度經營計畫（二年計畫總覽：DOME、業績／增員／組織計畫、行動節奏、個人工作計劃表）=====
+const PLAN_DEFAULT = {
+  y: {
+    '116': {
+      prem: 4450, recruit: 12, mgrs: 5,
+      exec: [['商品策略', '主推主力商品、A&H、賣支寶付'], ['銷售活動', '每月活動量 ≥ 100 點'], ['競賽推動', '專案競賽、階段獎勵、團隊 PK'], ['訓練強化', '商品、話術、約訪、成交能力']],
+      rec: { goal: '116 年登錄 12 人（留存 60%，淨增約 7 人）', profile: '25–35 歲、具企圖心、學習力強、認同保險價值', channel: '104 招募、轉介紹、社群經營、校園增員', event: '每月說明會 1 場、體驗營 1 場、深度面談 ≥ 8 位', grow: '新人 90 天培育、週訓練、活動量追蹤、件數衝刺' },
+      org: { st: [{ l: '116 年底', teams: '7', people: '15' }, { l: '117 年底', teams: '', people: '29' }], cards: [['業務襄理（現有）', '4 人'], ['業務主任（培育）', '4 人'], ['新設組（116 年）', '4–8 人']], mgr: '116 年培育至 5 位主管、117 年達 8 位主管' },
+      rhythm: [['Q1', '基礎建構', '1–3 月', ['目標分解與啟動', '主力商品訓練', '增員名單建立']], ['Q2', '業績衝刺', '4–6 月', ['擴大活動量', '專案推動', '增員說明會']], ['Q3', '組織成長', '7–9 月', ['主管培育', '新人複製與留存', '團隊戰力提升']], ['Q4', '達標收尾', '10–12 月', ['年度目標達成', '組織檢視與調整', '117 年計畫佈局']]],
+      tasks: [{ t: '完成年度計畫定稿（DOME）', who: '吳政翰', due: '11/30', p: 100 }, { t: '規劃 116 年商品推動專案', who: '吳政翰', due: '12/05', p: 70 }, { t: '完成增員名單 20 位與約訪', who: '吳政翰', due: '12/10', p: 40 }, { t: '安排 Q1 團隊訓練課程表', who: '吳政翰', due: '12/15', p: 0 }],
+    },
+    '117': {
+      prem: 5800, recruit: 20, mgrs: 8,
+      exec: [['', ''], ['', ''], ['', ''], ['', '']],
+      rec: { goal: '', profile: '', channel: '', event: '', grow: '' },
+      org: { st: [{ l: '117 年底', teams: '', people: '29' }, { l: '118 年底', teams: '25', people: '55' }], cards: [['', ''], ['', ''], ['', '']], mgr: '' },
+      rhythm: [['Q1', '', '1–3 月', ['', '', '']], ['Q2', '', '4–6 月', ['', '', '']], ['Q3', '', '7–9 月', ['', '', '']], ['Q4', '', '10–12 月', ['', '', '']]],
+      tasks: [],
+    },
+  },
+};
+const DOME_DEF = [
+  { k: 'D', t: '診斷', en: 'Diagnose', d: '盤點現況、找出差距與關鍵課題', sec: '診斷' },
+  { k: 'O', t: '目標', en: 'Objective', d: '設定年度業績、增員、組織目標', sec: '目標' },
+  { k: 'M', t: '方法', en: 'Methods', d: '規劃商品、活動、增員、培訓等執行方案', sec: '方法' },
+  { k: 'E', t: '評估', en: 'Evaluation', d: '定期檢視進度，調整策略與資源', sec: '評估' },
+];
+const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, members, loggedInUser }) => {
+  const today = getTodayDate();
+  const curYear = Number(today.slice(0, 4));
+  const canEdit = !!loggedInUser && loggedInUser.name === '吳政翰';
+  const [py, setPy] = useState('116');
+  const [open, setOpen] = useState(null);
+  const [editing, setEditing] = useState(false);
+  const [plan, setPlan] = useState({});
+  const [manual, setManual] = useState({});
+  useEffect(() => {
+    const u1 = onSnapshot(doc(db, 'settings', 'annual_plan'), (s) => { if (s.exists()) setPlan(s.data() || {}); });
+    const u2 = onSnapshot(doc(db, 'settings', 'annual_status'), (s) => { if (s.exists()) setManual((s.data() || {}).manual || {}); });
+    return () => { u1(); u2(); };
+  }, []);
+  const getIn = (o, path) => path.reduce((a, k) => (a === undefined || a === null ? undefined : a[k]), o);
+  const g = (path) => { const v = getIn(plan, ['y', py, ...path]); return v !== undefined ? v : getIn(PLAN_DEFAULT, ['y', py, ...path]); };
+  const gy = (y, path) => { const v = getIn(plan, ['y', y, ...path]); return v !== undefined ? v : getIn(PLAN_DEFAULT, ['y', y, ...path]); };
+  const setIn = (o, path, val) => { if (!path.length) return val; const [h, ...r] = path; const b = Array.isArray(o) ? [...o] : { ...(o || {}) }; b[h] = setIn(b[h], r, val); return b; };
+  const save = (path, val) => { const next = setIn(plan, ['y', py, ...path], val); setPlan(next); setDoc(doc(db, 'settings', 'annual_plan'), next, { merge: true }).catch(e => console.error(e)); };
+  const ro = !(canEdit && editing);
+
+  const orgPool = (allTeam && allTeam.length) ? allTeam : team;
+  const headAll = useMemo(() => getDistrictMembers(orgPool, '吳政翰'), [orgPool]);
+  const calcY = (y) => calcAnnualMetrics({ team, records, recruits, rankTargets, manual, today, members, headMembers: headAll, leader: null, orgTeam: orgPool, gran: 'year', year: y, idx: 1 });
+  const cur = useMemo(() => calcY(curYear), [members, headAll, records, recruits, manual, rankTargets]);
+  const prevY = useMemo(() => calcY(curYear - 1), [members, headAll, records, recruits, manual, rankTargets]);
+
+  const inp = 'w-full rounded-md bg-black/30 border border-white/15 text-[12.5px] px-2 py-1 text-white';
+  const card = 'rounded-2xl border border-white/10 bg-white/[0.05] backdrop-blur-xl';
+  const gold = '#d9a93e';
+  const T = (path, ph, cls = '') => ro
+    ? <span className={cls}>{g(path) || <span className="text-white/30">{ph || '—'}</span>}</span>
+    : <input className={inp} defaultValue={g(path) || ''} key={path.join('.') + py + (g(path) || '')} placeholder={ph} onBlur={e => { if (e.target.value !== (g(path) || '')) save(path, e.target.value); }} />;
+  const N = (path, w = 'w-20') => ro
+    ? <b className="tabular-nums">{(g(path) ?? 0).toLocaleString()}</b>
+    : <input type="number" className={`${inp} ${w} text-right`} defaultValue={g(path) ?? ''} key={path.join('.') + py + (g(path) ?? '')} onBlur={e => { if (String(e.target.value) !== String(g(path) ?? '')) save(path, e.target.value === '' ? '' : Number(e.target.value)); }} />;
+
+  // DOME 子標題（116 預填吳政翰的策劃會報回答）
+  const domeVal = (k) => { const v = getIn(plan, ['y', py, 'dome', k]); if (v !== undefined) return v; return py === '116' ? ((REPORT_SEED['吳政翰'] || {})[k] || '') : ''; };
+  const domeItems = (sec) => (REPORT_SECTIONS.find(s => s.t === sec) || { items: [] }).items;
+
+  // 業績成長：前兩年（實績取自 APP；未到的年份用目標）、當年目標
+  const r = Number(py);
+  const premOf = (ry) => {
+    const ad = ry + 1911;
+    if (ad === curYear - 1) return { v: (prevY.totPrem || 0) / 10000, act: true };
+    if (ad === curYear) return { v: (cur.totPrem || 0) / 10000, act: true, part: true };
+    if (ad < curYear - 1) return { v: null, act: true };
+    return { v: Number(gy(String(ry), ['prem'])) || 0, act: false };
+  };
+  const bars = [r - 2, r - 1, r].map(ry => ({ ry, ...premOf(ry) }));
+  const bmax = Math.max(1, ...bars.map(b => b.v || 0));
+  const growth = bars[1].v ? Math.round((bars[2].v / bars[1].v - 1) * 100) : null;
+
+  const tasks = g(['tasks']) || [];
+  const setTasks = (arr) => save(['tasks'], arr);
+  const rhythm = g(['rhythm']) || [];
+  const exec = g(['exec']) || [];
+  const rec = [['增員目標', 'goal', Target], ['準增員輪廓', 'profile', Users], ['招募管道', 'channel', Network], ['增員活動', 'event', Calendar], ['育成計畫', 'grow', GraduationCap]];
+  const st = g(['org', 'st']) || [];
+  const ocards = g(['org', 'cards']) || [];
+  const tgt = (y) => ({ prem: gy(y, ['prem']), recruit: gy(y, ['recruit']), mgrs: gy(y, ['mgrs']) });
+
+  return (
+    <div className="flex flex-col gap-3 min-h-0 overflow-y-auto pr-1 pb-4">
+      <div className="flex flex-wrap items-center justify-between gap-2 px-1">
+        <p className="text-[13px] text-white/55">116–117 年度策略與行動　<span className="text-white/35">{canEdit ? '預填自你的示意圖與策劃會報，按「編輯」可改' : '僅吳政翰可修改'}</span></p>
+        <div className="flex items-center gap-2">
+          <div className="flex rounded-full bg-white/10 p-0.5">{['116', '117'].map(y => <button key={y} onClick={() => setPy(y)} className={`px-5 h-8 rounded-full text-[13px] font-bold ${py === y ? 'text-black' : 'text-white/60'}`} style={py === y ? { background: gold } : undefined}>{y} 年</button>)}</div>
+          {canEdit && <button onClick={() => setEditing(!editing)} className={`px-3 h-8 rounded-lg text-[12.5px] font-bold ${editing ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/70'}`}>{editing ? '完成編輯' : '編輯'}</button>}
+        </div>
+      </div>
+
+      <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
+        <div className={`${card} p-3`}><p className="text-[11px] text-white/50">現況人力</p><p className="text-[26px] font-black tabular-nums">{cur.headcount ?? '—'}<span className="text-[13px] font-semibold text-white/60"> 人</span></p></div>
+        <div className={`${card} p-3`}><p className="text-[11px] text-white/50">現有主管</p><p className="text-[26px] font-black tabular-nums">{cur.mgrs ?? '—'}<span className="text-[13px] font-semibold text-white/60"> 位</span></p></div>
+        {['116', '117'].map(y => (
+          <div key={y} className={`${card} p-3 ${py === y ? 'border-amber-400/50' : ''}`}>
+            <p className="text-[12px] font-bold" style={{ color: gold }}>{y} 年度目標</p>
+            <div className="grid grid-cols-3 gap-1 mt-1.5 text-[11px] text-white/55">
+              <div>實收保費（萬）<div className="text-[15px] text-white mt-0.5">{!ro && py === y ? <input type="number" className={`${inp} text-right`} defaultValue={tgt(y).prem ?? ''} key={'p' + y + tgt(y).prem} onBlur={e => save(['prem'], Number(e.target.value))} /> : <b className="tabular-nums">{(Number(tgt(y).prem) || 0).toLocaleString()}</b>}</div></div>
+              <div>增員（人）<div className="text-[15px] text-white mt-0.5">{!ro && py === y ? <input type="number" className={`${inp} text-right`} defaultValue={tgt(y).recruit ?? ''} key={'r' + y + tgt(y).recruit} onBlur={e => save(['recruit'], Number(e.target.value))} /> : <b className="tabular-nums">{tgt(y).recruit}</b>}</div></div>
+              <div>主管（位）<div className="text-[15px] text-white mt-0.5">{!ro && py === y ? <input type="number" className={`${inp} text-right`} defaultValue={tgt(y).mgrs ?? ''} key={'m' + y + tgt(y).mgrs} onBlur={e => save(['mgrs'], Number(e.target.value))} /> : <b className="tabular-nums">{tgt(y).mgrs}</b>}</div></div>
+            </div>
+          </div>
+        ))}
+      </div>
+
+      <div className={`${card} p-3`}>
+        <div className="flex flex-col xl:flex-row gap-3">
+          <div className="xl:w-[210px] shrink-0 flex items-center gap-2"><Layers size={26} style={{ color: gold }} /><div><p className="text-[17px] font-black tracking-wide">DOME 經營循環</p><p className="text-[11px] text-white/50 leading-snug">以系統化經營，達成業績、人力與組織的持續成長（點開填子標題）</p></div></div>
+          <div className="flex-1 grid grid-cols-2 xl:grid-cols-4 gap-2">
+            {DOME_DEF.map(d => {
+              const its = domeItems(d.sec); const n = its.filter(([k]) => domeVal(k)).length; const on = open === d.k;
+              return (
+                <button key={d.k} onClick={() => setOpen(on ? null : d.k)} className={`text-left rounded-xl border p-2.5 transition ${on ? 'border-amber-400/70 bg-amber-400/10' : 'border-white/10 bg-white/[0.04] hover:bg-white/[0.08]'}`}>
+                  <p className="text-[14px] font-bold"><span style={{ color: gold }}>{d.k}</span> {d.t} <span className="text-[11px] font-normal text-white/45">{d.en}</span></p>
+                  <p className="text-[11.5px] text-white/60 leading-snug mt-1">{d.d}</p>
+                  <p className="text-[11px] mt-1.5" style={{ color: n === its.length ? '#4ade80' : gold }}>{n}／{its.length} 已填 {on ? '▲' : '▼'}</p>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+        {open && (() => {
+          const d = DOME_DEF.find(x => x.k === open);
+          return (
+            <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 space-y-2.5">
+              <p className="text-[13px] font-bold">{py} 年　{d.k}・{d.t}　<span className="text-white/40 font-normal text-[11.5px]">{ro ? '按右上「編輯」可修改' : '離開欄位即儲存'}</span></p>
+              {domeItems(d.sec).map(([k, q]) => (
+                <div key={k}>
+                  <p className="text-[11.5px] text-white/55 mb-1">{q}</p>
+                  {ro ? <p className="text-[12.5px] text-white/85 leading-relaxed whitespace-pre-wrap">{domeVal(k) || <span className="text-white/30">空白</span>}</p>
+                    : <textarea rows={3} className={inp} defaultValue={domeVal(k)} key={`${py}-${k}-${domeVal(k)}`} onBlur={e => { if (e.target.value !== domeVal(k)) save(['dome', k], e.target.value); }} />}
+                </div>
+              ))}
+            </div>
+          );
+        })()}
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-3 gap-3">
+        <div className={`${card} p-4`}>
+          <h3 className="font-bold text-[15px] flex items-center gap-2 mb-3"><TrendingUp size={18} style={{ color: gold }} />業績成長計畫</h3>
+          <div className="grid grid-cols-[1fr_1fr] gap-3">
+            <div>
+              <p className="text-[11px] text-white/50 mb-1">實收保費（萬元）</p>
+              <div className="flex items-end gap-2 h-[150px] relative pt-6">
+                {bars.map((b, i) => (
+                  <div key={b.ry} className="flex-1 flex flex-col items-center justify-end h-full">
+                    <span className="text-[11.5px] tabular-nums mb-0.5">{b.v === null ? '—' : Math.round(b.v).toLocaleString()}</span>
+                    <div className="w-full max-w-[40px] rounded-t" style={{ height: `${Math.max(3, (b.v || 0) / bmax * 100)}px`, background: b.act ? 'rgba(57,135,229,0.75)' : gold }} />
+                    <span className="text-[11px] text-white/50 mt-1 whitespace-nowrap">{b.ry}{b.part ? '（至今）' : ''}</span>
+                  </div>
+                ))}
+                {growth !== null && <span className="absolute right-0 top-0 text-[12px] font-bold px-2 py-0.5 rounded-full border" style={{ color: gold, borderColor: gold }}>{growth >= 0 ? '+' : ''}{growth}%</span>}
+              </div>
+              <p className="text-[10.5px] text-white/35 mt-1">藍＝APP 實績，金＝目標</p>
+            </div>
+            <div>
+              <p className="text-[11px] text-white/50 mb-1">執行重點</p>
+              <div className="space-y-2">
+                {exec.map(([a, b], i) => (
+                  <div key={i} className="border-b border-white/10 pb-1.5">
+                    {ro ? <><p className="text-[12.5px] font-bold">{a || <span className="text-white/30">—</span>}</p><p className="text-[11px] text-white/55 leading-snug">{b}</p></>
+                      : <><input className={inp} defaultValue={a} key={`ea${i}${py}${a}`} onBlur={e => { const n = exec.map(x => [...x]); n[i][0] = e.target.value; save(['exec'], n); }} /><input className={`${inp} mt-1`} defaultValue={b} key={`eb${i}${py}${b}`} onBlur={e => { const n = exec.map(x => [...x]); n[i][1] = e.target.value; save(['exec'], n); }} /></>}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div className={`${card} p-4`}>
+          <h3 className="font-bold text-[15px] flex items-center gap-2 mb-3"><Users size={18} style={{ color: gold }} />增員與人力發展計畫</h3>
+          <div className="space-y-2.5">
+            {rec.map(([l, k, Ic]) => (
+              <div key={k} className="grid grid-cols-[84px_1fr] gap-2 items-start border-b border-white/10 pb-2">
+                <span className="text-[12.5px] font-bold flex items-center gap-1.5"><Ic size={14} className="text-white/60" />{l}</span>
+                <div className="text-[12px] text-white/80 leading-snug">{T(['rec', k], '點「編輯」填寫')}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className={`${card} p-4`}>
+          <h3 className="font-bold text-[15px] flex items-center gap-2 mb-3"><Network size={18} style={{ color: gold }} />組織發展計畫</h3>
+          <div className="flex items-stretch gap-1.5 mb-3">
+            <div className="flex-1 rounded-lg bg-white/[0.05] p-2 text-center"><p className="text-[10.5px] text-white/50">目前（{curYear - 1911} 年）</p><p className="text-[15px] font-black tabular-nums">{cur.headcount ?? '—'} 人</p></div>
+            {st.map((s, i) => (
+              <div key={i} className="flex-1 rounded-lg bg-white/[0.05] p-2 text-center">
+                <p className="text-[10.5px] text-white/50">{s.l}</p>
+                {ro ? <p className="text-[15px] font-black tabular-nums">{s.teams || '—'} 組 {s.people || '—'} 人</p>
+                  : <div className="flex gap-1"><input className={`${inp} text-center px-1`} defaultValue={s.teams} key={`t${i}${py}${s.teams}`} placeholder="組" onBlur={e => { const n = st.map(x => ({ ...x })); n[i].teams = e.target.value; save(['org', 'st'], n); }} /><input className={`${inp} text-center px-1`} defaultValue={s.people} key={`p${i}${py}${s.people}`} placeholder="人" onBlur={e => { const n = st.map(x => ({ ...x })); n[i].people = e.target.value; save(['org', 'st'], n); }} /></div>}
+              </div>
+            ))}
+          </div>
+          <div className="rounded-lg text-center text-[12.5px] font-bold py-1 mb-2" style={{ background: 'rgba(217,169,62,0.2)', color: gold }}>區經理（我）</div>
+          <div className="grid grid-cols-3 gap-1.5 mb-3">
+            {ocards.map(([a, b], i) => (
+              <div key={i} className="rounded-lg border border-white/10 p-2 text-center">
+                {ro ? <><p className="text-[11px] text-white/60 leading-tight">{a || '—'}</p><p className="text-[13px] font-bold">{b}</p></>
+                  : <><input className={`${inp} px-1 text-[11px]`} defaultValue={a} key={`oa${i}${py}${a}`} onBlur={e => { const n = ocards.map(x => [...x]); n[i][0] = e.target.value; save(['org', 'cards'], n); }} /><input className={`${inp} mt-1 px-1`} defaultValue={b} key={`ob${i}${py}${b}`} onBlur={e => { const n = ocards.map(x => [...x]); n[i][1] = e.target.value; save(['org', 'cards'], n); }} /></>}
+              </div>
+            ))}
+          </div>
+          <div className="rounded-lg bg-white/[0.05] p-2 text-[12px]"><b style={{ color: gold }}>主管培育計畫</b>　{T(['org', 'mgr'], '點「編輯」填寫')}</div>
+        </div>
+      </div>
+
+      <div className="grid grid-cols-1 xl:grid-cols-[1.1fr_1fr] gap-3">
+        <div className={`${card} p-4`}>
+          <h3 className="font-bold text-[15px] flex items-center gap-2 mb-3"><Calendar size={18} style={{ color: gold }} />年度行動節奏　<span className="text-[12px] text-white/50 font-normal">（{py} 年）</span></h3>
+          <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
+            {rhythm.map(([q, name, range, items], i) => (
+              <div key={q} className="rounded-xl border border-white/10 bg-white/[0.04] overflow-hidden">
+                <div className="px-2 py-1.5 text-center" style={{ background: i === 3 ? 'rgba(217,169,62,0.25)' : 'rgba(57,135,229,0.2)' }}>
+                  <p className="text-[13px] font-bold">{q}｜{ro ? (name || '—') : <input className={`${inp} inline-block w-16 px-1`} defaultValue={name} key={`rn${i}${py}${name}`} onBlur={e => { const n = rhythm.map(x => [...x]); n[i][1] = e.target.value; save(['rhythm'], n); }} />}</p>
+                  <p className="text-[10.5px] text-white/55">（{range}）</p>
+                </div>
+                <ul className="p-2 space-y-1 text-[12px]">
+                  {items.map((it, j) => <li key={j} className="flex gap-1.5"><span className="text-white/40">•</span>{ro ? (it || <span className="text-white/30">—</span>) : <input className={`${inp} px-1`} defaultValue={it} key={`ri${i}${j}${py}${it}`} onBlur={e => { const n = rhythm.map(x => [x[0], x[1], x[2], [...x[3]]]); n[i][3][j] = e.target.value; save(['rhythm'], n); }} />}</li>)}
+                </ul>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className={`${card} p-4`}>
+          <div className="flex items-center justify-between mb-3">
+            <h3 className="font-bold text-[15px] flex items-center gap-2"><ClipboardList size={18} style={{ color: gold }} />個人工作計劃表</h3>
+            {canEdit && <button onClick={() => setTasks([...tasks, { t: '新任務', who: '吳政翰', due: '', p: 0 }])} className="px-3 h-8 rounded-full text-[12px] font-bold text-black" style={{ background: gold }}>＋ 新增任務</button>}
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-[12.5px] min-w-[420px]">
+              <thead><tr className="text-[11px] text-white/45 text-left"><th className="w-6" /><th className="py-1 font-semibold">任務</th><th className="py-1 font-semibold">負責人</th><th className="py-1 font-semibold">期限</th><th className="py-1 font-semibold w-[120px]">進度</th></tr></thead>
+              <tbody>
+                {tasks.length === 0 && <tr><td colSpan={5} className="py-4 text-center text-white/35">還沒有任務</td></tr>}
+                {tasks.map((t, i) => {
+                  const done = Number(t.p) >= 100;
+                  const upd = (k, v) => setTasks(tasks.map((x, j) => j === i ? { ...x, [k]: v } : x));
+                  return (
+                    <tr key={i} className="border-t border-white/[0.06]">
+                      <td className="py-1.5"><input type="checkbox" disabled={!canEdit} checked={done} onChange={e => upd('p', e.target.checked ? 100 : 0)} /></td>
+                      <td className="py-1.5 pr-2">{canEdit && editing ? <input className={inp} defaultValue={t.t} key={`tt${i}${t.t}`} onBlur={e => upd('t', e.target.value)} /> : <span className={done ? 'text-white/50' : ''}>{t.t}</span>}</td>
+                      <td className="py-1.5 pr-2 whitespace-nowrap">{canEdit && editing ? <input className={`${inp} w-20`} defaultValue={t.who} key={`tw${i}${t.who}`} onBlur={e => upd('who', e.target.value)} /> : t.who}</td>
+                      <td className="py-1.5 pr-2 whitespace-nowrap">{canEdit && editing ? <input className={`${inp} w-16`} defaultValue={t.due} key={`td${i}${t.due}`} onBlur={e => upd('due', e.target.value)} /> : <span className="text-white/70">{t.due}</span>}</td>
+                      <td className="py-1.5">
+                        <div className="flex items-center gap-1.5">
+                          <div className="flex-1 h-2 rounded bg-white/10"><div className="h-2 rounded" style={{ width: `${Math.min(100, Number(t.p) || 0)}%`, background: done ? '#4ade80' : '#3987e5' }} /></div>
+                          {canEdit && editing ? <input type="number" className={`${inp} w-14 text-right`} defaultValue={t.p} key={`tp${i}${t.p}`} onBlur={e => upd('p', Number(e.target.value))} /> : <span className="text-[11px] tabular-nums text-white/70 w-9 text-right">{Number(t.p) || 0}%</span>}
+                          {canEdit && editing && <button onClick={() => setTasks(tasks.filter((_, j) => j !== i))} className="text-white/40 hover:text-rose-300" aria-label="刪除"><Trash2 size={13} /></button>}
+                        </div>
+                      </td>
+                    </tr>
+                  );
+                })}
+              </tbody>
+            </table>
+          </div>
+          <p className="text-[10.5px] text-white/35 mt-2">勾選＝進度 100%；目前只有吳政翰可新增與修改</p>
+        </div>
+      </div>
+    </div>
+  );
+};
+
 const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, members, loggedInUser }) => {
   const today = getTodayDate();
   const curYear = Number(today.slice(0, 4));
@@ -5149,7 +5425,7 @@ const OverviewPage = ({ loggedInUser, team, allTeam, records, activities, recrui
   const sections = [
     ['overview', '總覽', LayoutGrid], ['activity', '全體活動量', Activity], ['goals', '個人目標', Target], ['contest', '競賽狀況', Trophy],
     ['quality', '優培狀況', Award], ['cases', '案件狀況', ClipboardList], ['recruit', '增員狀況', UserPlus],
-    ['track', '單位追蹤', Star], ['annual', '年度現況', TrendingUp],
+    ['track', '單位追蹤', Star], ['annual', '年度現況', TrendingUp], ['plan', '年度經營計畫', Target],
   ];
   const sectionTitle = sections.find(s => s[0] === section)?.[1];
 
@@ -5393,6 +5669,7 @@ const OverviewPage = ({ loggedInUser, team, allTeam, records, activities, recrui
             </div>
           </div>
         )}
+        {section === 'plan' && <AnnualPlanSection team={team} allTeam={allTeam} records={records} recruits={recruits} rankTargets={rankTargets} members={members} loggedInUser={loggedInUser} />}
         {section === 'annual' && <AnnualStatusSection team={team} allTeam={allTeam} records={records} recruits={recruits} rankTargets={rankTargets} members={members} loggedInUser={loggedInUser} />}
         {section === 'recruit' && (
           <div className="grid grid-cols-[1fr_300px] gap-3 flex-1 min-h-0">
