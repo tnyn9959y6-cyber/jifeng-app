@@ -3664,7 +3664,7 @@ const REPORT_SEED = {
    "lDream": "三年內成立極豐通訊處（118 年底 55 人、25 組），成為帶得動人的處經理，讓團隊每個人都有穩定收入與成長（待你確認）",
    "lReal": "116 年底 15 人 7 組、至少 1 位主管能獨立增員與帶人；個人與組織津貼收入不低於今年；工作與家庭時間可以兼顧（待你確認）",
    "lMin": "人力不退步（至少守住 8 人）、個人業績維持今年水準、新人留存 60%、組織津貼不下滑（待你確認）",
-   "wp": "Q1：心態建立、團隊基礎銷售、增員能力建立（基本面談、COP 能力）、新人職前訓練與團隊基本功全數系統化、完成高峰競賽\nQ2：完成人超盃\nQ3：主管職能培育、完成新高峰\nQ4：年度檢討（對照 DOME 評估）、主管升級評量、117 年計畫定稿\n\n每日：活動量 ≥ 20 點（銷售與增員）；每月：業績與增員登錄目標；細節見「年度計劃」分頁的個人工作計劃表"
+   "wp": "Q1：心態建立、團隊基礎銷售、增員能力建立（基本面談、COP 能力）、新人職前訓練與團隊基本功全數系統化、開始職域開發和醫生問卷、完成高峰競賽\nQ2：完成人超盃、短期增員 PK\nQ3：主管職能培育、完成新高峰\nQ4：年度檢討（對照 DOME 評估）、主管升級評量、117 年計畫定稿、年度表揚與激勵\n\n每日：活動量 ≥ 20 點（銷售與增員）；每月：業績與增員登錄目標；細節見「年度計劃」分頁的個人工作計劃表"
  },
  "楊雅涵": {
   "dA": "月收 5 萬以上；人力無設定",
@@ -4334,10 +4334,10 @@ const PLAN_DEFAULT = {
       },
       org: { st: [{ l: '116 年底', teams: '7', people: '20' }, { l: '117 年底', teams: '15', people: '37' }], cards: [['業務襄理', '1 人'], ['業務主任', '6 人'], ['新增員（116 年）', '12 人']], mgr: '116 年底：1 襄理＋6 主任（共 7 位主管）；117 年底：3 襄理＋12 主任（共 15 位）。Q3 起做主管職能培育' },
       qt: [
-        { q: 'Q1', name: '基礎建構', range: '1–3 月', items: ['心態建立', '團隊基礎銷售', '增員能力建立：基本面談、COP 能力', '新人職前訓練、團隊基本功全數系統化', '完成高峰競賽'] },
-        { q: 'Q2', name: '人超盃', range: '4–6 月', items: ['完成人超盃'] },
+        { q: 'Q1', name: '基礎建構', range: '1–3 月', items: ['心態建立', '團隊基礎銷售', '增員能力建立：基本面談、COP 能力', '新人職前訓練、團隊基本功全數系統化', '開始職域開發和醫生問卷', '完成高峰競賽'] },
+        { q: 'Q2', name: '人超盃', range: '4–6 月', items: ['完成人超盃', '短期增員 PK'] },
         { q: 'Q3', name: '主管養成', range: '7–9 月', items: ['主管職能培育', '完成新高峰'] },
-        { q: 'Q4', name: '收尾與下年', range: '10–12 月', items: ['對照 DOME 評估，做年度檢討', '主管升級評量、117 年計畫定稿', '維持每日固定運作與團隊基本功'] },
+        { q: 'Q4', name: '收尾與下年', range: '10–12 月', items: ['對照 DOME 評估，做年度檢討', '主管升級評量、117 年計畫定稿', '維持每日固定運作與團隊基本功', '年度表揚與激勵'] },
       ].map(x => ({ ...x, items: x.items.map(t => ({ t, d: false })) })),
     },
     '117': {
@@ -4355,8 +4355,32 @@ const DOME_DEF = [
   { k: 'M', t: '方法', en: 'Methods', d: '規劃商品、活動、增員、培訓等執行方案', sec: '方法' },
   { k: 'E', t: '評估', en: 'Evaluation', d: '定期檢視進度，調整策略與資源', sec: '評估' },
 ];
+const PDF_CSS = `
+@media screen { .pdf-root { display: none !important; } }
+@media print {
+  @page { size: A4; margin: 10mm; }
+  html, body { background: #fff !important; }
+  body > *:not(.pdf-root) { display: none !important; }
+  .pdf-root { display: block !important; color: #111827; background: #fff; font-size: 12px; }
+  .pdf-root, .pdf-root * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-shadow: none !important; backdrop-filter: none !important; }
+  .pdf-root h1 { font-size: 20px; font-weight: 800; margin: 0 0 2px; }
+  .pdf-root h2.pdf-h2 { font-size: 16px; font-weight: 800; margin: 12px 0 8px; padding-bottom: 4px; border-bottom: 2px solid #d9a93e; }
+  .pdf-root .pdf-break { break-before: page; }
+  .pdf-root [class*="rounded-"] { break-inside: avoid; }
+  .pdf-root [class*="text-white"] { color: #1f2937 !important; }
+  .pdf-root [class*="text-white/3"], .pdf-root [class*="text-white/4"] { color: #6b7280 !important; }
+  .pdf-root [class*="bg-white"], .pdf-root [class*="bg-black"] { background-color: #f3f4f6 !important; }
+  .pdf-root [class*="border-white"] { border-color: #d1d5db !important; }
+  .pdf-root [class*="border-white/70"] { border-color: #374151 !important; }
+  .pdf-root [class*="text-blue-"] { color: #1d4ed8 !important; }
+  .pdf-root [class*="text-rose-"] { color: #be123c !important; }
+  .pdf-root [class*="text-amber-"] { color: #b45309 !important; }
+  .pdf-root [class*="text-emerald-"] { color: #047857 !important; }
+  .pdf-root [class*="text-violet-"] { color: #6d28d9 !important; }
+}
+`;
 const WEEK_RHYTHM = [['週一', '區會', '含壽險事業觀'], ['週二', '銷售', ''], ['週三', '增員', ''], ['週四', '銷售', ''], ['週五', '增員', '']];
-const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, members, loggedInUser, manual, planVal, planAll, distVal }) => {
+const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, members, loggedInUser, manual, planVal, planAll, distVal, printMode = false }) => {
   const today = getTodayDate();
   const curYear = Number(today.slice(0, 4));
   const canEdit = !!loggedInUser && loggedInUser.name === '吳政翰';
@@ -4386,7 +4410,7 @@ const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, memb
   const me = members.find(m => m.name === '吳政翰');
   const meCur = (memCur.find(x => me && x.m.id === me.id) || {}).c || null;
   const baseAD = Number(py) + 1911 - 1; // 計畫年度的前一年（116 → 2026）
-  const meMonths = useMemo(() => (wtab === 'mo' && me) ? Array.from({ length: 12 }, (_, i) => calcOne([me], baseAD, 'month', i + 1)) : null, [wtab, me, py, records, recruits, manual, rankTargets]);
+  const meMonths = useMemo(() => ((wtab === 'mo' || printMode) && me) ? Array.from({ length: 12 }, (_, i) => calcOne([me], baseAD, 'month', i + 1)) : null, [wtab, me, py, records, recruits, manual, rankTargets]);
 
   const inp = 'w-full rounded-md bg-black/30 border border-white/15 text-[12.5px] px-2 py-1 text-white';
   const card = 'rounded-2xl border border-white/10 bg-white/[0.05] backdrop-blur-xl';
@@ -4492,10 +4516,10 @@ const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, memb
     <div className="flex flex-col gap-3 min-h-0 pb-4">
       <div className="flex flex-wrap items-center justify-between gap-2 px-1">
         <p className="text-[13px] text-white/55">116–117 年度經營計畫　<span className="text-white/35">{canEdit ? '按「編輯」可修改，離開欄位即儲存' : '僅吳政翰可修改'}</span></p>
-        <div className="flex items-center gap-2">
+        {!printMode && <div className="flex items-center gap-2">
           <div className="flex rounded-full bg-white/10 p-0.5">{['116', '117'].map(y => <button key={y} onClick={() => setPy(y)} className={`px-5 h-8 rounded-full text-[13px] font-bold ${py === y ? 'text-black' : 'text-white/60'}`} style={py === y ? { background: gold } : undefined}>{y} 年</button>)}</div>
           {canEdit && <button onClick={() => setEditing(!editing)} className={`px-3 h-8 rounded-lg text-[12.5px] font-bold ${editing ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/70'}`}>{editing ? '完成編輯' : '編輯'}</button>}
-        </div>
+        </div>}
       </div>
 
       <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
@@ -4532,10 +4556,9 @@ const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, memb
             })}
           </div>
         </div>
-        {open && (() => {
-          const d = DOME_DEF.find(x => x.k === open);
+        {(printMode ? DOME_DEF : (open ? [DOME_DEF.find(x => x.k === open)] : [])).map(d => {
           return (
-            <div className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 space-y-3">
+            <div key={d.k} className="mt-3 rounded-xl border border-white/10 bg-black/20 p-3 space-y-3">
               <p className="text-[13px] font-bold">{py} 年　{d.k}・{d.t}　<span className="text-white/40 font-normal text-[11.5px]">{ro ? '按右上「編輯」可修改' : '離開欄位即儲存'}</span></p>
               {domeItems(d.sec).map(([k, q]) => (
                 <div key={k}>
@@ -4546,7 +4569,7 @@ const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, memb
               ))}
             </div>
           );
-        })()}
+        })}
       </div>
 
       <div className={`${card} p-4`}>
@@ -4652,12 +4675,13 @@ const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, memb
       </div>
 
       <div className={`${card} p-4`}>
-        <Sec ic={ClipboardList} t="個人工作計劃表" right={
+        <Sec ic={ClipboardList} t="個人工作計劃表" right={printMode ? null :
           <div className="flex rounded-full bg-white/10 p-0.5">{[['day', '每日'], ['mo', '每月'], ['q', '每季']].map(([k, l]) => <button key={k} onClick={() => setWtab(k)} className={`px-4 h-8 rounded-full text-[12.5px] font-bold ${wtab === k ? 'text-black' : 'text-white/60'}`} style={wtab === k ? { background: gold } : undefined}>{l}</button>)}</div>
         } />
 
-        {wtab === 'day' && (
+        {(wtab === 'day' || printMode) && (
           <div className="flex flex-col gap-3">
+            {printMode && <p className="text-[13px] font-bold">每日</p>}
             <div className="grid grid-cols-5 gap-1.5">
               {WEEK_RHYTHM.map(([d, a, b]) => (
                 <div key={d} className={`rounded-lg p-2 text-center border ${a === '增員' ? 'border-rose-400/30 bg-rose-400/10' : a === '銷售' ? 'border-blue-400/30 bg-blue-400/10' : 'border-amber-400/30 bg-amber-400/10'}`}><p className="text-[11px] text-white/55">{d}</p><p className="text-[13px] font-bold">{a}</p>{b && <p className="text-[10px] text-white/45">{b}</p>}</div>
@@ -4682,8 +4706,9 @@ const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, memb
           </div>
         )}
 
-        {wtab === 'mo' && (
-          <div className="flex flex-col gap-3">
+        {(wtab === 'mo' || printMode) && (
+          <div className="flex flex-col gap-3 mt-4">
+            {printMode && <p className="text-[13px] font-bold">每月</p>}
             <div className="grid grid-cols-2 xl:grid-cols-4 gap-2">
               {[['加權／月（萬）', 'wMo', wMo ? Math.round(wMo / 10000) : '', '＝件數×去年件均加權'], ['件數／月', 'casesMo', casesMo ? Number(casesMo.toFixed(1)) : '', '72 件 ÷ 12'], ['增員登錄／月', 'recMo', Number(recMo.toFixed(2)), '年目標 ÷ 12'], ['進入考試／月', 'examMo', Number(examMo.toFixed(2)), '登錄前 1.5 個月']].map(([l, k, v, n]) => (
                 <div key={k} className="rounded-xl bg-white/[0.04] p-3"><p className="text-[11px] text-white/50">{l}</p>{ro ? <p className="text-[20px] font-black tabular-nums">{v === '' ? '—' : v}</p> : <input type="number" className={`${inp} text-right text-[15px]`} defaultValue={v} key={k + py + v} onBlur={e => save(['wk', k], e.target.value === '' ? '' : Number(e.target.value))} />}<p className="text-[10px] text-white/35 mt-0.5">{n}</p></div>
@@ -4705,8 +4730,9 @@ const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, memb
           </div>
         )}
 
-        {wtab === 'q' && (
-          <div className="flex flex-col gap-2">
+        {(wtab === 'q' || printMode) && (
+          <div className="flex flex-col gap-2 mt-4">
+            {printMode && <p className="text-[13px] font-bold">每季</p>}
             <p className="text-[12px] text-white/55">本年度完成 <b className="text-white">{qDone}</b>／{qAll} 項{qAll ? `（${Math.round(qDone / qAll * 100)}%）` : ''}　<span className="text-white/35">勾選＝完成（僅吳政翰可勾）</span></p>
             <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-2">
               {qt.map((q, qi) => {
@@ -4753,6 +4779,14 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   const [cfg, setCfg] = useState({ manual: {}, plan: {}, report: {}, goal: { targetYear: curYear + 3, agency: {}, branch: {} } });
   const [goalMode, setGoalMode] = useState('agency');
   const [planDoc, setPlanDoc] = useState({});
+  const [printing, setPrinting] = useState(false);
+  useEffect(() => {
+    if (!printing) return;
+    const done = () => setPrinting(false);
+    window.addEventListener('afterprint', done);
+    const t = setTimeout(() => window.print(), 700);
+    return () => { clearTimeout(t); window.removeEventListener('afterprint', done); };
+  }, [printing]);
   useEffect(() => { const u = onSnapshot(doc(db, 'settings', 'annual_plan'), (sn) => { if (sn.exists()) setPlanDoc(sn.data() || {}); }); return () => u(); }, []);
 
   useEffect(() => {
@@ -4858,14 +4892,14 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   }, [scopeMembers, gran, year, records, recruits, cfg.manual, rankTargets]);
   // 月度序列（儀表板用）：選定年度每月＋去年同月；尚未完成的月份不畫
   const monthSeries = useMemo(() => {
-    if (tab !== 'dash') return null;
+    if (tab !== 'dash' && !printing) return null;
     const lastDone = year === curYear ? Number(lastCompletedMonth(today).slice(5)) : (year < curYear ? 12 : 0);
     return Array.from({ length: 12 }, (_, i) => {
       const show = i + 1 <= lastDone;
       return { show, m: show ? calc(scopeMembers, 'month', year, i + 1, headScope, scopeLeader) : {}, pm: show ? calc(scopeMembers, 'month', year - 1, i + 1, headScope, scopeLeader) : null };
     });
     // eslint-disable-next-line
-  }, [tab, scopeMembers, year, records, recruits, cfg.manual, rankTargets]);
+  }, [tab, printing, scopeMembers, year, records, recruits, cfg.manual, rankTargets]);
   const stOf = (y) => ((((planDoc.y || {})[y] || {}).org || {}).st) || PLAN_DEFAULT.y[y].org.st;
   const planPeople = [Number(stOf('116')[0].people) || null, Number(stOf('116')[1].people) || null, Number(stOf('117')[1].people) || null];
   const trendMetrics = ANNUAL_METRICS.filter(d => (!d.yearOnly && !d.manual) || (d.hist && gran === 'year'));
@@ -4919,27 +4953,10 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   const groups = [...new Set(ANNUAL_METRICS.map(d => d.grp))];
   const visible = ANNUAL_METRICS.filter(d => !(d.yearOnly && gran !== 'year') && !(d.key === 'mgrRecruitRate' && gran !== 'year'));
 
-  return (
-    <div className="flex flex-col gap-3 min-h-0 overflow-y-auto pr-1">
-      <div className={`${cardCls} p-3 flex flex-wrap items-center gap-2 ${tab === 'plan' ? 'hidden' : ''}`}>
-        <div className="flex rounded-lg bg-white/10 p-0.5">
-          {[['month', '月'], ['quarter', '季'], ['year', '年']].map(([k, l]) => <button key={k} onClick={() => setGran(k)} className={`px-3 h-8 rounded-md text-[13px] font-bold ${gran === k ? 'bg-blue-500 text-white' : 'text-white/60'}`}>{l}</button>)}
-        </div>
-        <select className={sel} value={year} onChange={e => setYear(Number(e.target.value))}>{yearOptions.map(y => <option key={y} value={y}>{y} 年</option>)}</select>
-        {gran === 'month' && <select className={sel} value={idx} onChange={e => setIdx(Number(e.target.value))}>{Array.from({ length: 12 }, (_, i) => <option key={i} value={i + 1}>{i + 1} 月</option>)}</select>}
-        {gran === 'quarter' && <select className={sel} value={Math.min(idx, 4)} onChange={e => setIdx(Number(e.target.value))}>{[1, 2, 3, 4].map(q => <option key={q} value={q}>第 {q} 季</option>)}</select>}
-        <select className={sel} value={scopeId} onChange={e => setScopeId(e.target.value)}>
-          <option value="all">全區合計（{members.length} 人）</option>
-          {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
-        </select>
-      </div>
-      <div className="flex flex-wrap gap-1">
-        {[['dash', '儀表板'], ['num', '數字'], ['plan', '年度計劃']].map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={`px-4 h-9 rounded-lg text-[13px] font-bold ${tab === k ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/60'}`}>{l}</button>)}
-      </div>
-
-      {tab === 'plan' && <AnnualPlanSection team={team} allTeam={allTeam} records={records} recruits={recruits} rankTargets={rankTargets} members={members} loggedInUser={loggedInUser} manual={cfg.manual} planVal={planVal} planAll={planAll} distVal={distVal} />}
-      {tab === 'dash' && <AnnualDashboard cur={cur} projected={projected} monthsN={annualEffMonths(gran, year, idx, today).length} trendAll={trendAll} gran={gran} rows={rows} members={members} planVal={planVal} scopeLabel={scopeId === 'all' ? '全區合計' : (scopeMembers[0] ? scopeMembers[0].name : '')} onGo={setTab} monthSeries={monthSeries} planPeople={planPeople} year={year} />}
-      {tab === 'num' && (<>
+  const renderBody = (sh, pm) => (<>
+      {sh('plan') && <AnnualPlanSection printMode={pm} team={team} allTeam={allTeam} records={records} recruits={recruits} rankTargets={rankTargets} members={members} loggedInUser={loggedInUser} manual={cfg.manual} planVal={planVal} planAll={planAll} distVal={distVal} />}
+      {sh('dash') && <AnnualDashboard cur={cur} projected={projected} monthsN={annualEffMonths(gran, year, idx, today).length} trendAll={trendAll} gran={gran} rows={rows} members={members} planVal={planVal} scopeLabel={scopeId === 'all' ? '全區合計' : (scopeMembers[0] ? scopeMembers[0].name : '')} onGo={setTab} monthSeries={monthSeries} planPeople={planPeople} year={year} />}
+      {sh('num') && (<>
       <div className={`${cardCls} p-4`}>
         <div className="flex items-baseline justify-between mb-3">
           <h3 className="font-bold text-[15px]">目前現況指標　<span className="text-white/50 font-normal text-[12px]">{label}・{scopeId === 'all' ? '全區合計' : scopeMembers[0] ? scopeMembers[0].name : ''}</span></h3>
@@ -4978,7 +4995,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
       </>)}
 
       <>
-        {tab === 'dash' && (
+        {sh('dash') && (
         <div className={`${cardCls} p-4 xl:col-span-2`}>
           <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
             <h3 className="font-bold text-[15px]">{gran === 'year' ? '年度' : gran === 'quarter' ? '各季' : '各月'}變化　<span className="text-white/50 font-normal text-[12px]">點小圖可放大</span></h3>
@@ -5008,7 +5025,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
         </div>
         )}
 
-        {tab === 'num' && (
+        {sh('num') && (
         <div className={`${cardCls} p-4`}>
           <h3 className="font-bold text-[15px] mb-3">個別數字　<span className="text-white/50 font-normal text-[12px]">{label}（箭頭＝相較{gran === 'year' ? `${pv.year} 年` : '上期'}）</span></h3>
           <div className="overflow-x-auto">
@@ -5043,7 +5060,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
         )}
       </>
 
-      {tab === 'num' && (<>
+      {sh('num') && (<>
       <div className={`${cardCls} p-4`}>
         <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
           <h3 className="font-bold text-[15px]">{planYear} 年目標（策劃會報）　<span className="text-white/50 font-normal text-[12px]">{canEditPlan ? '可直接修改，離開欄位即儲存' : '僅吳政翰可修改'}</span></h3>
@@ -5174,6 +5191,41 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
         <p className="text-[11px] text-white/40 mt-2">通訊處依「通訊處經理合約委任辦法」逐項試算；營業處沒有文件可以引用，數字由你自己填。</p>
       </div>
       </>)}
+  </>);
+  return (
+    <div className="flex flex-col gap-3 min-h-0 overflow-y-auto pr-1">
+      <div className={`${cardCls} p-3 flex flex-wrap items-center gap-2 ${tab === 'plan' ? 'hidden' : ''}`}>
+        <div className="flex rounded-lg bg-white/10 p-0.5">
+          {[['month', '月'], ['quarter', '季'], ['year', '年']].map(([k, l]) => <button key={k} onClick={() => setGran(k)} className={`px-3 h-8 rounded-md text-[13px] font-bold ${gran === k ? 'bg-blue-500 text-white' : 'text-white/60'}`}>{l}</button>)}
+        </div>
+        <select className={sel} value={year} onChange={e => setYear(Number(e.target.value))}>{yearOptions.map(y => <option key={y} value={y}>{y} 年</option>)}</select>
+        {gran === 'month' && <select className={sel} value={idx} onChange={e => setIdx(Number(e.target.value))}>{Array.from({ length: 12 }, (_, i) => <option key={i} value={i + 1}>{i + 1} 月</option>)}</select>}
+        {gran === 'quarter' && <select className={sel} value={Math.min(idx, 4)} onChange={e => setIdx(Number(e.target.value))}>{[1, 2, 3, 4].map(q => <option key={q} value={q}>第 {q} 季</option>)}</select>}
+        <select className={sel} value={scopeId} onChange={e => setScopeId(e.target.value)}>
+          <option value="all">全區合計（{members.length} 人）</option>
+          {members.map(m => <option key={m.id} value={m.id}>{m.name}</option>)}
+        </select>
+      </div>
+      <div className="flex flex-wrap gap-1">
+        {[['dash', '儀表板'], ['num', '數字'], ['plan', '年度計劃']].map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={`px-4 h-9 rounded-lg text-[13px] font-bold ${tab === k ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/60'}`}>{l}</button>)}
+        <button onClick={() => setPrinting(true)} disabled={printing} className="ml-auto px-4 h-9 rounded-lg text-[13px] font-bold bg-amber-400/90 text-black disabled:opacity-50">{printing ? '準備中…' : '匯出 PDF'}</button>
+      </div>
+
+      {renderBody(k => tab === k, false)}
+      {printing && createPortal(
+        <div className="pdf-root">
+          <style>{PDF_CSS}</style>
+          <h1>年度經營報告｜吳政翰區</h1>
+          <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{today}　範圍：{scopeId === 'all' ? '全區合計' : (scopeMembers[0] ? scopeMembers[0].name : '')}・{label}</p>
+          <h2 className="pdf-h2">一、儀表板</h2>
+          {renderBody(k => k === 'dash', true)}
+          <div className="pdf-break" />
+          <h2 className="pdf-h2">二、數字</h2>
+          {renderBody(k => k === 'num', true)}
+          <div className="pdf-break" />
+          <h2 className="pdf-h2">三、年度計劃</h2>
+          {renderBody(k => k === 'plan', true)}
+        </div>, document.body)}
     </div>
   );
 };
