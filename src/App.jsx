@@ -4473,28 +4473,24 @@ const DOME_DEF = [
   { k: 'E', t: '評估', en: 'Evaluation', d: '定期檢視進度，調整策略與資源', sec: '評估' },
 ];
 const PDF_CSS = `
-@media screen { .pdf-root { display: none !important; } }
-@media print {
-  @page { size: A4; margin: 10mm; }
-  html, body { background: #fff !important; }
-  body > *:not(.pdf-root) { display: none !important; }
-  .pdf-root { display: block !important; color: #111827; background: #fff; font-size: 12px; }
-  .pdf-root, .pdf-root * { -webkit-print-color-adjust: exact; print-color-adjust: exact; box-shadow: none !important; backdrop-filter: none !important; }
-  .pdf-root h1 { font-size: 20px; font-weight: 800; margin: 0 0 2px; }
-  .pdf-root h2.pdf-h2 { font-size: 16px; font-weight: 800; margin: 12px 0 8px; padding-bottom: 4px; border-bottom: 2px solid #d9a93e; }
-  .pdf-root .pdf-break { break-before: page; }
-  .pdf-root [class*="rounded-"] { break-inside: avoid; }
-  .pdf-root [class*="text-white"] { color: #1f2937 !important; }
-  .pdf-root [class*="text-white/3"], .pdf-root [class*="text-white/4"] { color: #6b7280 !important; }
-  .pdf-root [class*="bg-white"], .pdf-root [class*="bg-black"] { background-color: #f3f4f6 !important; }
-  .pdf-root [class*="border-white"] { border-color: #d1d5db !important; }
-  .pdf-root [class*="border-white/70"] { border-color: #374151 !important; }
-  .pdf-root [class*="text-blue-"] { color: #1d4ed8 !important; }
-  .pdf-root [class*="text-rose-"] { color: #be123c !important; }
-  .pdf-root [class*="text-amber-"] { color: #b45309 !important; }
-  .pdf-root [class*="text-emerald-"] { color: #047857 !important; }
-  .pdf-root [class*="text-violet-"] { color: #6d28d9 !important; }
-}
+.pdf-root { display: none !important; }
+.pdf-root.pdf-cap { display: block !important; position: fixed; left: -12000px; top: 0; width: 900px; background: #fff; color: #111827; font-size: 12px; line-height: 1.5; padding: 0; }
+.pdf-cap h1 { font-size: 22px; font-weight: 800; margin: 0 0 2px; }
+.pdf-cap h2.pdf-h2 { font-size: 17px; font-weight: 800; margin: 14px 0 8px; padding-bottom: 4px; border-bottom: 2px solid #d9a93e; }
+.pdf-cap [class*="text-white"] { color: #1f2937 !important; }
+.pdf-cap [class*="text-white/3"], .pdf-cap [class*="text-white/4"] { color: #6b7280 !important; }
+.pdf-cap [class*="bg-white"], .pdf-cap [class*="bg-black"] { background-color: #f3f4f6 !important; }
+.pdf-cap [class*="border-white"] { border-color: #d1d5db !important; }
+.pdf-cap [class*="border-white/70"] { border-color: #374151 !important; }
+.pdf-cap [class*="text-blue-"] { color: #1d4ed8 !important; }
+.pdf-cap [class*="text-rose-"] { color: #be123c !important; }
+.pdf-cap [class*="text-amber-"] { color: #b45309 !important; }
+.pdf-cap [class*="text-emerald-"] { color: #047857 !important; }
+.pdf-cap [class*="text-violet-"] { color: #6d28d9 !important; }
+.pdf-cap svg text { fill: #374151 !important; }
+.pdf-cap svg rect[fill^="rgba(255,255,255"] { fill: #d1d5db !important; }
+.pdf-cap svg [stroke="#ffffff"] { stroke: #111827 !important; }
+.pdf-cap [style*="rgba(255,255,255"] { background-color: #e5e7eb !important; }
 `;
 const WEEK_RHYTHM = [['週一', '區會', '含壽險事業觀'], ['週二', '銷售', ''], ['週三', '增員', ''], ['週四', '銷售', ''], ['週五', '增員', '']];
 const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, members, loggedInUser, manual, planVal, planAll, distVal, printMode = false }) => {
@@ -4899,10 +4895,63 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   const [printing, setPrinting] = useState(false);
   useEffect(() => {
     if (!printing) return;
-    const done = () => setPrinting(false);
-    window.addEventListener('afterprint', done);
-    const t = setTimeout(() => window.print(), 700);
-    return () => { clearTimeout(t); window.removeEventListener('afterprint', done); };
+    let dead = false;
+    (async () => {
+      try {
+        await new Promise(r => setTimeout(r, 900));
+        const root = document.querySelector('.pdf-cap');
+        if (!root) throw new Error('找不到報告內容');
+        const [{ default: html2canvas }, { jsPDF }] = await Promise.all([import('html2canvas'), import('jspdf')]);
+        const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'p' });
+        const M = 8, CW = 210 - 2 * M, CH = 297 - 2 * M;
+        const pxMm = root.clientWidth / CW;
+        const pageH = CH * pxMm;
+        const units = [];
+        const walk = (el, depth) => {
+          Array.from(el.children).forEach(c => {
+            if (c.tagName === 'STYLE') return;
+            if (c.classList.contains('pdf-break')) { units.push({ brk: true }); return; }
+            const h = c.getBoundingClientRect().height;
+            if (h < 2) return;
+            const leaf = ['TABLE', 'svg', 'IMG'].includes(c.tagName) || c.children.length < 2;
+            if (h > pageH && depth < 4 && !leaf) walk(c, depth + 1); else units.push({ el: c });
+          });
+        };
+        walk(root, 0);
+        let y = M, used = false;
+        const newPage = () => { if (used) pdf.addPage(); y = M; used = false; };
+        for (const u of units) {
+          if (dead) return;
+          if (u.brk) { newPage(); continue; }
+          const cv = await html2canvas(u.el, { scale: 2, backgroundColor: '#ffffff', logging: false, useCORS: true });
+          const wmm = cv.width / 2 / pxMm, hmm = cv.height / 2 / pxMm;
+          if (hmm <= CH) {
+            if (used && y + hmm > M + CH) newPage();
+            pdf.addImage(cv.toDataURL('image/jpeg', 0.92), 'JPEG', M, y, wmm, hmm);
+            y += hmm + 1.5; used = true;
+          } else {
+            if (used && y + 40 > M + CH) newPage();
+            let sy = 0;
+            while (sy < cv.height) {
+              const availMm = M + CH - y;
+              const sh = Math.min(cv.height - sy, Math.max(1, Math.floor(availMm * pxMm * 2)));
+              const part = document.createElement('canvas'); part.width = cv.width; part.height = sh;
+              const ctx = part.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, part.width, part.height);
+              ctx.drawImage(cv, 0, sy, cv.width, sh, 0, 0, cv.width, sh);
+              pdf.addImage(part.toDataURL('image/jpeg', 0.92), 'JPEG', M, y, wmm, sh / 2 / pxMm);
+              used = true; y += sh / 2 / pxMm; sy += sh;
+              if (sy < cv.height) newPage();
+            }
+          }
+        }
+        pdf.save(`年度經營報告_${today}.pdf`);
+      } catch (e) {
+        window.alert('PDF 產生失敗：' + (e && e.message ? e.message : e));
+      } finally {
+        if (!dead) setPrinting(false);
+      }
+    })();
+    return () => { dead = true; };
   }, [printing]);
   useEffect(() => { const u = onSnapshot(doc(db, 'settings', 'annual_plan'), (sn) => { if (sn.exists()) setPlanDoc(sn.data() || {}); }); return () => u(); }, []);
 
@@ -5306,12 +5355,12 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
       </div>
       <div className="flex flex-wrap gap-1">
         {[['dash', '儀表板'], ['num', '數字'], ['plan', '年度計劃']].map(([k, l]) => <button key={k} onClick={() => setTab(k)} className={`px-4 h-9 rounded-lg text-[13px] font-bold ${tab === k ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/60'}`}>{l}</button>)}
-        <button onClick={() => setPrinting(true)} disabled={printing} className="ml-auto px-4 h-9 rounded-lg text-[13px] font-bold bg-amber-400/90 text-black disabled:opacity-50">{printing ? '準備中…' : '匯出 PDF'}</button>
+        <button onClick={() => setPrinting(true)} disabled={printing} className="ml-auto px-4 h-9 rounded-lg text-[13px] font-bold bg-amber-400/90 text-black disabled:opacity-50">{printing ? '產生中…' : '下載 PDF'}</button>
       </div>
 
       {renderBody(k => tab === k, false)}
       {printing && createPortal(
-        <div className="pdf-root">
+        <div className="pdf-root pdf-cap">
           <style>{PDF_CSS}</style>
           <h1>年度經營報告｜吳政翰區</h1>
           <p style={{ fontSize: 11, color: '#6b7280', marginBottom: 6 }}>{today}　範圍：{scopeId === 'all' ? '全區合計' : (scopeMembers[0] ? scopeMembers[0].name : '')}・{label}</p>
