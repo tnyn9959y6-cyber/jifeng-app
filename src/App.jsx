@@ -3712,7 +3712,7 @@ const REPORT_SEED = {
   "lDream": "年收 300 萬、存款 100 萬、環遊世界",
   "lReal": "一年出國 4 次、一個月給家人 5～10 萬、買第二間房",
   "lMin": "一年出國 2 次、一個月有 5 萬的 FYC、第 3 項字跡待核對",
-  "wp": ""
+  "wp": "2027 年工作計劃表\n\n1. 列出明年度目標\n年收入維持 100 萬\n客戶名單可以到 100 名\n提升個人專業能力及時間分配\n\n2. 了解現況\n目前年資 1 年半、職級主任\n年收入約 100 萬、客戶約 15 位\n目前沒有夥伴\n因為家中變故，時間沒辦法給保險更多\n\n3. 列出要改革的項目\n增加陌生開發，見到人就聊\n強化商品知識及銷售\n做好時間分配\n\n4. 列出改革方法及檢測時間\n每週定聯\n每月檢視業績、四星會\n上下半年有沒有上競賽\n\n5. 執行細則與時間\n每日定聯 5 位\n每週六日安排 3～5 位約訪\n每月完成四星\n將競賽標準拆解\n每個月檢視進度，儘早調整進度"
  },
  "李冠葒": {
   "dA": "躉繳 200 萬、期繳 50 萬、A&H 實收 150 萬；人力增加 2 人",
@@ -3808,6 +3808,123 @@ const AnnualMini = ({ pts, fmt, label, active, onClick }) => {
       </svg>
       {prevV !== null && prevV !== undefined && last !== null && last !== undefined && prevV !== 0 && <p className={`text-[10px] mt-0.5 ${last >= prevV ? 'text-emerald-300' : 'text-rose-300'}`}>{last >= prevV ? '▲' : '▼'} {Math.abs(Math.round((last - prevV) / Math.abs(prevV) * 100))}%</p>}
     </button>
+  );
+};
+// ===== 年度變化：同類合併成一張圖，可勾選隱藏 =====
+const ANNUAL_FAMILIES = [
+  { t: '實收', keys: ['rpPrem', 'ahPrem', 'spPrem', 'totPrem'] },
+  { t: '加權', keys: ['rpW', 'ahW', 'spW', 'totW'] },
+  { t: '件數', keys: ['cases', 'insured'] },
+  { t: 'FYP', keys: ['fyp', 'perFypMo', 'groupFypMo', 'distFypMo'] },
+  { t: '每月件數', keys: ['perCasesMo', 'groupCasesMo', 'distCasesMo'] },
+  { t: '每件FYP', keys: ['perFypCase', 'groupFypCase', 'distFypCase'] },
+  { t: '人力', keys: ['reps', 'mgrs', 'headcount', 'recruitN', 'resignedN'] },
+  { t: '比率', keys: ['actRate', 'churn', 'netGrowth'] },
+  { t: '收入', keys: ['incTotal', 'incFirst', 'incRenew', 'incOrg', 'incOther'] },
+];
+const ANNUAL_COLORS = ['#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa'];
+const annualShort = (v, fmt) => { if (v === null || v === undefined || Number.isNaN(v)) return ''; if (fmt === 'money') return Math.abs(v) >= 10000 ? `${Math.round(v / 10000)}萬` : String(Math.round(v)); return annualFmt(v, fmt); };
+const annualName = (d) => String(d.label).split('（')[0];
+const AnnualMultiChart = ({ f, hid, cmp, trendAll }) => {
+  const defs = f.defs.filter(d => !hid[d.key]);
+  if (!defs.length) return <p className="text-[12px] text-white/45 py-6 text-center">項目都隱藏了，點上方項目名稱可顯示</p>;
+  const fmt = f.defs[0].fmt;
+  const n = defs.length;
+  const gw = Math.max(46, n * 15 + 12);
+  const bw = Math.min(18, (gw - 10) / n);
+  const W = trendAll.length * gw + 10;
+  const pos = (v) => Math.max(0, Number(v) || 0);
+  let max = 1;
+  trendAll.forEach(p => defs.forEach(d => { max = Math.max(max, pos(p.m[d.key]), cmp && p.pm ? pos(p.pm[d.key]) : 0); }));
+  const labels = n * trendAll.length <= 16;
+  const hasPm = cmp && trendAll.some(p => p.pm);
+  return (
+    <div>
+      <div className="rounded-xl bg-black/20 border border-white/10 p-3">
+        <svg viewBox={`0 0 ${W} 150`} className="w-full h-44">
+          {trendAll.map((p, i) => {
+            const x0 = 6 + i * gw;
+            return (
+              <g key={p.l}>
+                {defs.map((d, j) => {
+                  const v = pos(p.m[d.key]); const h = v / max * 100; const x = x0 + j * bw;
+                  const pv = cmp && p.pm ? pos(p.pm[d.key]) : null;
+                  const col = ANNUAL_COLORS[f.defs.indexOf(d) % ANNUAL_COLORS.length];
+                  return (
+                    <g key={d.key}>
+                      <rect x={x} y={115 - h} width={bw - 1.5} height={Math.max(h, 0.8)} rx={2} fill={col} />
+                      {pv !== null && pv > 0 && <line x1={x - 1} x2={x + bw - 0.5} y1={115 - pv / max * 100} y2={115 - pv / max * 100} stroke="#ffffff" strokeWidth="1.8" />}
+                      {labels && v > 0 && <text x={x + (bw - 1.5) / 2} y={111 - h} textAnchor="middle" fontSize="8.5" fill="rgba(255,255,255,0.8)">{annualShort(p.m[d.key], fmt)}</text>}
+                    </g>
+                  );
+                })}
+                <text x={x0 + (n * bw) / 2} y={134} textAnchor="middle" fontSize="10" fill="rgba(255,255,255,0.55)">{p.l}</text>
+              </g>
+            );
+          })}
+        </svg>
+        <div className="flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-white/55">
+          {defs.map(d => <span key={d.key}><span className="inline-block w-2.5 h-2.5 rounded-sm align-middle mr-1" style={{ background: ANNUAL_COLORS[f.defs.indexOf(d) % ANNUAL_COLORS.length] }} />{annualName(d)}</span>)}
+          {hasPm && <span><span className="inline-block w-3 h-[2px] bg-white align-middle mr-1" />去年同期</span>}
+        </div>
+      </div>
+      <div className="overflow-x-auto mt-2">
+        <table className="w-full text-[11.5px] min-w-[420px]">
+          <thead><tr className="text-white/45 text-left"><th className="py-1 font-semibold">項目</th>{trendAll.map(p => <th key={p.l} className="py-1 font-semibold text-right">{p.l}</th>)}</tr></thead>
+          <tbody>
+            {defs.map(d => (
+              <React.Fragment key={d.key}>
+                <tr className="border-t border-white/[0.06]">
+                  <td className="py-1 whitespace-nowrap"><span className="inline-block w-2 h-2 rounded-sm align-middle mr-1.5" style={{ background: ANNUAL_COLORS[f.defs.indexOf(d) % ANNUAL_COLORS.length] }} />{annualName(d)}</td>
+                  {trendAll.map(p => <td key={p.l} className="py-1 text-right tabular-nums">{annualFmt(p.m[d.key], d.fmt)}</td>)}
+                </tr>
+                {hasPm && (
+                  <tr className="text-white/40">
+                    <td className="py-0.5 pl-4 whitespace-nowrap">去年同期</td>
+                    {trendAll.map(p => <td key={p.l} className="py-0.5 text-right tabular-nums">{p.pm ? annualFmt(p.pm[d.key], d.fmt) : '—'}</td>)}
+                  </tr>
+                )}
+              </React.Fragment>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+};
+const AnnualMulti = ({ trendAll, metrics, gran, printMode }) => {
+  const [fam, setFam] = useState('加權');
+  const [hidden, setHidden] = useState({});
+  const [cmp, setCmp] = useState(true);
+  const families = ANNUAL_FAMILIES.map(f => ({ ...f, defs: f.keys.map(k => metrics.find(d => d.key === k)).filter(Boolean) })).filter(f => f.defs.length);
+  if (!families.length) return null;
+  if (printMode) {
+    return (
+      <div className="space-y-3">
+        {families.map(f => (
+          <div key={f.t} style={{ breakInside: 'avoid' }}>
+            <p className="text-[13px] font-bold mb-1">{f.t}</p>
+            <AnnualMultiChart f={f} hid={{}} cmp={gran !== 'year'} trendAll={trendAll} />
+          </div>
+        ))}
+      </div>
+    );
+  }
+  const cur = families.find(f => f.t === fam) || families[0];
+  return (
+    <div>
+      <div className="flex flex-wrap items-center gap-1 mb-2">
+        {families.map(f => <button key={f.t} onClick={() => setFam(f.t)} className={`px-2.5 h-7 rounded-md text-[12px] font-bold ${cur.t === f.t ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/60'}`}>{f.t}</button>)}
+        {gran !== 'year' && <button onClick={() => setCmp(!cmp)} className={`ml-auto px-2.5 h-7 rounded-md text-[12px] font-bold ${cmp ? 'bg-white/20 text-white' : 'bg-white/10 text-white/45'}`}>對照去年同期 {cmp ? '開' : '關'}</button>}
+      </div>
+      <div className="flex flex-wrap gap-1.5 mb-3">
+        {cur.defs.map((d, i) => {
+          const off = !!hidden[d.key]; const col = ANNUAL_COLORS[i % ANNUAL_COLORS.length];
+          return <button key={d.key} onClick={() => setHidden({ ...hidden, [d.key]: !off })} className={`px-2.5 h-7 rounded-full text-[12px] border flex items-center gap-1.5 ${off ? 'border-white/10 text-white/35 line-through' : 'text-white'}`} style={off ? {} : { borderColor: col, background: `${col}26` }}><span className="inline-block w-2 h-2 rounded-full" style={{ background: off ? 'rgba(255,255,255,0.25)' : col }} />{annualName(d)}</button>;
+        })}
+      </div>
+      <AnnualMultiChart f={cur} hid={hidden} cmp={gran !== 'year' && cmp} trendAll={trendAll} />
+    </div>
   );
 };
 const annualFmt = (v, fmt) => {
@@ -4997,31 +5114,8 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
       <>
         {sh('dash') && (
         <div className={`${cardCls} p-4 xl:col-span-2`}>
-          <div className="flex flex-wrap items-center justify-between gap-2 mb-3">
-            <h3 className="font-bold text-[15px]">{gran === 'year' ? '年度' : gran === 'quarter' ? '各季' : '各月'}變化　<span className="text-white/50 font-normal text-[12px]">點小圖可放大</span></h3>
-            <div className="flex flex-wrap gap-1">
-              {trendGroups.map(g2 => <button key={g2} onClick={() => setTrendGroup(g2)} className={`px-2.5 h-7 rounded-md text-[12px] font-bold ${tgroup === g2 ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/60'}`}>{g2}</button>)}
-            </div>
-          </div>
-          <div className="grid grid-cols-2 md:grid-cols-3 xl:grid-cols-4 gap-2 mb-4">
-            {trendMetrics.filter(d => d.grp === tgroup).map(d => <AnnualMini key={d.key} pts={ptsOf(d.key)} fmt={d.fmt} label={d.label} active={d.key === tkey} onClick={() => setTrendKey(d.key)} />)}
-          </div>
-          <div className="rounded-xl bg-black/20 border border-white/10 p-3">
-          <svg viewBox={`0 0 ${trend.length * 44 + 10} 150`} className="w-full h-44">
-            {trend.map((p, i) => {
-              const x = 8 + i * 44; const h = (p.v || 0) / tmax * 100; const ph = (p.pv || 0) / tmax * 100;
-              return (
-                <g key={p.l}>
-                  {p.pv !== null && <rect x={x} y={120 - ph} width={16} height={ph} rx={3} fill="rgba(255,255,255,0.18)" />}
-                  <rect x={x + (p.pv !== null ? 18 : 6)} y={120 - h} width={16} height={Math.max(h, 1)} rx={3} fill="#60a5fa" />
-                  <text x={x + 17} y={138} textAnchor="middle" fontSize="10" fill="rgba(255,255,255,0.55)">{p.l}</text>
-                  <text x={x + (p.pv !== null ? 26 : 14)} y={115 - h} textAnchor="middle" fontSize="8.5" fill="rgba(255,255,255,0.8)">{p.v ? (tdef && tdef.fmt === 'money' ? (p.v >= 10000 ? `${Math.round(p.v / 10000)}萬` : Math.round(p.v)) : annualFmt(p.v, tdef ? tdef.fmt : 'int')) : ''}</text>
-                </g>
-              );
-            })}
-          </svg>
-          <p className="text-[11px] text-white/45">{tdef ? tdef.label : ''}　<span className="inline-block w-2.5 h-2.5 rounded-sm bg-blue-400 align-middle" /> {gran === 'year' ? '各年' : '今年'}　{gran !== 'year' && <><span className="inline-block w-2.5 h-2.5 rounded-sm bg-white/25 align-middle" /> 去年同期</>}</p>
-          </div>
+          <h3 className="font-bold text-[15px] mb-3">{gran === 'year' ? '年度' : gran === 'quarter' ? '各季' : '各月'}變化　<span className="text-white/50 font-normal text-[12px]">{pm ? '全部項目' : '同類放在一張圖，點項目名稱可隱藏／顯示'}</span></h3>
+          <AnnualMulti trendAll={trendAll} metrics={trendMetrics} gran={gran} printMode={pm} />
         </div>
         )}
 
@@ -5118,28 +5212,31 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
 
       <div className={`${cardCls} p-4`}>
         {(() => {
-          const rm = members.find(m => String(m.id) === String(repMember)) || members[0];
-          if (!rm) return null;
+          const rm0 = members.find(m => String(m.id) === String(repMember)) || members[0];
+          if (!rm0) return null;
+          const rms = pm ? members : [rm0];
           return (
             <>
               <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
-                <h3 className="font-bold text-[15px]">各人策劃會報　<span className="text-white/50 font-normal text-[12px]">{canEditPlan ? '可直接修改，離開欄位即儲存' : '僅吳政翰可修改'}</span></h3>
-                <span className="text-[11px] text-white/40">預填自原稿，空白＝原稿沒寫；標「待核對」的是字跡或數字有疑問</span>
+                <h3 className="font-bold text-[15px]">各人策劃會報　{!pm && <span className="text-white/50 font-normal text-[12px]">{canEditPlan ? '可直接修改，離開欄位即儲存' : '僅吳政翰可修改'}</span>}</h3>
+                {!pm && <span className="text-[11px] text-white/40">預填自原稿，空白＝原稿沒寫；標「待核對」的是字跡或數字有疑問</span>}
               </div>
-              <div className="flex flex-wrap gap-1 mb-3">
-                {members.map(m => <button key={m.id} onClick={() => setRepMember(String(m.id))} className={`px-3 h-8 rounded-lg text-[13px] font-bold ${String(m.id) === String(rm.id) ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/60'}`}>{m.name}</button>)}
-              </div>
-              <div className="space-y-2">
+              {!pm && <div className="flex flex-wrap gap-1 mb-3">
+                {members.map(m => <button key={m.id} onClick={() => setRepMember(String(m.id))} className={`px-3 h-8 rounded-lg text-[13px] font-bold ${String(m.id) === String(rm0.id) ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/60'}`}>{m.name}</button>)}
+              </div>}
+              {rms.map(rm => (
+              <div key={rm.id} className="space-y-2 mb-4" style={pm ? { breakBefore: 'page' } : undefined}>
+                {pm && <p className="text-[14px] font-bold">{rm.name}　策劃會報</p>}
                 {REPORT_SECTIONS.map(sec => {
                   const filled = sec.items.filter(([k]) => repVal(rm, k)).length;
                   return (
-                    <details key={sec.t} open={sec.t === '診斷' || sec.t === '目標'} className="rounded-xl border border-white/10 bg-white/[0.03]">
+                    <details key={sec.t} open={pm || sec.t === '診斷' || sec.t === '目標'} className="rounded-xl border border-white/10 bg-white/[0.03]">
                       <summary className="cursor-pointer select-none px-3 py-2 text-[13px] font-bold flex items-center justify-between">{sec.t}<span className="text-[11px] font-normal text-white/40">{filled}／{sec.items.length} 題有填</span></summary>
                       <div className="px-3 pb-3 space-y-2.5">
                         {sec.items.map(([k, q]) => (
                           <div key={k}>
                             <p className="text-[11px] text-white/45 mb-0.5">{q}</p>
-                            {canEditPlan
+                            {canEditPlan && !pm
                               ? <textarea rows={2} className="w-full rounded-md bg-black/30 border border-white/15 text-[12.5px] px-2 py-1.5 text-white" defaultValue={repVal(rm, k)} key={`${rm.id}-${k}-${repVal(rm, k)}`} onBlur={e => { if (e.target.value !== repVal(rm, k)) setRep(rm, k, e.target.value); }} />
                               : <p className="text-[12.5px] text-white/85 leading-relaxed whitespace-pre-wrap">{repVal(rm, k) || <span className="text-white/30">空白</span>}</p>}
                           </div>
@@ -5149,6 +5246,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
                   );
                 })}
               </div>
+              ))}
             </>
           );
         })()}
