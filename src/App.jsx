@@ -5143,32 +5143,36 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   const groups = [...new Set(ANNUAL_METRICS.map(d => d.grp))];
   const visible = ANNUAL_METRICS.filter(d => !(d.yearOnly && gran !== 'year') && !(d.key === 'mgrRecruitRate' && gran !== 'year'));
 
-  const renderBody = (sh, pm) => (<>
-      {sh('plan') && <AnnualPlanSection printMode={pm} team={team} allTeam={allTeam} records={records} recruits={recruits} rankTargets={rankTargets} members={members} loggedInUser={loggedInUser} manual={cfg.manual} planVal={planVal} planAll={planAll} distVal={distVal} />}
-      {sh('dash') && <AnnualDashboard cur={cur} projected={projected} monthsN={annualEffMonths(gran, year, idx, today).length} trendAll={trendAll} gran={gran} rows={rows} members={members} planVal={planVal} scopeLabel={scopeId === 'all' ? '全區合計' : (scopeMembers[0] ? scopeMembers[0].name : '')} onGo={setTab} monthSeries={monthSeries} planPeople={planPeople} year={year} />}
-      {sh('num') && (<>
+  // 下載 PDF 的「吳政翰 個人」年度數字
+  const meMember = members.find(m => m.name === '吳政翰') || null;
+  const meLeader = meMember ? (orgPool.find(m => String(m.id) === String(meMember.id)) || meMember) : null;
+  const curMe = useMemo(() => (printing && meMember) ? calc([meMember], 'year', year, idx, [meMember], meLeader) : null, [printing, meMember, year, idx, records, recruits, cfg.manual, rankTargets]);
+  const prevMe = useMemo(() => (printing && meMember) ? calc([meMember], 'year', year - 1, idx, [meMember], meLeader) : null, [printing, meMember, year, idx, records, recruits, cfg.manual, rankTargets]);
+  const projMe = (printing && meMember && year === curYear) ? calcPlanTargets([meMember], String(meMember.id)) : null;
+  const colsMe = curMe ? [{ h: `${year - 1} 年`, get: (d) => prevMe[d.key] }, { h: label, get: (d) => curMe[d.key], strong: true }, ...(projMe ? [{ h: `${year + 1} 目標`, get: (d) => projMe[d.key], est: true }] : [])] : [];
+  const numCard = (curX, prevX, colsX, scopeText, isMe, pm) => (
       <div className={`${cardCls} p-4`}>
         <div className="flex items-baseline justify-between mb-3">
-          <h3 className="font-bold text-[15px]">目前現況指標　<span className="text-white/50 font-normal text-[12px]">{label}・{scopeId === 'all' ? '全區合計' : scopeMembers[0] ? scopeMembers[0].name : ''}</span></h3>
+          <h3 className="font-bold text-[15px]">目前現況指標　<span className="text-white/50 font-normal text-[12px]">{label}・{scopeText}</span></h3>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-[13px] min-w-[560px]">
-            <thead><tr className="text-[11px] text-white/45 text-left"><th className="py-2 pr-3 font-semibold">指標</th>{cols.map(c => <th key={c.h} className="py-2 px-3 font-semibold text-right whitespace-nowrap">{c.h}</th>)}<th className="py-2 pl-3 font-semibold text-right">{gran === 'year' ? `較 ${pv.year} 年` : '較上期'}</th></tr></thead>
+            <thead><tr className="text-[11px] text-white/45 text-left"><th className="py-2 pr-3 font-semibold">指標</th>{colsX.map(c => <th key={c.h} className="py-2 px-3 font-semibold text-right whitespace-nowrap">{c.h}</th>)}<th className="py-2 pl-3 font-semibold text-right">{gran === 'year' ? `較 ${pv.year} 年` : '較上期'}</th></tr></thead>
             <tbody>
               {groups.map(grp => (
                 <React.Fragment key={grp}>
-                  <tr><td colSpan={cols.length + 2} className="pt-3 pb-1 text-[11px] font-bold text-blue-300/80 tracking-wider">{grp}</td></tr>
+                  <tr><td colSpan={colsX.length + 2} className="pt-3 pb-1 text-[11px] font-bold text-blue-300/80 tracking-wider">{grp}</td></tr>
                   {visible.filter(d => d.grp === grp).map(d => (
                     <tr key={d.key} className="border-t border-white/[0.06]">
                       <td className={`py-1.5 pr-3 ${d.bold ? 'font-bold' : 'text-white/80'}`}>{d.label}</td>
-                      {cols.map(c => (
+                      {colsX.map(c => (
                         <td key={c.h} className={`py-1.5 px-3 text-right tabular-nums ${c.strong ? 'font-bold' : c.est ? 'text-amber-200/90' : 'text-white/70'}`}>
-                          {(d.manual && c.strong && gran === 'year' && (d.key === 'peakN' || d.key === 'newPeakN')) ? (
+                          {(d.manual && c.strong && gran === 'year' && (d.key === 'peakN' || d.key === 'newPeakN') && !pm && !isMe) ? (
                             <span className="inline-flex items-center gap-1.5">{annualFmt(c.get(d), d.fmt)}<input type="number" title="自動統計不準時可手動覆蓋" className={`${inp} w-14`} placeholder="覆蓋" defaultValue={(cfg.manual[String(year)] || {})[d.key] ?? ''} onBlur={e => setManual(d.key, e.target.value)} /></span>
                           ) : annualFmt(c.get(d), d.fmt)}
                         </td>
                       ))}
-                      <td className="py-1.5 pl-3 text-right">{diffCell(gran === 'year' ? cur[d.key] : cur[d.key], prev[d.key], d.fmt)}</td>
+                      <td className="py-1.5 pl-3 text-right">{diffCell(curX[d.key], prevX[d.key], d.fmt)}</td>
                     </tr>
                   ))}
                 </React.Fragment>
@@ -5178,6 +5182,14 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
         </div>
         <p className="text-[11px] text-white/40 mt-3 leading-relaxed">口徑：只算已發單；FYP＝躉繳實收保費×10％＋其他商品實收保費（與加權保費是兩個數字）；首年度收入沒有本人提供的數字時，用「保費 × 商品佣金率」的 FYC 估算 ×1.1（含額外 10%，不含行銷獎金），有提供的以提供的為準；明年欄是各人設定的 2027 目標加總（兩份文件不一致時取大者），不是成長率推估；加權保費不含 ESG 的 5%（ESG ×1.05 只用在競賽業績）。組單位＝自己＋直轄業務代表；區單位＝自己＋直轄業代＋直轄主任襄理及其底下所有主管與業代；成員升任後依升級日期，從當月起不再算在原本的組單位（仍算區單位）。選單一成員時，人力、活動率、增員以他的區單位計；全區合計時，個人＝人均、區單位＝全區、組單位不顯示。活動率＝當月有報件（受理中＋已發單）的人 ÷ 當月人數（依登錄日與離職日，抓當月底在職人數），期間取月平均。主管增員活動率＝年度有增員的主管 ÷ 所有主管數。{year === curYear && gran === 'year' ? '年度只算到上月底，今年數字不含本月。' : ''}高峰／新高峰人數＝該半年「個績或組績任一達標」的人數，目前只有 115 年的標準，其他年份請手動填。</p>
       </div>
+  );
+  const renderBody = (sh, pm) => (<>
+      {sh('plan') && <AnnualPlanSection printMode={pm} team={team} allTeam={allTeam} records={records} recruits={recruits} rankTargets={rankTargets} members={members} loggedInUser={loggedInUser} manual={cfg.manual} planVal={planVal} planAll={planAll} distVal={distVal} />}
+      {sh('dash') && <AnnualDashboard cur={cur} projected={projected} monthsN={annualEffMonths(gran, year, idx, today).length} trendAll={trendAll} gran={gran} rows={rows} members={members} planVal={planVal} scopeLabel={scopeId === 'all' ? '全區合計' : (scopeMembers[0] ? scopeMembers[0].name : '')} onGo={setTab} monthSeries={monthSeries} planPeople={planPeople} year={year} />}
+      {sh('num') && (<>
+      {numCard(cur, prev, cols, scopeId === 'all' ? '全區合計' : scopeMembers[0] ? scopeMembers[0].name : '', false, pm)}
+      {pm && curMe && numCard(curMe, prevMe, colsMe, '吳政翰 個人', true, pm)}
+      {pm && curMe && ANNUAL_HISTORY[year] && <p className="text-[11px] text-amber-200/80 leading-relaxed px-1">{ANNUAL_HISTORY[year].note}</p>}
 
       {gran === 'year' && ANNUAL_HISTORY[year] && scopeMembers.length === 1 && scopeMembers[0].name === '吳政翰' && (
         <p className="text-[11px] text-amber-200/80 leading-relaxed px-1">{ANNUAL_HISTORY[year].note}</p>
