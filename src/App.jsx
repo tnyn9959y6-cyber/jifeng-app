@@ -3825,7 +3825,10 @@ const ANNUAL_FAMILIES = [
 const ANNUAL_COLORS = ['#60a5fa', '#34d399', '#fbbf24', '#f472b6', '#a78bfa'];
 const annualShort = (v, fmt) => { if (v === null || v === undefined || Number.isNaN(v)) return ''; if (fmt === 'money') return Math.abs(v) >= 10000 ? `${Math.round(v / 10000)}萬` : String(Math.round(v)); return annualFmt(v, fmt); };
 const annualName = (d) => String(d.label).split('（')[0];
-const AnnualMultiChart = ({ f, hid, cmp, trendAll }) => {
+const AnnualMultiChart = ({ f, hid, cmp, trendAll: trendFull, compact }) => {
+  const hasData = (p) => f.defs.some(d => Number(p.m[d.key]) > 0 || (p.pm && Number(p.pm[d.key]) > 0));
+  const first = trendFull.length <= 6 ? trendFull.findIndex(hasData) : 0;
+  const trendAll = first > 0 ? trendFull.slice(first) : trendFull;
   const defs = f.defs.filter(d => !hid[d.key]);
   if (!defs.length) return <p className="text-[12px] text-white/45 py-6 text-center">項目都隱藏了，點上方項目名稱可顯示</p>;
   const fmt = f.defs[0].fmt;
@@ -3869,7 +3872,7 @@ const AnnualMultiChart = ({ f, hid, cmp, trendAll }) => {
         </div>
       </div>
       <div className="overflow-x-auto mt-2">
-        <table className="w-full text-[11.5px] min-w-[420px]">
+        <table className={`w-full text-[11.5px] ${compact ? '' : 'min-w-[420px]'}`}>
           <thead><tr className="text-white/45 text-left"><th className="py-1 font-semibold">項目</th>{trendAll.map(p => <th key={p.l} className="py-1 font-semibold text-right">{p.l}</th>)}</tr></thead>
           <tbody>
             {defs.map(d => (
@@ -3899,12 +3902,17 @@ const AnnualMulti = ({ trendAll, metrics, gran, printMode }) => {
   const families = ANNUAL_FAMILIES.map(f => ({ ...f, defs: f.keys.map(k => metrics.find(d => d.key === k)).filter(Boolean) })).filter(f => f.defs.length);
   if (!families.length) return null;
   if (printMode) {
+    const per = trendAll.length <= 6 ? 2 : 1;
     return (
       <div className="space-y-3">
-        {families.map(f => (
-          <div key={f.t} style={{ breakInside: 'avoid' }}>
-            <p className="text-[13px] font-bold mb-1">{f.t}</p>
-            <AnnualMultiChart f={f} hid={{}} cmp={gran !== 'year'} trendAll={trendAll} />
+        {Array.from({ length: Math.ceil(families.length / per) }, (_, r) => families.slice(r * per, r * per + per)).map((row, r) => (
+          <div key={r} className={`grid gap-3 ${per === 2 ? 'grid-cols-2' : 'grid-cols-1'}`}>
+            {row.map(f => (
+              <div key={f.t}>
+                <p className="text-[13px] font-bold mb-1">{f.t}</p>
+                <AnnualMultiChart f={f} hid={{}} cmp={gran !== 'year'} trendAll={trendAll} compact />
+              </div>
+            ))}
           </div>
         ))}
       </div>
@@ -4472,6 +4480,8 @@ const DOME_DEF = [
   { k: 'M', t: '方法', en: 'Methods', d: '規劃商品、活動、增員、培訓等執行方案', sec: '方法' },
   { k: 'E', t: '評估', en: 'Evaluation', d: '定期檢視進度，調整策略與資源', sec: '評估' },
 ];
+// 下載 PDF 時，目標／DOME／工作計劃表只放這幾位
+const PDF_REPORT_NAMES = ['吳政翰', '莊唯妮', '李冠葒', '蘇暐翔', '楊雅涵', '陳怡秀'];
 const PDF_CSS = `
 .pdf-root { display: none !important; }
 .pdf-root.pdf-cap { display: block !important; position: fixed; left: -12000px; top: 0; width: 900px; background: #fff; color: #111827; font-size: 12px; line-height: 1.5; padding: 0; }
@@ -4487,6 +4497,8 @@ const PDF_CSS = `
 .pdf-cap [class*="text-amber-"] { color: #b45309 !important; }
 .pdf-cap [class*="text-emerald-"] { color: #047857 !important; }
 .pdf-cap [class*="text-violet-"] { color: #6d28d9 !important; }
+.pdf-cap h2, .pdf-cap h3 { line-height: 1.7 !important; }
+.pdf-cap input, .pdf-cap textarea, .pdf-cap select { border: 0 !important; background: transparent !important; padding: 0 !important; box-shadow: none !important; color: #1f2937 !important; }
 .pdf-cap svg text { fill: #374151 !important; }
 .pdf-cap svg rect[fill^="rgba(255,255,255"] { fill: #d1d5db !important; }
 .pdf-cap svg [stroke="#ffffff"] { stroke: #111827 !important; }
@@ -4881,10 +4893,15 @@ const AnnualPlanSection = ({ team, allTeam, records, recruits, rankTargets, memb
 const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, members, loggedInUser }) => {
   const today = getTodayDate();
   const curYear = Number(today.slice(0, 4));
-  const [gran, setGran] = useState('year');
-  const [year, setYear] = useState(curYear);
+  const [printing, setPrinting] = useState(false);
+  const [granS, setGran] = useState('year');
+  const [yearS, setYear] = useState(curYear);
   const [idx, setIdx] = useState(Number(today.slice(5, 7)));
-  const [scopeId, setScopeId] = useState('all');
+  const [scopeS, setScopeId] = useState('all');
+  // 下載 PDF 時固定用「全區合計、今年、年度」，不受畫面上選的範圍影響
+  const gran = printing ? 'year' : granS;
+  const year = printing ? curYear : yearS;
+  const scopeId = printing ? 'all' : scopeS;
   const [trendKey, setTrendKey] = useState('totW');
   const [trendGroup, setTrendGroup] = useState('業績');
   const [repMember, setRepMember] = useState('');
@@ -4892,7 +4909,6 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   const [cfg, setCfg] = useState({ manual: {}, plan: {}, report: {}, goal: { targetYear: curYear + 3, agency: {}, branch: {} } });
   const [goalMode, setGoalMode] = useState('agency');
   const [planDoc, setPlanDoc] = useState({});
-  const [printing, setPrinting] = useState(false);
   useEffect(() => {
     if (!printing) return;
     let dead = false;
@@ -4905,7 +4921,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
         const pdf = new jsPDF({ unit: 'mm', format: 'a4', orientation: 'p' });
         const M = 8, CW = 210 - 2 * M, CH = 297 - 2 * M;
         const pxMm = root.clientWidth / CW;
-        const pageH = CH * pxMm;
+        const pageH = CH * pxMm; const SC = 1.6;
         const units = [];
         const walk = (el, depth) => {
           Array.from(el.children).forEach(c => {
@@ -4923,23 +4939,27 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
         for (const u of units) {
           if (dead) return;
           if (u.brk) { newPage(); continue; }
-          const cv = await html2canvas(u.el, { scale: 2, backgroundColor: '#ffffff', logging: false, useCORS: true });
-          const wmm = cv.width / 2 / pxMm, hmm = cv.height / 2 / pxMm;
+          const oldPb = u.el.style.paddingBottom;
+          u.el.style.paddingBottom = `calc(${getComputedStyle(u.el).paddingBottom} + 6px)`;
+          const cv = await html2canvas(u.el, { scale: SC, backgroundColor: '#ffffff', logging: false, useCORS: true });
+          u.el.style.paddingBottom = oldPb;
+          const wmm = cv.width / SC / pxMm, hmm = cv.height / SC / pxMm;
           if (hmm <= CH) {
             if (used && y + hmm > M + CH) newPage();
-            pdf.addImage(cv.toDataURL('image/jpeg', 0.92), 'JPEG', M, y, wmm, hmm);
+            else if (used && hmm < 14 && y + 45 > M + CH) newPage();
+            pdf.addImage(cv.toDataURL('image/jpeg', 0.82), 'JPEG', M, y, wmm, hmm);
             y += hmm + 1.5; used = true;
           } else {
             if (used && y + 40 > M + CH) newPage();
             let sy = 0;
             while (sy < cv.height) {
               const availMm = M + CH - y;
-              const sh = Math.min(cv.height - sy, Math.max(1, Math.floor(availMm * pxMm * 2)));
+              const sh = Math.min(cv.height - sy, Math.max(1, Math.floor(availMm * pxMm * SC)));
               const part = document.createElement('canvas'); part.width = cv.width; part.height = sh;
               const ctx = part.getContext('2d'); ctx.fillStyle = '#fff'; ctx.fillRect(0, 0, part.width, part.height);
               ctx.drawImage(cv, 0, sy, cv.width, sh, 0, 0, cv.width, sh);
-              pdf.addImage(part.toDataURL('image/jpeg', 0.92), 'JPEG', M, y, wmm, sh / 2 / pxMm);
-              used = true; y += sh / 2 / pxMm; sy += sh;
+              pdf.addImage(part.toDataURL('image/jpeg', 0.82), 'JPEG', M, y, wmm, sh / SC / pxMm);
+              used = true; y += sh / SC / pxMm; sy += sh;
               if (sy < cv.height) newPage();
             }
           }
@@ -5066,8 +5086,12 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
     });
     // eslint-disable-next-line
   }, [tab, printing, scopeMembers, year, records, recruits, cfg.manual, rankTargets]);
+  // 下載 PDF 用：今年每月（已完成的月份）＋去年同月
+  const trendPrint = useMemo(() => (printing && monthSeries) ? monthSeries.map((x, k) => ({ l: `${k + 1}月`, m: x.m, pm: x.pm, show: x.show })).filter(x => x.show) : null, [printing, monthSeries]);
+  const metricsMonth = ANNUAL_METRICS.filter(d => !d.yearOnly && !d.manual);
   const stOf = (y) => ((((planDoc.y || {})[y] || {}).org || {}).st) || PLAN_DEFAULT.y[y].org.st;
   const planPeople = [Number(stOf('116')[0].people) || null, Number(stOf('116')[1].people) || null, Number(stOf('117')[1].people) || null];
+  const pickM = (pm) => pm ? members.filter(m => PDF_REPORT_NAMES.includes(m.name)) : members;
   const trendMetrics = ANNUAL_METRICS.filter(d => (!d.yearOnly && !d.manual) || (d.hist && gran === 'year'));
   const trendGroups = [...new Set(trendMetrics.map(d => d.grp))];
   const tgroup = trendGroups.includes(trendGroup) ? trendGroup : trendGroups[0];
@@ -5163,8 +5187,10 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
       <>
         {sh('dash') && (
         <div className={`${cardCls} p-4 xl:col-span-2`}>
-          <h3 className="font-bold text-[15px] mb-3">{gran === 'year' ? '年度' : gran === 'quarter' ? '各季' : '各月'}變化　<span className="text-white/50 font-normal text-[12px]">{pm ? '全部項目' : '同類放在一張圖，點項目名稱可隱藏／顯示'}</span></h3>
-          <AnnualMulti trendAll={trendAll} metrics={trendMetrics} gran={gran} printMode={pm} />
+          <h3 className="font-bold text-[15px] mb-3">{pm && trendPrint ? '每月變化' : (gran === 'year' ? '年度' : gran === 'quarter' ? '各季' : '各月') + '變化'}　<span className="text-white/50 font-normal text-[12px]">{pm ? (trendPrint ? '今年每月（白線＝去年同月）；年度總計見上方儀表板與「二、數字」' : '全部項目') : '同類放在一張圖，點項目名稱可隱藏／顯示'}</span></h3>
+          {pm && trendPrint
+            ? <AnnualMulti trendAll={trendPrint} metrics={metricsMonth} gran="month" printMode={true} />
+            : <AnnualMulti trendAll={trendAll} metrics={trendMetrics} gran={gran} printMode={pm} />}
         </div>
         )}
 
@@ -5175,7 +5201,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
             <table className="w-full text-[12.5px] min-w-[420px]">
               <thead><tr className="text-[11px] text-white/45 text-left"><th className="py-1.5 font-semibold">同仁</th><th className="py-1.5 font-semibold text-right">實收</th><th className="py-1.5 font-semibold text-right">加權</th><th className="py-1.5 font-semibold text-right">變化</th><th className="py-1.5 font-semibold text-right">FYC 估</th><th className="py-1.5 font-semibold text-right">件</th><th className="py-1.5 font-semibold text-right">被保人</th></tr></thead>
               <tbody>
-                {rows.map(({ m, c, p }) => (
+                {(pm ? rows.filter(r => r.c.totW > 0 || r.c.totPrem > 0 || r.c.cases > 0) : rows).map(({ m, c, p }) => (
                   <tr key={m.id} className="border-t border-white/[0.06]">
                     <td className="py-1.5"><span className="inline-flex items-center gap-2"><Avatar name={m.name} size={22} />{m.name}</span></td>
                     <td className="py-1.5 text-right tabular-nums">{annualFmt(c.totPrem, 'money')}</td>
@@ -5206,23 +5232,23 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
       {sh('num') && (<>
       <div className={`${cardCls} p-4`}>
         <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
-          <h3 className="font-bold text-[15px]">{planYear} 年目標（策劃會報）　<span className="text-white/50 font-normal text-[12px]">{canEditPlan ? '可直接修改，離開欄位即儲存' : '僅吳政翰可修改'}</span></h3>
+          <h3 className="font-bold text-[15px]">{planYear} 年目標（策劃會報）　<span className="text-white/50 font-normal text-[12px]">{canEditPlan && !pm ? '可直接修改，離開欄位即儲存' : '僅吳政翰可修改'}</span></h3>
           <span className="text-[11px] text-white/40">預填自各人的策劃會報／工作計劃表，空白＝原稿沒寫</span>
         </div>
         <div className="overflow-x-auto">
           <table className="w-full text-[12.5px] min-w-[620px]">
-            <thead><tr className="text-[11px] text-white/45 text-left"><th className="py-1.5 pr-3 font-semibold">項目</th>{members.map(m => <th key={m.id} className="py-1.5 px-2 font-semibold text-right whitespace-nowrap">{m.name}</th>)}<th className="py-1.5 pl-2 font-semibold text-right whitespace-nowrap">合計</th></tr></thead>
+            <thead><tr className="text-[11px] text-white/45 text-left"><th className="py-1.5 pr-3 font-semibold">項目</th>{pickM(pm).map(m => <th key={m.id} className="py-1.5 px-2 font-semibold text-right whitespace-nowrap">{m.name}</th>)}<th className="py-1.5 pl-2 font-semibold text-right whitespace-nowrap">合計</th></tr></thead>
             <tbody>
               {PLAN_FIELDS.map(fd => {
-                const vals = members.map(m => planVal(m, fd.k));
+                const vals = pickM(pm).map(m => planVal(m, fd.k));
                 const got = vals.filter(v => v !== null && !Number.isNaN(v));
                 const tot = got.length ? (fd.avg ? got.reduce((a, b) => a + b, 0) / got.length : got.reduce((a, b) => a + b, 0)) : null;
                 return (
                   <tr key={fd.k} className="border-t border-white/[0.06]">
                     <td className="py-1.5 pr-3 text-white/80 whitespace-nowrap">{fd.l}</td>
-                    {members.map((m, i) => (
+                    {pickM(pm).map((m, i) => (
                       <td key={m.id} className="py-1.5 px-2 text-right tabular-nums">
-                        {canEditPlan
+                        {canEditPlan && !pm
                           ? <input type="number" className={`${inp} w-24`} defaultValue={vals[i] ?? ''} key={`${planYear}-${m.id}-${fd.k}-${vals[i] ?? ''}`} onBlur={e => { if (String(e.target.value) !== String(vals[i] ?? '')) setPlan(m, fd.k, e.target.value); }} />
                           : (vals[i] === null ? <span className="text-white/30">—</span> : annualFmt(vals[i], fd.f))}
                       </td>
@@ -5234,8 +5260,8 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
               {[['totWMo', '區月均加權（區單位目標）'], ['fypMo', '區月均 FYP（區單位目標）']].map(([k, lb]) => (
                 <tr key={k} className="border-t border-white/[0.06]">
                   <td className="py-1.5 pr-3 text-white/80 whitespace-nowrap">{lb}</td>
-                  <td colSpan={members.length} className="py-1.5 px-2 text-right">
-                    {canEditPlan
+                  <td colSpan={pickM(pm).length} className="py-1.5 px-2 text-right">
+                    {canEditPlan && !pm
                       ? <input type="number" className={`${inp} w-28`} defaultValue={distVal(k) ?? ''} key={`${planYear}-dist-${k}-${distVal(k) ?? ''}`} onBlur={e => { if (String(e.target.value) !== String(distVal(k) ?? '')) setDist(k, e.target.value); }} />
                       : (distVal(k) === null ? <span className="text-white/30">—</span> : <span className="tabular-nums">{annualFmt(distVal(k), 'money')}</span>)}
                   </td>
@@ -5243,7 +5269,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
                 </tr>
               ))}
               {[['實收合計', ['rpPrem', 'ahPrem', 'spPrem']], ['加權合計', ['rpW', 'ahW', 'spW']]].map(([lb, ks]) => {
-                const vals = members.map(m => { const xs = ks.map(k => planVal(m, k)); return xs.every(x => x === null) ? null : xs.reduce((a, b) => a + (b || 0), 0); });
+                const vals = pickM(pm).map(m => { const xs = ks.map(k => planVal(m, k)); return xs.every(x => x === null) ? null : xs.reduce((a, b) => a + (b || 0), 0); });
                 const got = vals.filter(v => v !== null);
                 return (
                   <tr key={lb} className="border-t border-white/20 font-bold">
@@ -5263,7 +5289,7 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
         {(() => {
           const rm0 = members.find(m => String(m.id) === String(repMember)) || members[0];
           if (!rm0) return null;
-          const rms = pm ? members : [rm0];
+          const rms = pm ? pickM(true) : [rm0];
           return (
             <>
               <div className="flex flex-wrap items-baseline justify-between gap-2 mb-3">
@@ -5273,16 +5299,19 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
               {!pm && <div className="flex flex-wrap gap-1 mb-3">
                 {members.map(m => <button key={m.id} onClick={() => setRepMember(String(m.id))} className={`px-3 h-8 rounded-lg text-[13px] font-bold ${String(m.id) === String(rm0.id) ? 'bg-blue-500 text-white' : 'bg-white/10 text-white/60'}`}>{m.name}</button>)}
               </div>}
-              {rms.map(rm => (
-              <div key={rm.id} className="space-y-2 mb-4" style={pm ? { breakBefore: 'page' } : undefined}>
+              {rms.map((rm, ri) => (
+              <div key={rm.id} className="space-y-2 mb-4">
+                {pm && ri > 0 && <div className="pdf-break" />}
                 {pm && <p className="text-[14px] font-bold">{rm.name}　策劃會報</p>}
+                {pm && !REPORT_SECTIONS.some(sec => sec.items.some(([k]) => repVal(rm, k))) && <p className="text-[12px] text-white/50">這份策劃會報尚未填寫內容</p>}
                 {REPORT_SECTIONS.map(sec => {
                   const filled = sec.items.filter(([k]) => repVal(rm, k)).length;
+                  if (pm && !filled) return null;
                   return (
                     <details key={sec.t} open={pm || sec.t === '診斷' || sec.t === '目標'} className="rounded-xl border border-white/10 bg-white/[0.03]">
                       <summary className="cursor-pointer select-none px-3 py-2 text-[13px] font-bold flex items-center justify-between">{sec.t}<span className="text-[11px] font-normal text-white/40">{filled}／{sec.items.length} 題有填</span></summary>
                       <div className="px-3 pb-3 space-y-2.5">
-                        {sec.items.map(([k, q]) => (
+                        {sec.items.filter(([k]) => !pm || repVal(rm, k)).map(([k, q]) => (
                           <div key={k}>
                             <p className="text-[11px] text-white/45 mb-0.5">{q}</p>
                             {canEditPlan && !pm
