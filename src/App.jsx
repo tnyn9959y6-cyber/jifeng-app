@@ -5143,13 +5143,19 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
   const groups = [...new Set(ANNUAL_METRICS.map(d => d.grp))];
   const visible = ANNUAL_METRICS.filter(d => !(d.yearOnly && gran !== 'year') && !(d.key === 'mgrRecruitRate' && gran !== 'year'));
 
-  // 下載 PDF 的「吳政翰 個人」年度數字
-  const meMember = members.find(m => m.name === '吳政翰') || null;
-  const meLeader = meMember ? (orgPool.find(m => String(m.id) === String(meMember.id)) || meMember) : null;
-  const curMe = useMemo(() => (printing && meMember) ? calc([meMember], 'year', year, idx, [meMember], meLeader) : null, [printing, meMember, year, idx, records, recruits, cfg.manual, rankTargets]);
-  const prevMe = useMemo(() => (printing && meMember) ? calc([meMember], 'year', year - 1, idx, [meMember], meLeader) : null, [printing, meMember, year, idx, records, recruits, cfg.manual, rankTargets]);
-  const projMe = (printing && meMember && year === curYear) ? calcPlanTargets([meMember], String(meMember.id)) : null;
-  const colsMe = curMe ? [{ h: `${year - 1} 年`, get: (d) => prevMe[d.key] }, { h: label, get: (d) => curMe[d.key], strong: true }, ...(projMe ? [{ h: `${year + 1} 目標`, get: (d) => projMe[d.key], est: true }] : [])] : [];
+  // 下載 PDF：每位同仁各一張年度數字表
+  const PDF_PERSON_NAMES = ['吳政翰', '莊唯妮', '李冠葒', '蘇暐翔', '楊雅涵'];
+  const personCalcs = useMemo(() => {
+    if (!printing) return [];
+    return PDF_PERSON_NAMES.map(nm => members.find(m => m.name === nm)).filter(Boolean).map(m => {
+      const leader = orgPool.find(t => String(t.id) === String(m.id)) || m;
+      const c = calc([m], 'year', year, idx, [m], leader);
+      const p = calc([m], 'year', year - 1, idx, [m], leader);
+      const pj = year === curYear ? calcPlanTargets([m], String(m.id)) : null;
+      const cl = [{ h: `${year - 1} 年`, get: (d) => p[d.key] }, { h: label, get: (d) => c[d.key], strong: true }, ...(pj ? [{ h: `${year + 1} 目標`, get: (d) => pj[d.key], est: true }] : [])];
+      return { m, c, p, cl };
+    });
+  }, [printing, members, year, idx, records, recruits, cfg.manual, cfg.plan, rankTargets]);
   const numCard = (curX, prevX, colsX, scopeText, isMe, pm) => (
       <div className={`${cardCls} p-4`}>
         <div className="flex items-baseline justify-between mb-3">
@@ -5188,8 +5194,13 @@ const AnnualStatusSection = ({ team, allTeam, records, recruits, rankTargets, me
       {sh('dash') && <AnnualDashboard cur={cur} projected={projected} monthsN={annualEffMonths(gran, year, idx, today).length} trendAll={trendAll} gran={gran} rows={rows} members={members} planVal={planVal} scopeLabel={scopeId === 'all' ? '全區合計' : (scopeMembers[0] ? scopeMembers[0].name : '')} onGo={setTab} monthSeries={monthSeries} planPeople={planPeople} year={year} />}
       {sh('num') && (<>
       {numCard(cur, prev, cols, scopeId === 'all' ? '全區合計' : scopeMembers[0] ? scopeMembers[0].name : '', false, pm)}
-      {pm && curMe && numCard(curMe, prevMe, colsMe, '吳政翰 個人', true, pm)}
-      {pm && curMe && ANNUAL_HISTORY[year] && <p className="text-[11px] text-amber-200/80 leading-relaxed px-1">{ANNUAL_HISTORY[year].note}</p>}
+      {pm && personCalcs.map(pc => (
+        <React.Fragment key={pc.m.id}>
+          <div className="pdf-break" />
+          {numCard(pc.c, pc.p, pc.cl, `${pc.m.name} 個人`, true, pm)}
+          {pc.m.name === '吳政翰' && ANNUAL_HISTORY[year] && <p className="text-[11px] text-amber-200/80 leading-relaxed px-1">{ANNUAL_HISTORY[year].note}</p>}
+        </React.Fragment>
+      ))}
 
       {gran === 'year' && ANNUAL_HISTORY[year] && scopeMembers.length === 1 && scopeMembers[0].name === '吳政翰' && (
         <p className="text-[11px] text-amber-200/80 leading-relaxed px-1">{ANNUAL_HISTORY[year].note}</p>
